@@ -1,0 +1,22 @@
+@import "tailwindcss";
+
+@theme {
+  --color-st-bg: #060b19;
+  --color-st-panel: #10172b;
+  --color-st-fg: #e2e8f0;
+  --color-st-muted: #94a3b8;
+  --color-st-border: #243049;
+  --color-st-accent: #22d3ee;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  min-height: 100vh;
+  font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+}

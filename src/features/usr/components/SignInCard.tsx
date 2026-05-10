@@ -1,0 +1,52 @@
+import { useState } from "react";
+import { useAuthActions } from "@convex-dev/auth/react";
+import { Card } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+
+export function SignInCard() {
+  const { signIn } = useAuthActions();
+  const [flow, setFlow] = useState<"signIn" | "signUp">("signIn");
+  const [error, setError] = useState<string | null>(null);
+
+  return (
+    <Card className="mx-auto mt-16 w-full max-w-md p-6">
+      <h2 className="text-lg font-semibold">Sign in to StarTrade</h2>
+      <form
+        className="mt-4 space-y-2"
+        onSubmit={(event) => {
+          event.preventDefault();
+          const formData = new FormData(event.currentTarget);
+          formData.set("flow", flow);
+          void signIn("password", formData).catch((signInError: Error) => {
+            setError(signInError.message);
+          });
+        }}
+      >
+        <input
+          type="email"
+          name="email"
+          placeholder="Email"
+          className="w-full rounded border border-st-border bg-st-bg px-3 py-2 text-sm"
+        />
+        <input
+          type="password"
+          name="password"
+          placeholder="Password"
+          className="w-full rounded border border-st-border bg-st-bg px-3 py-2 text-sm"
+        />
+        <Button type="submit" className="w-full">
+          {flow === "signIn" ? "Sign in" : "Sign up"}
+        </Button>
+      </form>
+      <Button
+        variant="ghost"
+        type="button"
+        className="mt-3 text-xs text-st-muted underline"
+        onClick={() => setFlow(flow === "signIn" ? "signUp" : "signIn")}
+      >
+        {flow === "signIn" ? "Need an account? Sign up" : "Have an account? Sign in"}
+      </Button>
+      {error ? <p className="mt-3 text-xs text-red-300">{error}</p> : null}
+    </Card>
+  );
+}
