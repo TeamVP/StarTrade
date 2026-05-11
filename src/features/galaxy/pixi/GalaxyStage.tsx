@@ -4,8 +4,6 @@ import { Circle, Container, Graphics, Point } from "pixi.js";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   FLEET_ORBIT_RADIUS,
-  GALAXY_STAGE_HEIGHT,
-  GALAXY_STAGE_WIDTH,
   MAP_PAN_DRAG_THRESHOLD_PX,
   MAP_WHEEL_ZOOM_SENSITIVITY,
   STAR_HIT_RADIUS,
@@ -24,12 +22,43 @@ import {
 
 extend({ Graphics, Container });
 
+/** Fraction 0–1 along the origin→destination chord for in-flight ships (fleets, traders). */
+export function enRouteLineFraction(params: {
+  now: number;
+  currentTurn: number;
+  dispatchedTurn: number;
+  travelTurnsTotal: number;
+  turnStartedAt: number | null;
+  travelAnimMs: number;
+}): number {
+  const {
+    now,
+    currentTurn,
+    dispatchedTurn,
+    travelTurnsTotal,
+    turnStartedAt,
+    travelAnimMs,
+  } = params;
+  const completedSegments = Math.min(
+    Math.max(currentTurn - dispatchedTurn - 1, 0),
+    travelTurnsTotal - 1,
+  );
+  const phase =
+    turnStartedAt === null ? 0 : Math.min((now - turnStartedAt) / travelAnimMs, 1);
+  return Math.min((completedSegments + phase) / travelTurnsTotal, 1);
+}
+
 export type GalaxyNode = {
   id: string;
   x: number;
   y: number;
   ownerColor: string;
 };
+
+/** Food shortage alert: severity 0–1 drives pulse speed (1 = critical, <1 turn of food). */
+export type FoodAlertNode = { id: string; severity: number };
+/** Starvation: population actively dying this turn (stockFood ≈ 0). */
+export type StarvationNode = { id: string };
 
 export type GalaxyLink = {
   fromId: string;
@@ -83,6 +112,19 @@ export type EnRouteGhostModel = {
   travelTurnsTotal: number;
 };
 
+/** Background or player trader ship shown in transit on the map. */
+export type TraderShipModel = {
+  traderId: string;
+  originSystemId: string;
+  destSystemId: string;
+  commodity: string;
+  cargoUnits: number;
+  dispatchedTurn: number;
+  travelTurnsTotal: number;
+  etaTurn: number;
+  operatorKind: "npc" | "player" | "unknown";
+};
+
 export type TurnTimelineModel = {
   currentTurn: number;
   turnStartedAt: number | null;
@@ -90,6 +132,10 @@ export type TurnTimelineModel = {
 };
 
 export type GalaxyStageProps = {
+  /** Logical CSS-pixel width of the canvas viewport (matches camera math screen space). */
+  viewWidth: number;
+  /** Logical CSS-pixel height of the canvas viewport (matches camera math screen space). */
+  viewHeight: number;
   camera: GalaxyMapCamera;
   onCameraChange: (camera: GalaxyMapCamera) => void;
   nodes: GalaxyNode[];
@@ -99,9 +145,13 @@ export type GalaxyStageProps = {
   pendingSegments: PendingSegmentModel[];
   routeSegments: RouteSegmentModel[];
   enRouteGhosts: EnRouteGhostModel[];
+  /** NPC / player traders in flight (cargo haulers). */
+  traderShips: TraderShipModel[];
   turnTimeline: TurnTimelineModel | null;
   selectedFleetId: string | null;
   onSelectedFleetChange: (fleetId: string | null) => void;
+  selectedTraderId: string | null;
+  onSelectedTraderChange: (traderId: string | null) => void;
   shipsToDispatch: number;
   /** When true, a successful drag-drop also establishes a recurring route (viewport handles save). */
   repeatNextDragEnabled: boolean;
@@ -113,16 +163,24 @@ export type GalaxyStageProps = {
   onStarDoubleTap?: (systemId: string) => void;
   /** Fires when the user taps empty map (no drag past threshold); dismiss overlays from viewport. */
   onStageBackgroundTap?: () => void;
+  /** Systems with a food shortage. severity 0–1 drives pulse speed. */
+  foodAlerts: FoodAlertNode[];
+  /** Systems where population is actively dying from starvation. */
+  starvationAlerts: StarvationNode[];
 };
 
 export function GalaxyStage(props: GalaxyStageProps) {
+  const safeW = Math.max(1, Math.round(props.viewWidth));
+  const safeH = Math.max(1, Math.round(props.viewHeight));
   return (
     <Application
-      width={GALAXY_STAGE_WIDTH}
-      height={GALAXY_STAGE_HEIGHT}
+      width={safeW}
+      height={safeH}
       background={"#080d1e"}
       antialias={true}
+      autoDensity={true}
       resizeTo={undefined}
+      className="block"
     >
       <GalaxyStageInner {...props} />
     </Application>
@@ -130,6 +188,8 @@ export function GalaxyStage(props: GalaxyStageProps) {
 }
 
 function GalaxyStageInner({
+  viewWidth,
+  viewHeight,
   camera,
   onCameraChange,
   nodes,
@@ -139,9 +199,12 @@ function GalaxyStageInner({
   pendingSegments,
   routeSegments,
   enRouteGhosts,
+  traderShips,
   turnTimeline,
   selectedFleetId,
   onSelectedFleetChange,
+  selectedTraderId,
+  onSelectedTraderChange,
   shipsToDispatch,
   repeatNextDragEnabled,
   canIssueOrders,
@@ -150,8 +213,30 @@ function GalaxyStageInner({
   onStarPointerTap,
   onStarDoubleTap,
   onStageBackgroundTap,
+  foodAlerts,
+  starvationAlerts,
 }: GalaxyStageProps) {
   const { app, isInitialised } = useApplication();
+  /** Always read Pixi `app` from here in callbacks/effects — never put `app.canvas` / `app.renderer` in hook deps (React evaluates deps during render and those getters throw before init). */
+  const appRef = useRef(app);
+
+  /**
+   * Logical viewport dimensions (CSS pixels). The parent owns the canvas size via ResizeObserver
+   * and passes them in; we resize the Pixi renderer to match so `app.screen` always equals these
+   * values, and all camera math stays consistent with what the user actually sees.
+   */
+  const viewW = Math.max(1, Math.round(viewWidth));
+  const viewH = Math.max(1, Math.round(viewHeight));
+
+  useEffect(() => {
+    if (!isInitialised) return;
+    const renderer = appRef.current.renderer;
+    if (renderer === undefined) return;
+    if (renderer.width !== viewW || renderer.height !== viewH) {
+      renderer.resize(viewW, viewH);
+    }
+  }, [isInitialised, viewW, viewH]);
+
   const [dragFleetId, setDragFleetId] = useState<string | null>(null);
   const [dragCursorPos, setDragCursorPos] = useState<{ x: number; y: number } | null>(
     null,
@@ -163,10 +248,11 @@ function GalaxyStageInner({
   const onStageBackgroundTapRef = useRef(onStageBackgroundTap);
 
   useEffect(() => {
+    appRef.current = app;
     cameraRef.current = camera;
     onCameraChangeRef.current = onCameraChange;
     onStageBackgroundTapRef.current = onStageBackgroundTap;
-  }, [camera, onCameraChange, onStageBackgroundTap]);
+  }, [app, camera, onCameraChange, onStageBackgroundTap]);
 
   type PanSession = {
     pointerId: number;
@@ -204,39 +290,44 @@ function GalaxyStageInner({
 
   const clientToScreenPixels = useCallback(
     (clientX: number, clientY: number) => {
-      if (!isInitialised || app.renderer.events === undefined) {
-        return { x: GALAXY_STAGE_WIDTH / 2, y: GALAXY_STAGE_HEIGHT / 2 };
+      const application = appRef.current;
+      const events = application.renderer?.events;
+      if (!isInitialised || events === undefined) {
+        return { x: viewW / 2, y: viewH / 2 };
       }
       const p = pointerScratchRef.current;
-      app.renderer.events.mapPositionToPoint(p, clientX, clientY);
+      events.mapPositionToPoint(p, clientX, clientY);
       return { x: p.x, y: p.y };
     },
-    [app, isInitialised],
+    [isInitialised, viewW, viewH],
   );
 
   const clientToWorld = useCallback(
     (clientX: number, clientY: number) => {
       const { x: sx, y: sy } = clientToScreenPixels(clientX, clientY);
-      return screenToWorld(sx, sy, cameraRef.current, app.screen.width, app.screen.height);
+      return screenToWorld(sx, sy, cameraRef.current, viewW, viewH);
     },
-    [clientToScreenPixels, app.screen.width, app.screen.height],
+    [clientToScreenPixels, viewW, viewH],
   );
 
   useEffect(() => {
-    if (!isInitialised || app.renderer.events === undefined) return;
-    const canvas = app.canvas;
-    const events = app.renderer.events;
-    const p = new Point();
+    if (!isInitialised) return;
+    const application = appRef.current;
+    const canvas = application.canvas;
+    const events = application.renderer?.events;
+    if (canvas === undefined || events === undefined) return;
 
+    // Wheel zoom anchors on the world point under the cursor so players can hover over
+    // a system and zoom toward it. mapPositionToPoint converts viewport client coords
+    // into Pixi logical screen coords (matches our camera math).
+    const p = new Point();
     const onWheel = (ev: WheelEvent) => {
       ev.preventDefault();
       events.mapPositionToPoint(p, ev.clientX, ev.clientY);
-      const vw = app.screen.width;
-      const vh = app.screen.height;
       const factor = Math.exp(-ev.deltaY * MAP_WHEEL_ZOOM_SENSITIVITY);
       const cam = cameraRef.current;
       const nextScale = clampMapScale(cam.scale * factor);
-      const next = zoomCameraTowardScreenPoint(cam, p.x, p.y, nextScale, vw, vh);
+      const next = zoomCameraTowardScreenPoint(cam, p.x, p.y, nextScale, viewW, viewH);
       onCameraChangeRef.current(next);
     };
 
@@ -244,13 +335,7 @@ function GalaxyStageInner({
     return () => {
       canvas.removeEventListener("wheel", onWheel);
     };
-  }, [
-    app.canvas,
-    app.renderer.events,
-    app.screen.width,
-    app.screen.height,
-    isInitialised,
-  ]);
+  }, [isInitialised, viewW, viewH]);
 
   useEffect(() => {
     return () => {
@@ -262,7 +347,8 @@ function GalaxyStageInner({
   const handleBackgroundPointerDown = useCallback(
     (event: FederatedPointerEvent) => {
       if (event.pointerType === "mouse" && event.button !== 0) return;
-      if (app.renderer.events === undefined) return;
+      const events = appRef.current.renderer?.events;
+      if (events === undefined) return;
       panCleanupRef.current?.();
       panCleanupRef.current = null;
 
@@ -276,7 +362,6 @@ function GalaxyStageInner({
       };
       panSessionRef.current = panSession;
 
-      const events = app.renderer.events;
       const scratch = panDeltaScratchRef.current;
 
       const onMove = (ev: PointerEvent) => {
@@ -328,7 +413,7 @@ function GalaxyStageInner({
       window.addEventListener("pointerup", onUp);
       window.addEventListener("pointercancel", onUp);
     },
-    [app.renderer.events, isInitialised],
+    [isInitialised],
   );
 
   useEffect(() => {
@@ -400,16 +485,10 @@ function GalaxyStageInner({
       }
       setDragFleetId(fleet.fleetId);
       const cam = cameraRef.current;
-      const w = screenToWorld(
-        event.global.x,
-        event.global.y,
-        cam,
-        app.screen.width,
-        app.screen.height,
-      );
+      const w = screenToWorld(event.global.x, event.global.y, cam, viewW, viewH);
       setDragCursorPos({ x: w.x, y: w.y });
     },
-    [app.screen.width, app.screen.height, canIssueOrders, onSelectedFleetChange, shipsToDispatch],
+    [viewW, viewH, canIssueOrders, onSelectedFleetChange, shipsToDispatch],
   );
 
   const dragPreviewFleet =
@@ -421,9 +500,6 @@ function GalaxyStageInner({
     return null;
   }
 
-  const viewW = app.screen.width;
-  const viewH = app.screen.height;
-
   return (
     <>
       <pixiGraphics
@@ -434,8 +510,7 @@ function GalaxyStageInner({
       <pixiContainer
         x={viewW / 2}
         y={viewH / 2}
-        pivotX={camera.focusX}
-        pivotY={camera.focusY}
+        pivot={{ x: camera.focusX, y: camera.focusY }}
         scale={camera.scale}
         eventMode="passive"
       >
@@ -475,11 +550,28 @@ function GalaxyStageInner({
             draw={(graphics) => drawStar(graphics, node)}
           />
         ))}
+        <StarAlertGraphics
+          foodAlerts={foodAlerts}
+          starvationAlerts={starvationAlerts}
+          nodes={nodes}
+        />
         <EnRouteGhostGraphics
           ghosts={enRouteGhosts}
           nodes={nodes}
           turnTimeline={turnTimeline}
         />
+        {traderShips.map((trader) => (
+          <TraderShipMarker
+            key={trader.traderId}
+            trader={trader}
+            nodes={nodes}
+            turnTimeline={turnTimeline}
+            selected={selectedTraderId === trader.traderId}
+            onTap={() => {
+              onSelectedTraderChange(trader.traderId);
+            }}
+          />
+        ))}
         {fleetMarkers.map((fleet) => (
           <pixiGraphics
             key={fleet.fleetId}
@@ -550,6 +642,132 @@ function GalaxyStageInner({
   );
 }
 
+// ---------------------------------------------------------------------------
+// Food-shortage and starvation alert animations around stars
+// ---------------------------------------------------------------------------
+
+const ALERT_INNER_R = 22; // radius just outside the star ring
+const ALERT_OUTER_R = 30;
+
+function StarAlertGraphics({
+  foodAlerts,
+  starvationAlerts,
+  nodes,
+}: {
+  foodAlerts: FoodAlertNode[];
+  starvationAlerts: StarvationNode[];
+  nodes: GalaxyNode[];
+}) {
+  const frameRef = useRef(0);
+  const [, forceRender] = useState(0);
+  useTick(() => {
+    frameRef.current += 1;
+    forceRender((x) => x + 1);
+  });
+
+  const draw = useCallback(
+    (graphics: Graphics) => {
+      graphics.clear();
+      const now = Date.now();
+
+      // — Food shortage: pulsing red arc ring around the star —
+      for (const alert of foodAlerts) {
+        const node = nodes.find((n) => n.id === alert.id);
+        if (node === undefined) continue;
+        // severity 0-1: pulse frequency 0.8 Hz (low) → 4 Hz (critical)
+        const hz = 0.8 + alert.severity * 3.2;
+        const alpha = 0.45 + 0.55 * Math.abs(Math.sin(now * 0.001 * hz * Math.PI));
+        const width = 2.5 + alert.severity * 2;
+
+        // Draw a broken arc ring in red segments
+        const segments = 6;
+        const gapFraction = 0.22;
+        const segAngle = (Math.PI * 2) / segments;
+        const drawAngle = segAngle * (1 - gapFraction);
+        const r = ALERT_INNER_R + (ALERT_OUTER_R - ALERT_INNER_R) * 0.5;
+        const rotOffset = now * 0.0003 * (1 + alert.severity); // slow rotation
+
+        for (let i = 0; i < segments; i++) {
+          const startA = i * segAngle + rotOffset;
+          const endA = startA + drawAngle;
+          const steps = 10;
+          const pts: number[] = [];
+          for (let s = 0; s <= steps; s++) {
+            const a = startA + ((endA - startA) * s) / steps;
+            pts.push(node.x + Math.cos(a) * r, node.y + Math.sin(a) * r);
+          }
+          if (pts.length >= 4) {
+            graphics.moveTo(pts[0], pts[1]);
+            for (let p = 2; p < pts.length; p += 2) {
+              graphics.lineTo(pts[p], pts[p + 1]);
+            }
+            graphics.stroke({ width, color: 0xff3b30, alpha });
+          }
+        }
+
+        // Small food grain dots at alternating arc gaps
+        for (let i = 0; i < segments; i += 2) {
+          const a = i * segAngle + drawAngle / 2 + rotOffset;
+          const dr = ALERT_OUTER_R + 4;
+          graphics
+            .circle(node.x + Math.cos(a) * dr, node.y + Math.sin(a) * dr, 2.5)
+            .fill({ color: 0xff6b6b, alpha: alpha * 0.9 });
+        }
+      }
+
+      // — Starvation: red silhouette that fades in and out each second —
+      for (const alert of starvationAlerts) {
+        const node = nodes.find((n) => n.id === alert.id);
+        if (node === undefined) continue;
+
+        // Fade-in-hold-fade cycle: 1.8 s period
+        const period = 1800;
+        const phase = (now % period) / period;
+        // 0-0.25 fade in, 0.25-0.65 hold, 0.65-1 fade out
+        const alpha =
+          phase < 0.25
+            ? phase / 0.25
+            : phase < 0.65
+            ? 1
+            : 1 - (phase - 0.65) / 0.35;
+
+        // Draw a simple stick-figure orbiting the outer edge of the alert ring
+        const orbitA = node.x !== undefined ? (now * 0.0004) % (Math.PI * 2) : 0;
+        const cx = node.x + Math.cos(orbitA) * (ALERT_OUTER_R + 9);
+        const cy = node.y + Math.sin(orbitA) * (ALERT_OUTER_R + 9);
+
+        const figAlpha = alpha * 0.95;
+        // head
+        graphics.circle(cx, cy - 6, 2.5).fill({ color: 0xff3b30, alpha: figAlpha });
+        // body line
+        graphics
+          .moveTo(cx, cy - 3.5)
+          .lineTo(cx, cy + 3)
+          .stroke({ width: 1.8, color: 0xff3b30, alpha: figAlpha });
+        // arms
+        graphics
+          .moveTo(cx - 3, cy - 1)
+          .lineTo(cx + 3, cy - 1)
+          .stroke({ width: 1.8, color: 0xff3b30, alpha: figAlpha });
+        // legs
+        graphics
+          .moveTo(cx, cy + 3)
+          .lineTo(cx - 2.5, cy + 7)
+          .stroke({ width: 1.8, color: 0xff3b30, alpha: figAlpha });
+        graphics
+          .moveTo(cx, cy + 3)
+          .lineTo(cx + 2.5, cy + 7)
+          .stroke({ width: 1.8, color: 0xff3b30, alpha: figAlpha });
+      }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [foodAlerts, starvationAlerts, nodes, frameRef.current],
+  );
+
+  if (foodAlerts.length === 0 && starvationAlerts.length === 0) return null;
+  return <pixiGraphics eventMode="none" draw={draw} />;
+}
+
 function EnRouteGhostGraphics({
   ghosts,
   nodes,
@@ -609,29 +827,71 @@ function EnRouteGhostGraphics({
   return <pixiGraphics eventMode="none" draw={draw} />;
 }
 
-function enRouteLineFraction(params: {
-  now: number;
-  currentTurn: number;
-  dispatchedTurn: number;
-  travelTurnsTotal: number;
-  turnStartedAt: number | null;
-  travelAnimMs: number;
-}): number {
-  const {
-    now,
-    currentTurn,
-    dispatchedTurn,
-    travelTurnsTotal,
-    turnStartedAt,
-    travelAnimMs,
-  } = params;
-  const completedSegments = Math.min(
-    Math.max(currentTurn - dispatchedTurn - 1, 0),
-    travelTurnsTotal - 1,
+function TraderShipMarker({
+  trader,
+  nodes,
+  turnTimeline,
+  selected,
+  onTap,
+}: {
+  trader: TraderShipModel;
+  nodes: GalaxyNode[];
+  turnTimeline: TurnTimelineModel | null;
+  selected: boolean;
+  onTap: () => void;
+}) {
+  const [frame, setFrame] = useState(0);
+  useTick(() => {
+    setFrame((x) => x + 1);
+  });
+
+  const draw = useCallback(
+    (graphics: Graphics) => {
+      void frame;
+      graphics.clear();
+      const now = Date.now();
+      const currentTurn = turnTimeline?.currentTurn ?? 0;
+      const turnStartedAt = turnTimeline?.turnStartedAt ?? null;
+
+      const from = nodes.find((n) => n.id === trader.originSystemId);
+      const to = nodes.find((n) => n.id === trader.destSystemId);
+      if (!from || !to) return;
+
+      const t = Math.max(1, trader.travelTurnsTotal);
+      const fraction = enRouteLineFraction({
+        now,
+        currentTurn,
+        dispatchedTurn: trader.dispatchedTurn,
+        travelTurnsTotal: t,
+        turnStartedAt,
+        travelAnimMs: TRAVEL_ANIM_MS,
+      });
+
+      const gx = from.x + (to.x - from.x) * fraction;
+      const gy = from.y + (to.y - from.y) * fraction;
+      const ox = to.x - from.x;
+      const oy = to.y - from.y;
+      const len = Math.hypot(ox, oy) || 1;
+      drawTraderShip(graphics, gx, gy, ox / len, oy / len, selected);
+      graphics.hitArea = new Circle(gx, gy, 18);
+    },
+    [trader, nodes, turnTimeline, selected, frame],
   );
-  const phase =
-    turnStartedAt === null ? 0 : Math.min((now - turnStartedAt) / travelAnimMs, 1);
-  return Math.min((completedSegments + phase) / travelTurnsTotal, 1);
+
+  return (
+    <pixiGraphics
+      eventMode="static"
+      cursor="pointer"
+      onPointerDown={(event: FederatedPointerEvent) => {
+        event.stopPropagation();
+      }}
+      onPointerTap={(event: FederatedPointerEvent) => {
+        event.stopPropagation();
+        onTap();
+      }}
+      draw={draw}
+    />
+  );
 }
 
 function hitTestSystem(nodes: GalaxyNode[], x: number, y: number): string | null {
@@ -751,6 +1011,39 @@ function drawFleetShip(
       .poly([xTip, yTip, xLeft, yLeft, xRight, yRight])
       .stroke({ width: 2.5, color: 0xffffff, alpha: 1, join: "round" });
   }
+}
+
+/** Compact hauler icon for NPC/player traders (distinct from military fleet chevrons). */
+function drawTraderShip(
+  graphics: Graphics,
+  fx: number,
+  fy: number,
+  dirx: number,
+  diry: number,
+  selected: boolean,
+) {
+  const ox = dirx;
+  const oy = diry;
+  const px = -oy;
+  const py = ox;
+  const hull = 8;
+  const beam = 5;
+  const xBow = fx + ox * hull;
+  const yBow = fy + oy * hull;
+  const xStern = fx - ox * hull * 0.55;
+  const yStern = fy - oy * hull * 0.55;
+  const xPort = fx + px * beam - ox * 2;
+  const yPort = fy + py * beam - oy * 2;
+  const xStar = fx - px * beam - ox * 2;
+  const yStar = fy - py * beam - oy * 2;
+  const fill = 0xf59e0b;
+  graphics.poly([xBow, yBow, xPort, yPort, xStern, yStern, xStar, yStar]).fill({
+    color: fill,
+    alpha: 0.92,
+  });
+  graphics
+    .poly([xBow, yBow, xPort, yPort, xStern, yStern, xStar, yStar])
+    .stroke({ width: selected ? 2.5 : 1.5, color: selected ? 0xffffff : 0xfde68a, alpha: 1, join: "round" });
 }
 
 /** Translucent detachment traveling along the hyperspace chord (star center to star center). */

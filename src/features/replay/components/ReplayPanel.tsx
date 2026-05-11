@@ -1,10 +1,10 @@
 import { useQuery } from "convex/react";
 import { api } from "../../../../convex/_generated/api";
 import { Card } from "@/components/ui/card";
+import { useActiveGame } from "@/features/galaxy/hooks/useActiveGame";
 
 export function ReplayPanel() {
-  const games = useQuery(api.sim.queries.listGames, { limit: 10 }) ?? [];
-  const activeGame = games[0] ?? null;
+  const { activeGame } = useActiveGame();
   const events =
     useQuery(
       api.sim.queries.listRecentEvents,

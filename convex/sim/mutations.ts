@@ -112,3 +112,45 @@ export const stepTurn = mutation({
     return result;
   },
 });
+
+export const pauseGame = mutation({
+  args: { gameId: v.id("sim_games") },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (userId === null) {
+      throw new Error("Authentication required.");
+    }
+    await assertGameAdmin(ctx, args.gameId, userId);
+
+    const game = await ctx.db.get("sim_games", args.gameId);
+    if (game === null) {
+      throw new Error("Game not found.");
+    }
+    if (game.status !== "running") {
+      throw new Error("Only a running game can be paused.");
+    }
+    await ctx.db.patch("sim_games", args.gameId, { status: "paused" });
+    return args.gameId;
+  },
+});
+
+export const resumeGame = mutation({
+  args: { gameId: v.id("sim_games") },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (userId === null) {
+      throw new Error("Authentication required.");
+    }
+    await assertGameAdmin(ctx, args.gameId, userId);
+
+    const game = await ctx.db.get("sim_games", args.gameId);
+    if (game === null) {
+      throw new Error("Game not found.");
+    }
+    if (game.status !== "paused") {
+      throw new Error("Only a paused game can be resumed.");
+    }
+    await ctx.db.patch("sim_games", args.gameId, { status: "running" });
+    return args.gameId;
+  },
+});

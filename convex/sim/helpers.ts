@@ -1,5 +1,12 @@
+import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx } from "../_generated/server";
-import type { Id } from "../_generated/dataModel";
+
+/** True when the sim is in play (turns can matter) but not in lobby or finished. */
+export function gameAllowsPlayerActions(
+  status: Doc<"sim_games">["status"],
+): boolean {
+  return status === "running" || status === "paused";
+}
 
 export async function assertGameAdmin(
   ctx: MutationCtx,
@@ -36,4 +43,60 @@ export async function assertCanStepTurn(
   if (binding.role !== "admin" && binding.role !== "empire") {
     throw new Error("Only admins and empire players can advance the turn.");
   }
+}
+
+/** Same rules as fleet/system orders: active membership, running/paused game, admin or owning empire. */
+export async function assertMayAdjustGalaxySystemEmphasis(
+  ctx: MutationCtx,
+  params: {
+    gameId: Id<"sim_games">;
+    userId: Id<"users">;
+    systemId: Id<"gal_systems">;
+  },
+): Promise<Doc<"gal_systems">> {
+  const game = await ctx.db.get("sim_games", params.gameId);
+  if (game === null) {
+    throw new Error("Game not found.");
+  }
+  if (!gameAllowsPlayerActions(game.status)) {
+    throw new Error(
+      "Production sliders can only be changed while the game is running or paused.",
+    );
+  }
+
+  const system = await ctx.db.get("gal_systems", params.systemId);
+  if (system === null || system.gameId !== params.gameId) {
+    throw new Error("System not found in this game.");
+  }
+
+  const binding = await ctx.db
+    .query("usr_game_roles")
+    .withIndex("by_gameId_and_userId", (q) =>
+      q.eq("gameId", params.gameId).eq("userId", params.userId),
+    )
+    .unique();
+
+  if (binding === null || !binding.isActive) {
+    throw new Error("You are not an active member of this game.");
+  }
+
+  const isAdmin = binding.role === "admin";
+  const isOwner =
+    binding.role === "empire" &&
+    system.ownerEmpireId !== null &&
+    binding.empireId !== null &&
+    binding.empireId === system.ownerEmpireId;
+
+  if (!isAdmin && !isOwner) {
+    if (system.ownerEmpireId === null) {
+      throw new Error(
+        "This system has no colony — assign ownership before setting production emphasis (admins only until then).",
+      );
+    }
+    throw new Error(
+      "Only the empire that owns this colony — or a game admin — can change production sliders.",
+    );
+  }
+
+  return system;
 }

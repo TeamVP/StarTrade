@@ -82,10 +82,12 @@ export function zoomCameraTowardScreenPoint(
 
 export function computeFitAllSystemsCamera(
   positions: readonly { x: number; y: number }[],
+  viewWidth: number = GALAXY_STAGE_WIDTH,
+  viewHeight: number = GALAXY_STAGE_HEIGHT,
 ): GalaxyMapCamera {
   const pad = MAP_ZOOM_MARGIN_PX;
-  const W = GALAXY_STAGE_WIDTH;
-  const H = GALAXY_STAGE_HEIGHT;
+  const W = Math.max(viewWidth, 1);
+  const H = Math.max(viewHeight, 1);
   if (positions.length === 0) {
     return { focusX: W / 2, focusY: H / 2, scale: 1 };
   }
@@ -102,7 +104,9 @@ export function computeFitAllSystemsCamera(
   }
   const bw = Math.max(maxX - minX, 80);
   const bh = Math.max(maxY - minY, 80);
-  const scale = clampMapScale(Math.min((W - 2 * pad) / bw, (H - 2 * pad) / bh));
+  const usableW = Math.max(W - 2 * pad, 1);
+  const usableH = Math.max(H - 2 * pad, 1);
+  const scale = clampMapScale(Math.min(usableW / bw, usableH / bh));
   return {
     focusX: (minX + maxX) / 2,
     focusY: (minY + maxY) / 2,
@@ -116,6 +120,8 @@ export function computeMaxScaleForNeighborhood(
   links: readonly GalaxyLinkRow[],
   positionsById: Readonly<Record<string, { x: number; y: number }>>,
   hopDepth: number,
+  viewWidth: number = GALAXY_STAGE_WIDTH,
+  viewHeight: number = GALAXY_STAGE_HEIGHT,
 ): number {
   const center = positionsById[systemId];
   if (center === undefined) {
@@ -158,7 +164,7 @@ export function computeMaxScaleForNeighborhood(
     radiusSq = Math.max(radiusSq, dx * dx + dy * dy);
   }
   const radius = Math.sqrt(radiusSq);
-  const usable = Math.min(GALAXY_STAGE_WIDTH, GALAXY_STAGE_HEIGHT) / 2 - MAP_ZOOM_MARGIN_PX;
+  const usable = Math.min(viewWidth, viewHeight) / 2 - MAP_ZOOM_MARGIN_PX;
   if (usable <= 4) {
     return MIN_MAP_SCALE;
   }

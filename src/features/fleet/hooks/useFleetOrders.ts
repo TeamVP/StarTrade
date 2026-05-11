@@ -8,6 +8,7 @@ type IssueOrderArgs = {
   turnNumber: number;
   orderType: "move" | "hold" | "retreat";
   targetSystemId: Id<"gal_systems"> | null;
+  shipCount?: number;
 };
 
 export function useFleetOrders() {

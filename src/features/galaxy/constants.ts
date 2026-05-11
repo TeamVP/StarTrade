@@ -14,8 +14,13 @@ export const MAX_MAP_SCALE = 4;
 /** Wheel zoom: sensitivity via `scale *= exp(-deltaY * factor)`. */
 export const MAP_WHEEL_ZOOM_SENSITIVITY = 0.0012;
 
-/** Multiply scale when selecting a star (capped by local neighborhood). */
-export const STAR_CLICK_ZOOM_FACTOR = 1.15;
+/**
+ * Per-click pulse fractions toward the full target (centered on star, fully zoomed in).
+ * Centering is aggressive so the picked star reaches the middle quickly; zoom is gentle
+ * so the player keeps spatial context and uses multiple clicks to drill in.
+ */
+export const STAR_CLICK_RECENTER_FRACTION = 0.75;
+export const STAR_CLICK_ZOOM_FRACTION = 0.25;
 
 /** Extra pixels around fitted bounds when computing zoom caps / fit-all. */
 export const MAP_ZOOM_MARGIN_PX = 48;

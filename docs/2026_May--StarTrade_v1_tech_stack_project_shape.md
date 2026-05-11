@@ -525,6 +525,94 @@ Suggested model:
 
 That separation matters because one account may play different roles in different galaxies.
 
+## V1 implementation checklist (living document)
+
+Use this as the source of truth for **what is in the repo today** versus **what full V1 still needs**. Last aligned with the codebase **May 2026**.
+
+### Done (shipped in repo)
+
+**Convex / simulation**
+
+- [x] Grouped schema (`sim_*`, `gal_*`, `emp_*`, `flt_*`, `eco_*`, `trd_*`, `usr_*`) plus Convex Auth tables
+- [x] Indexes for typical reads (games, systems and links by game, fleets by game, events by game/turn, orders by game/turn)
+- [x] Domain-shaped function modules under `convex/` (`sim`, `gal`, `emp`, `flt`, `eco`, `trd`, `usr`, `admin`, `ai`, …)
+- [x] Admin seed: placeholder galaxy (systems, empires, holdings, hyperlanes, **two starter fleets**)
+- [x] **Playable manual loop:** `createGame` → seed → **`startGame`** → issue fleet **move** orders for **current turn** → **`stepTurn`** (`resolveTurn`: arrivals, applied orders, treasury stub, `eco_market_snapshots`, `sim_turns` / `sim_events`)
+- [x] Bidirectional link checks for fleet moves (`convex/gal/linkUtils.ts`)
+- [x] Query for **pending move orders** on a turn (`flt/queries.listPendingMoveOrdersForTurn`) for UI preview lines
+
+**Auth & ops**
+
+- [x] Convex Auth (password provider), `auth.config.ts`, `http.ts` routes
+- [x] **`JWT_PRIVATE_KEY` / `JWKS` / `SITE_URL`:** documented fix via `npm run setup:auth` and README (deployment env vars, not Vite-only)
+
+**Frontend**
+
+- [x] Vite + React + TypeScript + Tailwind (`@tailwindcss/vite`)
+- [x] Routing: `/`, `/fleet`, `/combat`, `/economy`, `/sign-in` with authenticated shell + **TopNav**
+- [x] Providers: `ConvexAuthProvider`, optional Sentry/PostHog bootstrap (`AnalyticsProvider`)
+- [x] Lightweight UI layer: `Button`, `Card`, `cn` (`clsx` + `tailwind-merge`) — **not** a full shadcn CLI install yet
+- [x] **Galaxy:** PixiJS + `@pixi/react` **v8** (`extend({ Graphics })`, `pixiGraphics`), live systems/links from Convex, empire colors on stars
+- [x] **Fleets on map (idle):** markers outside the system ring; **select + drag** to a linked system queues a move order; **dashed lines** for pending moves (in-flight drag preview + server-backed pending list)
+- [x] Sidebar: turn controls (`start` / `step`), empire snapshot, **event log** (recent `sim_events`), admin create/seed panel
+- [x] Fleet screen: form-based orders with neighbor-safe targeting
+
+**Supporting stubs (structure only)**
+
+- [x] `src/config/balance/constants.ts`, sample map keys, `src/lib/{rng,time,pathfinding,audio}` helpers as placeholders
+- [x] Feature folders (`features/*`) and types aligned with the recommended tree
+
+**Delivery**
+
+- [x] Source hosted on GitHub (`TeamVP/StarTrade`) with an initial commit describing the playable slice
+
+---
+
+### Still to do (toward full V1 PRD)
+
+Prioritize in roughly this order unless product cuts scope.
+
+**Core gameplay & rules**
+
+- [ ] **Automated 15s turn clock** (cron / scheduler + pause rules per PRD), not only manual **Step turn**
+- [ ] **Combat:** battle resolution, casualties, collateral to systems/stockpiles, persisted battle outputs and UI on `/combat`
+- [ ] **Economy:** production, consumption, stockpiles, prices driven by simulation rules (not only stub snapshots); **Recharts** on `/economy`
+- [ ] **Information / fog:** observation aging, visibility rules per PRD
+- [ ] **Empire collapse / succession** and AI opponents (`ai/` beyond stub)
+- [ ] **Convex-side deterministic RNG** for rolls; replay ties rolls to events
+
+**UX / UI**
+
+- [ ] **System detail panel** (emphasis, stockpiles, alerts) and clearer **first-session onboarding**
+- [ ] **Full shadcn/ui** install and shared component library per stack doc (dialogs, sheets, toasts, etc.)
+- [ ] **Framer Motion** on primary panels and notifications
+- [ ] **Replay / debug viewer** beyond a flat event list (filter by turn, actor, drill-down payloads)
+
+**Backend polish**
+
+- [ ] **Replace or merge duplicate move orders** same fleet / same turn if design calls for “latest wins”
+- [ ] **Role model:** assign `empire` (and later `observer` / `trader`) per game; tighten mutations beyond “admin can do everything”
+- [ ] **Pathfinding / ETA:** precomputed routes or cached shortest paths for AI and UI ETAs
+- [ ] **Admin:** full reseed/reset, scenario templates, optional `admin/actions` parity with mutations
+
+**Quality**
+
+- [ ] **Vitest:** rules (tax, combat, starvation, turn transitions)
+- [ ] **RTL:** panels and forms
+- [ ] **Playwright:** sign-in → seed → order → step turn
+- [ ] **Sentry + PostHog** wired with meaningful events and error boundaries in production builds
+
+**Observability / assets**
+
+- [ ] Howler-backed **SFX** for key beats (turn tick, arrival, battle, alerts)
+- [ ] **Art/UI tokens** (faction colors, fleet markers, alerts) documented and applied consistently
+
+---
+
+### How to use this with phased roadmap
+
+The **Recommended implementation order** section below is still the *intent*. This checklist tracks **concrete repo progress** against that intent and against **`2026_May--StarTrade_v1_PRD.md`**. Update checkboxes when merging meaningful slices, not for every small refactor.
+
 ## Recommended implementation order
 
 ### Phase 1 — foundation

@@ -6,6 +6,9 @@ const links = [
   { to: "/fleet", label: "Fleet", end: false },
   { to: "/combat", label: "Combat", end: false },
   { to: "/economy", label: "Economy", end: false },
+  { to: "/traders", label: "Traders", end: false },
+  { to: "/history", label: "History", end: false },
+  { to: "/balance", label: "Balance", end: false },
 ] as const;
 
 export function TopNav() {

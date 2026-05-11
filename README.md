@@ -29,6 +29,20 @@ For more information on how to configure Convex Auth, check out the [Convex Auth
 
 For more examples of different Convex Auth flows, check out this [example repo](https://www.convex.dev/templates/convex-auth).
 
+## Convex Auth: JWT keys (fix `JWT_PRIVATE_KEY` errors)
+
+Password sign-in needs **RSA keys on your Convex deployment** (not in `.env.local` alone). If sign-up/sign-in fails with `Missing environment variable JWT_PRIVATE_KEY`, run:
+
+```bash
+npm run setup:auth
+```
+
+That runs [`@convex-dev/auth`](https://labs.convex.dev/auth/setup/manual) and sets `JWT_PRIVATE_KEY`, `JWKS`, and `SITE_URL` on the deployment you pick (use the same dev deployment as `npx convex dev`).
+
+Then restart `npm run dev`.
+
+If `predev` already ran `setup.mjs --once` and skipped auth setup, you still need to run `npm run setup:auth` once per new machine or deployment. You can also set `JWT_PRIVATE_KEY` and `JWKS` manually under your project in the [Convex dashboard](https://dashboard.convex.dev) → **Settings** → **Environment Variables** (see the manual setup link above for key generation).
+
 ## Learn more
 
 To learn more about developing your project with Convex, check out:

@@ -1,10 +1,11 @@
 import { useQuery } from "convex/react";
 import { api } from "../../../../convex/_generated/api";
 import { Card } from "@/components/ui/card";
+import { useActiveGame } from "@/features/galaxy/hooks/useActiveGame";
+import { formatPopulationPeople } from "@/lib/populationFormat";
 
 export function EmpirePanel() {
-  const games = useQuery(api.sim.queries.listGames, { limit: 10 }) ?? [];
-  const activeGame = games[0] ?? null;
+  const { activeGame } = useActiveGame();
   const systems =
     useQuery(
       api.gal.queries.listSystems,
@@ -45,7 +46,17 @@ export function EmpirePanel() {
                 />
                 {empire.name}
               </span>
-              <span className="text-st-muted">Treasury {Math.round(empire.treasury)}</span>
+              <span className="text-st-muted">
+                Treasury {Math.round(empire.treasury)} · Pop{" "}
+                {formatPopulationPeople(empire.population)}
+                {(empire.researchPool ?? 0) > 0
+                  ? ` · Res ${Math.round(empire.researchPool ?? 0)}`
+                  : ""}
+                {(empire.insolvencyTurns ?? 0) > 0
+                  ? ` · Debt ${empire.insolvencyTurns}t`
+                  : ""}
+                {empire.isCollapsed ? " · Collapsed" : ""}
+              </span>
             </li>
           ))}
         </ul>

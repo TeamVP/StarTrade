@@ -12,6 +12,14 @@
 | Turn model | 15-second real-time turns with limited player-triggered pause |
 | PRD basis | Product requirements documents are meant to align teams around purpose, features, UX, assumptions, dependencies, open questions, and scope boundaries.[cite:60][cite:61][cite:62][cite:68] |
 
+## Implementation status vs this PRD
+
+Engineering tracks **what is built versus what remains** in a living checklist (Convex backend, frontend shell, playable loop, gaps toward full V1):
+
+- **`docs/2026_May--StarTrade_v1_tech_stack_project_shape.md`** → section **“V1 implementation checklist (living document)”**
+
+Use that checklist as the authoritative bridge between this PRD’s scope and the repository; update it when shipping meaningful vertical slices.
+
 ## Overview
 
 StarTrade v1 is the empire-builder foundation of the game: players and AI opponents expand across a fixed galaxy map, build fleets, conquer star systems, defend borders, manage economic emphasis, and survive long enough to become major powers.
