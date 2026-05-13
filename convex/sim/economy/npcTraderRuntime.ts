@@ -75,17 +75,31 @@ export async function npcIdentityHasEnRouteVoyage(
 export async function pickNpcIdentityForNewVoyage(
   ctx: MutationCtx,
   gameId: Id<"sim_games">,
+  excludedTraderIdentityIds: ReadonlySet<Id<"sim_trader_identities">> = new Set(),
 ): Promise<Id<"sim_trader_identities"> | null> {
   const rows = await loadIdentitiesForGame(ctx, gameId);
+  const enRoute = await ctx.db
+    .query("eco_bg_traders")
+    .withIndex("by_gameId_and_status", (q) =>
+      q.eq("gameId", gameId).eq("status", "enRoute"),
+    )
+    .take(128);
+  const busyIdentityIds = new Set(
+    enRoute.flatMap((voyage) =>
+      voyage.traderIdentityId === null || voyage.traderIdentityId === undefined
+        ? []
+        : [voyage.traderIdentityId],
+    ),
+  );
   const candidates = rows
-    .filter(isSolventNpc)
+    .filter(
+      (row) =>
+        isSolventNpc(row) &&
+        !excludedTraderIdentityIds.has(row._id) &&
+        !busyIdentityIds.has(row._id),
+    )
     .sort((a, b) => a.slotOrder - b.slotOrder);
-  for (const row of candidates) {
-    if (!(await npcIdentityHasEnRouteVoyage(ctx, gameId, row._id))) {
-      return row._id;
-    }
-  }
-  return null;
+  return candidates[0]?._id ?? null;
 }
 
 export async function applyVoyageProfitToNpcIdentity(

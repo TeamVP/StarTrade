@@ -15,14 +15,36 @@ export const tickRunningGames = internalMutation({
     let stepped = 0;
 
     for (const game of games) {
+      if (game.simCronTurnsDisabled === true) {
+        continue;
+      }
       if (game.turnPausedUntilMs !== undefined && now < game.turnPausedUntilMs) {
         continue;
       }
 
-      await ctx.runMutation(internal.sim.internal.resolveTurn, {
-        gameId: game._id,
-      });
-      stepped += 1;
+      try {
+        const begin: {
+          started: boolean;
+          turnNumber: number;
+          alreadyResolving: boolean;
+        } = await ctx.runMutation(internal.sim.internal.beginTurnResolution, {
+          gameId: game._id,
+        });
+        if (!begin.started) {
+          continue;
+        }
+        await ctx.scheduler.runAfter(0, internal.sim.actions.resolveTurnJob, {
+          gameId: game._id,
+          turnNumber: begin.turnNumber,
+        });
+        stepped += 1;
+      } catch (error) {
+        console.error(
+          "tickRunningGames: skipped game after error",
+          game._id,
+          error,
+        );
+      }
     }
 
     return { stepped };

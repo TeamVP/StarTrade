@@ -5,7 +5,7 @@ import type { Id } from "../../../../convex/_generated/dataModel";
 type IssueOrderArgs = {
   gameId: Id<"sim_games">;
   fleetId: Id<"flt_fleets">;
-  turnNumber: number;
+  turnNumber?: number;
   orderType: "move" | "hold" | "retreat";
   targetSystemId: Id<"gal_systems"> | null;
   shipCount?: number;

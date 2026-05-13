@@ -136,7 +136,8 @@ function EventRow({ event }: { event: EventDoc }) {
   const hasDetail =
     parsedPayload !== null &&
     typeof parsedPayload === "object" &&
-    Object.keys(parsedPayload as object).length > 0;
+    !Array.isArray(parsedPayload) &&
+    Object.keys(parsedPayload).length > 0;
 
   return (
     <div className="group flex gap-3 py-2.5 border-b border-st-border/50 last:border-0">

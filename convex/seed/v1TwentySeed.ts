@@ -1,6 +1,8 @@
 import type { MutationCtx } from "../_generated/server";
 import type { Id } from "../_generated/dataModel";
+import { seedSelectedNpcEmpires } from "./npcEmpireSeed";
 import { seedNpcTraderIdentitiesForGame } from "./npcTraderIdentitiesSeed";
+import { pickEmpireCatalogColorHex } from "./empireColorPrefLookup";
 import {
   V1_TWENTY_LANE_KEYS,
   V1_TWENTY_SYSTEMS,
@@ -15,6 +17,8 @@ export async function seedV1TwentyMap(
   ctx: MutationCtx,
   gameId: Id<"sim_games">,
   mapKey: string,
+  npcEmpireKeys: readonly string[],
+  empireColorPrefLookup: Record<string, string> = {},
 ): Promise<{ systems: number; empires: number; mapKey: string }> {
   const keyToId = new Map<string, Id<"gal_systems">>();
   const coordByKey = new Map<string, { x: number; y: number }>();
@@ -65,7 +69,7 @@ export async function seedV1TwentyMap(
     gameId,
     empireKey: "aurora",
     name: "Aurora Combine",
-    colorHex: "#22d3ee",
+    colorHex: pickEmpireCatalogColorHex("aurora", "#22d3ee", empireColorPrefLookup),
     treasury: 1200,
     foodStockpile: 500,
     population: 50_000_000,
@@ -77,12 +81,13 @@ export async function seedV1TwentyMap(
     insolvencyTurns: 0,
     pauseBudgetSeconds: 20,
     lastPauseRefreshAt: pausedNow,
+    empireTaxRate: 0.05,
   });
   const ironEmpireId = await ctx.db.insert("emp_states", {
     gameId,
     empireKey: "iron",
     name: "Iron Dominion",
-    colorHex: "#f97316",
+    colorHex: pickEmpireCatalogColorHex("iron", "#FF0000", empireColorPrefLookup),
     treasury: 1200,
     foodStockpile: 500,
     population: 50_000_000,
@@ -94,10 +99,21 @@ export async function seedV1TwentyMap(
     insolvencyTurns: 0,
     pauseBudgetSeconds: 20,
     lastPauseRefreshAt: pausedNow,
+    empireTaxRate: 0.05,
   });
 
   await ctx.db.patch("gal_systems", systemAurora, { ownerEmpireId: auroraEmpireId });
   await ctx.db.patch("gal_systems", systemIron, { ownerEmpireId: ironEmpireId });
+
+  const npcEmpireCount = await seedSelectedNpcEmpires(ctx, {
+    gameId,
+    npcEmpireKeys,
+    systems: V1_TWENTY_SYSTEMS,
+    keyToId,
+    coordByKey,
+    pausedNow,
+    empireColorPrefLookup,
+  });
 
   for (const lane of V1_TWENTY_LANE_KEYS) {
     const fromId = keyToId.get(lane.fromKey);
@@ -166,7 +182,7 @@ export async function seedV1TwentyMap(
 
   return {
     systems: V1_TWENTY_SYSTEMS.length,
-    empires: 2,
+    empires: 2 + npcEmpireCount,
     mapKey,
   };
 }

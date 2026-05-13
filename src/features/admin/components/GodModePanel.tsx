@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { startTransition, useState, useEffect } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "../../../../convex/_generated/api";
 import type { Id } from "../../../../convex/_generated/dataModel";
@@ -20,6 +20,7 @@ type Settings = {
   traderMinActive: number;
   traderMaxActive: number;
   traderShipHirePerTurn: number;
+  traderHireChancePct: number;
   traderDockingCost: number;
   foodStockpileMaxPerPop: number;
   foodStockpileMinPerPop: number;
@@ -27,6 +28,7 @@ type Settings = {
   combatDefenderAdvantage: number;
   foodBasePrice: number;
   combatFoodDamageMult: number;
+  traderLimitsAutomated: boolean;
 };
 
 const DEFAULTS: Settings = {
@@ -42,15 +44,17 @@ const DEFAULTS: Settings = {
   combatDefendMult: 1,
   collateralDamageMult: 1,
   traderMinActive: 0,
-  traderMaxActive: 16,
-  traderShipHirePerTurn: 500,
-  traderDockingCost: 200,
-  foodStockpileMaxPerPop: 3.0,
-  foodStockpileMinPerPop: 0.5,
+  traderMaxActive: 3,
+  traderShipHirePerTurn: 250,
+  traderHireChancePct: 20,
+  traderDockingCost: 100,
+  foodStockpileMaxPerPop: 20.0,
+  foodStockpileMinPerPop: 1.5,
   foodStressFactor: 1.0,
   combatDefenderAdvantage: 2.0,
   foodBasePrice: 6,
   combatFoodDamageMult: 1.0,
+  traderLimitsAutomated: true,
 };
 
 type SliderSpec = {
@@ -270,7 +274,9 @@ export function GodModePanel({ gameId }: { gameId: Id<"sim_games"> }) {
   // Sync from server when loaded
   useEffect(() => {
     if (serverSettings !== undefined) {
-      setLocal(serverSettings);
+      startTransition(() => {
+        setLocal(serverSettings);
+      });
     }
   }, [serverSettings]);
 
@@ -302,13 +308,23 @@ export function GodModePanel({ gameId }: { gameId: Id<"sim_games"> }) {
 
   const hasChanges =
     serverSettings !== undefined &&
-    (Object.keys(DEFAULTS) as Array<keyof Settings>).some(
-      (k) => Math.abs(local[k] - (serverSettings[k] ?? DEFAULTS[k])) > 0.001,
-    );
+    (Object.keys(DEFAULTS) as Array<keyof Settings>).some((k) => {
+      if (k === "traderLimitsAutomated") {
+        return (
+          local.traderLimitsAutomated !==
+          (serverSettings.traderLimitsAutomated ?? DEFAULTS.traderLimitsAutomated)
+        );
+      }
+      return Math.abs(local[k] - (serverSettings[k] ?? DEFAULTS[k])) > 0.001;
+    });
 
-  const anyNonDefault = (Object.keys(DEFAULTS) as Array<keyof Settings>).some(
-    (k) => Math.abs(local[k] - DEFAULTS[k]) > (DEFAULTS[k] >= 10 ? 0.51 : 0.005),
-  );
+  const anyNonDefault = (Object.keys(DEFAULTS) as Array<keyof Settings>).some((k) => {
+    if (k === "traderLimitsAutomated") {
+      return local.traderLimitsAutomated !== DEFAULTS.traderLimitsAutomated;
+    }
+    const def = DEFAULTS[k] as number;
+    return Math.abs((local[k] as number) - def) > (def >= 10 ? 0.51 : 0.005);
+  });
 
   if (serverSettings === undefined) {
     return (

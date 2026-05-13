@@ -2,19 +2,33 @@ import { mutation } from "../_generated/server";
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { internal } from "../_generated/api";
-import { assertCanStepTurn, assertGameAdmin } from "./helpers";
+import {
+  assertCanPauseOrResumeGame,
+  assertCanStepTurn,
+  assertGameAdmin,
+} from "./helpers";
+import { normalizeNpcEmpireKeys } from "../seed/npcEmpirePlayers";
 
 export const createGame = mutation({
   args: {
     name: v.string(),
     mapKey: v.string(),
     turnDurationMs: v.number(),
+    /** Per-game RNG seed (e.g. from `crypto.randomUUID()` on the client). */
     seed: v.string(),
+    npcEmpireKeys: v.optional(v.array(v.string())),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (userId === null) {
       throw new Error("Authentication required.");
+    }
+
+    const npcEmpireKeys = normalizeNpcEmpireKeys(args.npcEmpireKeys ?? []);
+
+    const seed = args.seed.trim();
+    if (seed.length === 0) {
+      throw new Error("RNG seed is required.");
     }
 
     const gameId = await ctx.db.insert("sim_games", {
@@ -23,9 +37,10 @@ export const createGame = mutation({
       mapKey: args.mapKey,
       turnDurationMs: args.turnDurationMs,
       currentTurn: 0,
-      seed: args.seed,
+      seed,
       startedAt: null,
       endedAt: null,
+      npcEmpireKeys,
     });
 
     await ctx.db.insert("usr_game_roles", {
@@ -35,6 +50,12 @@ export const createGame = mutation({
       empireId: null,
       joinedAt: Date.now(),
       isActive: true,
+    });
+
+    await ctx.runMutation(internal.admin.internal.seedGameData, {
+      gameId,
+      mapKey: args.mapKey,
+      colorPrefsUserId: userId,
     });
 
     return gameId;
@@ -63,7 +84,11 @@ export const startGame = mutation({
       .withIndex("by_gameId", (q) => q.eq("gameId", args.gameId))
       .take(1);
     if (seeded.length === 0) {
-      throw new Error("Seed the galaxy before starting.");
+      await ctx.runMutation(internal.admin.internal.seedGameData, {
+        gameId: args.gameId,
+        mapKey: game.mapKey,
+        colorPrefsUserId: userId,
+      });
     }
 
     await ctx.db.patch("sim_games", args.gameId, {
@@ -98,18 +123,43 @@ export const startGame = mutation({
 
 export const stepTurn = mutation({
   args: { gameId: v.id("sim_games") },
-  handler: async (ctx, args): Promise<{ resolvedTurn: number; nextTurn: number }> => {
+  handler: async (
+    ctx,
+    args,
+  ): Promise<{ accepted: boolean; turnNumber: number; alreadyResolving: boolean }> => {
     const userId = await getAuthUserId(ctx);
     if (userId === null) {
       throw new Error("Authentication required.");
     }
     await assertCanStepTurn(ctx, args.gameId, userId);
 
-    const result: { resolvedTurn: number; nextTurn: number } = await ctx.runMutation(
-      internal.sim.internal.resolveTurn,
+    const gameRow = await ctx.db.get("sim_games", args.gameId);
+    if (gameRow === null) {
+      throw new Error("Game not found.");
+    }
+    if (gameRow.status !== "running") {
+      throw new Error("Turn can only advance while the game is running.");
+    }
+
+    const begin: {
+      started: boolean;
+      turnNumber: number;
+      alreadyResolving: boolean;
+    } = await ctx.runMutation(
+      internal.sim.internal.beginTurnResolution,
       { gameId: args.gameId },
     );
-    return result;
+    if (begin.started) {
+      await ctx.scheduler.runAfter(0, internal.sim.actions.resolveTurnJob, {
+        gameId: args.gameId,
+        turnNumber: begin.turnNumber,
+      });
+    }
+    return {
+      accepted: begin.started || begin.alreadyResolving,
+      turnNumber: begin.turnNumber,
+      alreadyResolving: begin.alreadyResolving,
+    };
   },
 });
 
@@ -120,7 +170,7 @@ export const pauseGame = mutation({
     if (userId === null) {
       throw new Error("Authentication required.");
     }
-    await assertGameAdmin(ctx, args.gameId, userId);
+    await assertCanPauseOrResumeGame(ctx, args.gameId, userId);
 
     const game = await ctx.db.get("sim_games", args.gameId);
     if (game === null) {
@@ -141,7 +191,7 @@ export const resumeGame = mutation({
     if (userId === null) {
       throw new Error("Authentication required.");
     }
-    await assertGameAdmin(ctx, args.gameId, userId);
+    await assertCanPauseOrResumeGame(ctx, args.gameId, userId);
 
     const game = await ctx.db.get("sim_games", args.gameId);
     if (game === null) {
@@ -152,5 +202,36 @@ export const resumeGame = mutation({
     }
     await ctx.db.patch("sim_games", args.gameId, { status: "running" });
     return args.gameId;
+  },
+});
+
+/**
+ * When `disabled` is true, the scheduled cron will not auto-start turn resolution for this game.
+ * Does not change lobby/paused/running status; manual stepping still works.
+ */
+export const setSimCronTurnsDisabled = mutation({
+  args: {
+    gameId: v.id("sim_games"),
+    disabled: v.boolean(),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (userId === null) {
+      throw new Error("Authentication required.");
+    }
+    await assertGameAdmin(ctx, args.gameId, userId);
+
+    const game = await ctx.db.get("sim_games", args.gameId);
+    if (game === null) {
+      throw new Error("Game not found.");
+    }
+    if (game.status !== "running" && game.status !== "paused") {
+      throw new Error("Auto turns can only be toggled for a running or paused game.");
+    }
+
+    await ctx.db.patch(args.gameId, {
+      simCronTurnsDisabled: args.disabled ? true : undefined,
+    });
+    return { disabled: args.disabled } as const;
   },
 });

@@ -1,6 +1,8 @@
 import { query } from "../_generated/server";
 import { v } from "convex/values";
 import { paginationOptsValidator } from "convex/server";
+import { getAuthUserId } from "@convex-dev/auth/server";
+import type { Id } from "../_generated/dataModel";
 
 export const listGames = query({
   args: { limit: v.number() },
@@ -13,6 +15,74 @@ export const getGame = query({
   args: { gameId: v.id("sim_games") },
   handler: async (ctx, args) => {
     return await ctx.db.get("sim_games", args.gameId);
+  },
+});
+
+/**
+ * Running games with current-turn resolution status for the /games dashboard.
+ * Uses only stored timestamps; the client compares `resolvingStartedAt` to `Date.now()`
+ * for “stuck resolving” hints (never uses Date.now() here — keeps queries reactive).
+ */
+export const listRunningGamesTurnProgress = query({
+  args: {},
+  handler: async (ctx) => {
+    const userId = await getAuthUserId(ctx);
+    const games = await ctx.db
+      .query("sim_games")
+      .withIndex("by_status", (q) => q.eq("status", "running"))
+      .collect();
+
+    const result: {
+      gameId: Id<"sim_games">;
+      name: string;
+      mapKey: string;
+      currentTurn: number;
+      gameStartedAt: number | null;
+      turnPausedUntilMs: number | undefined;
+      simCronTurnsDisabled: boolean | undefined;
+      turnState: "open" | "resolving" | "resolved" | null;
+      resolutionPhase: string | null;
+      resolvingStartedAt: number | null;
+      viewerCanForceRetry: boolean;
+    }[] = [];
+
+    for (const game of games) {
+      let viewerCanForceRetry = false;
+      if (userId !== null) {
+        const binding = await ctx.db
+          .query("usr_game_roles")
+          .withIndex("by_gameId_and_userId", (q) =>
+            q.eq("gameId", game._id).eq("userId", userId),
+          )
+          .unique();
+        viewerCanForceRetry =
+          binding !== null && binding.isActive && binding.role === "admin";
+      }
+
+      const turnRow = await ctx.db
+        .query("sim_turns")
+        .withIndex("by_gameId_and_turnNumber", (q) =>
+          q.eq("gameId", game._id).eq("turnNumber", game.currentTurn),
+        )
+        .unique();
+
+      result.push({
+        gameId: game._id,
+        name: game.name,
+        mapKey: game.mapKey,
+        currentTurn: game.currentTurn,
+        gameStartedAt: game.startedAt,
+        turnPausedUntilMs: game.turnPausedUntilMs,
+        simCronTurnsDisabled: game.simCronTurnsDisabled,
+        turnState: turnRow?.state ?? null,
+        resolutionPhase: turnRow?.resolutionPhase ?? null,
+        resolvingStartedAt: turnRow?.resolvingStartedAt ?? null,
+        viewerCanForceRetry,
+      });
+    }
+
+    result.sort((a, b) => b.gameId.localeCompare(a.gameId));
+    return result;
   },
 });
 
@@ -34,6 +104,9 @@ export const getTurnTimelineForGame = query({
       currentTurn: game.currentTurn,
       turnDurationMs: game.turnDurationMs,
       turnStartedAt: turnRow?.startedAt ?? null,
+      turnState: turnRow?.state ?? null,
+      resolutionPhase: turnRow?.resolutionPhase ?? null,
+      simCronTurnsDisabled: game.simCronTurnsDisabled === true,
     };
   },
 });

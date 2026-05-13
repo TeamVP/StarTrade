@@ -2,6 +2,7 @@ import { FormEvent, useState, type MouseEvent } from "react";
 import { useMutation } from "convex/react";
 import { api } from "../../../../convex/_generated/api";
 import type { Id } from "../../../../convex/_generated/dataModel";
+import { NPC_EMPIRE_PLAYERS } from "../../../../convex/seed/npcEmpirePlayers";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { useActiveGame } from "@/features/galaxy/hooks/useActiveGame";
@@ -39,23 +40,28 @@ export function AdminPanel() {
     const formData = new FormData(form);
     const nameValue = formData.get("name");
     const mapKeyValue = formData.get("mapKey");
-    const seedValue = formData.get("seed");
+    const npcEmpireKeys = formData
+      .getAll("npcEmpireKeys")
+      .filter((value): value is string => typeof value === "string");
     const name = typeof nameValue === "string" ? nameValue.trim() : "";
     const mapKey = typeof mapKeyValue === "string" ? mapKeyValue.trim() : "";
-    const seed = typeof seedValue === "string" ? seedValue.trim() : "";
 
-    if (!name || !mapKey || !seed) return;
+    if (!name || !mapKey) return;
 
+    setSeedError(null);
     setCreating(true);
     try {
       const newGameId = await createGame({
         name,
         mapKey,
         turnDurationMs: 15000,
-        seed,
+        seed: crypto.randomUUID(),
+        npcEmpireKeys,
       });
       setSelectedGameId(newGameId);
       form.reset();
+    } catch (e) {
+      setSeedError(mutationErrorMessage(e));
     } finally {
       setCreating(false);
     }
@@ -88,23 +94,54 @@ export function AdminPanel() {
           placeholder="Game name"
           className="w-full rounded border border-st-border bg-st-bg px-3 py-2 text-sm"
         />
-        <input
-          name="mapKey"
-          placeholder="v1-twenty | v1-core | v1-large"
-          defaultValue="v1-twenty"
-          className="w-full rounded border border-st-border bg-st-bg px-3 py-2 text-sm"
-        />
-        <input
-          name="seed"
-          defaultValue="seed-001"
-          className="w-full rounded border border-st-border bg-st-bg px-3 py-2 text-sm"
-        />
+        <label className="block">
+          <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-st-muted">
+            Game size
+          </span>
+          <select
+            name="mapKey"
+            defaultValue="v1-twenty"
+            className="w-full rounded border border-st-border bg-st-bg px-3 py-2 text-sm"
+          >
+            <option value="v1-twenty">Small game - 20 stars</option>
+            <option value="v1-medium">Medium game - 120 stars</option>
+          </select>
+        </label>
+        <fieldset className="rounded border border-st-border bg-st-bg/40 p-3">
+          <legend className="px-1 text-xs font-medium uppercase tracking-wide text-st-muted">
+            Optional NPC empires
+          </legend>
+          <p className="mb-2 text-xs text-st-muted">
+            Select specific NPC players to add as independent computer empires.
+          </p>
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            {NPC_EMPIRE_PLAYERS.map((player) => (
+              <label
+                key={player.key}
+                className="flex cursor-pointer items-start gap-2 rounded border border-st-border/70 bg-st-panel/60 px-2 py-2 text-xs hover:border-st-accent/60"
+              >
+                <input
+                  type="checkbox"
+                  name="npcEmpireKeys"
+                  value={player.key}
+                  className="mt-0.5 accent-cyan-400"
+                />
+                <span>
+                  <span className="block font-medium text-st-fg">
+                    {player.playerName}
+                  </span>
+                  <span className="block text-st-muted">{player.empireName}</span>
+                </span>
+              </label>
+            ))}
+          </div>
+        </fieldset>
         <Button
           type="submit"
           disabled={creating}
           className="w-full"
         >
-          {creating ? "Creating..." : "Create Game"}
+          {creating ? "Creating & seeding…" : "Create Game"}
         </Button>
       </form>
 
@@ -115,7 +152,11 @@ export function AdminPanel() {
       ) : null}
 
       <div className="mt-4 space-y-2">
-        <p className="text-xs text-st-muted">Click a game to focus the map and panels on it.</p>
+        <p className="text-xs text-st-muted">
+          Click a game to focus the map and panels on it. Creating a game seeds its map automatically —
+          use <span className="font-medium text-st-fg">Seed</span> only for an older lobby game that never
+          got map data.
+        </p>
         {games.map((game) => {
           const isFocused = activeGame?._id === game._id;
           return (
@@ -138,7 +179,9 @@ export function AdminPanel() {
             >
               <div>
                 <p className="font-medium">{game.name}</p>
-                <p className="text-xs text-st-muted">{game.mapKey}</p>
+                <p className="text-xs text-st-muted">
+                  {game.mapKey} - {game.npcEmpireKeys?.length ?? 0} NPC empires
+                </p>
               </div>
               <Button
                 type="button"

@@ -4,7 +4,7 @@ import { api } from "../../../../convex/_generated/api";
 import type { Doc } from "../../../../convex/_generated/dataModel";
 import { ActiveGameContext } from "../context/ActiveGameContext";
 
-const LIST_GAMES_LIMIT = 20;
+const LIST_GAMES_LIMIT = 100;
 
 function useActiveGameSelection() {
   const ctx = useContext(ActiveGameContext);

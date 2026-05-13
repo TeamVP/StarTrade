@@ -35,10 +35,6 @@ export function CombatScreen() {
     api.cmb.queries.listActiveBattles,
     activeGame ? { gameId: activeGame._id, limit: 40 } : "skip",
   );
-  const fleetsQuery = useQuery(
-    api.flt.queries.listFleetsForGame,
-    activeGame ? { gameId: activeGame._id, limit: 200 } : "skip",
-  );
   const combatEvents = useMemo(
     () =>
       (recentEvents ?? []).filter((event) => COMBAT_EVENT_TYPES.has(event.eventType)),
@@ -51,10 +47,6 @@ export function CombatScreen() {
   const empireNames = useMemo(
     () => Object.fromEntries(empires.map((empire) => [empire._id, empire.name])),
     [empires],
-  );
-  const fleetById = useMemo(
-    () => Object.fromEntries((fleetsQuery ?? []).map((fleet) => [fleet._id, fleet])),
-    [fleetsQuery],
   );
   const activeBattles = activeBattlesQuery ?? [];
   const perspectives = useMemo(
@@ -85,7 +77,6 @@ export function CombatScreen() {
     await issueFleetOrder({
       gameId: activeGame._id,
       fleetId,
-      turnNumber: activeGame.currentTurn,
       orderType: "retreat",
       targetSystemId: null,
     });
@@ -135,8 +126,6 @@ export function CombatScreen() {
         ) : (
           <ul className="mt-3 space-y-3 text-sm">
             {activeBattles.map((battle) => {
-              const attackerFleet = fleetById[battle.attackerFleetId];
-              const defenderFleet = fleetById[battle.defenderFleetId];
               return (
                 <li
                   key={battle._id}
@@ -153,19 +142,17 @@ export function CombatScreen() {
                         {battle.roundNumber}
                       </p>
                       <p className="mt-1 text-xs text-st-muted">
-                        Attackers: {attackerFleet?.strength ?? "?"} ships · Defenders:{" "}
-                        {defenderFleet?.strength ?? "?"} ships
+                        Attackers: {battle.attackerShips} ships · Defenders:{" "}
+                        {battle.defenderShips} ships
                       </p>
                     </div>
                     <Button
                       type="button"
                       disabled={
-                        !ordersAllowed || attackerFleet === undefined
+                        !ordersAllowed || battle.attackerShips <= 0
                       }
                       onClick={() => {
-                        if (attackerFleet !== undefined) {
-                          void issueRetreat(attackerFleet._id);
-                        }
+                        void issueRetreat(battle.attackerFleetId);
                       }}
                     >
                       Retreat attackers

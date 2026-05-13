@@ -66,7 +66,7 @@ export const adjustFoodImportSubsidy = mutation({
       Math.min(MAX_FOOD_IMPORT_SUBSIDY_PER_UNIT, Math.round(cur + args.delta)),
     );
 
-    await ctx.db.patch(args.systemId, {
+    await ctx.db.patch("gal_systems", args.systemId, {
       foodImportSubsidyPerUnit: next,
     });
     return null;

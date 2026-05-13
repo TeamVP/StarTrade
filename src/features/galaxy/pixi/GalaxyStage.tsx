@@ -23,6 +23,7 @@ import {
 extend({ Graphics, Container });
 
 /** Fraction 0–1 along the origin→destination chord for in-flight ships (fleets, traders). */
+// eslint-disable-next-line react-refresh/only-export-components -- shared by GalaxyViewport + types
 export function enRouteLineFraction(params: {
   now: number;
   currentTurn: number;
@@ -43,11 +44,16 @@ export function enRouteLineFraction(params: {
     Math.max(currentTurn - dispatchedTurn - 1, 0),
     travelTurnsTotal - 1,
   );
+  if (currentTurn <= dispatchedTurn) {
+    return 0;
+  }
+  if (currentTurn > dispatchedTurn + travelTurnsTotal) {
+    return 1;
+  }
   const phase =
     turnStartedAt === null ? 0 : Math.min((now - turnStartedAt) / travelAnimMs, 1);
   return Math.min((completedSegments + phase) / travelTurnsTotal, 1);
 }
-
 export type GalaxyNode = {
   id: string;
   x: number;
@@ -71,6 +77,21 @@ export type FleetMarkerModel = {
   x: number;
   y: number;
   colorHex: string;
+};
+
+export type ColonyShipMarkerModel = {
+  colonyShipId: string;
+  originSystemId: string;
+  x: number;
+  y: number;
+  colorHex: string;
+  /** When true, player may drag a multi-hop route from this idle ship's current system. */
+  canDragDispatchRoute?: boolean;
+};
+
+export type ColonyShipRouteCommitPayload = {
+  colonyShipId: string;
+  routeSystemIds: string[];
 };
 
 export type PendingSegmentModel = {
@@ -110,6 +131,8 @@ export type EnRouteGhostModel = {
   colorHex: string;
   dispatchedTurn: number;
   travelTurnsTotal: number;
+  /** When set, draw as colony transport instead of military chevron. */
+  variant?: "fleet" | "colony";
 };
 
 /** Background or player trader ship shown in transit on the map. */
@@ -123,6 +146,44 @@ export type TraderShipModel = {
   travelTurnsTotal: number;
   etaTurn: number;
   operatorKind: "npc" | "player" | "unknown";
+};
+
+export type CombatMarkerModel = {
+  battleId: string;
+  systemId: string;
+  attackerFleetId: string;
+  defenderFleetId: string;
+  attackerColorHex: string;
+  defenderColorHex: string;
+  attackerShips: number;
+  defenderShips: number;
+  attackerShipsAtStart: number;
+  defenderShipsAtStart: number;
+  attackerMotherships: number;
+  defenderMotherships: number;
+  canRetreat: boolean;
+  phase: "opening" | "awaitingAttackerDecision" | "retreating" | "resolved";
+  roundNumber: number;
+  latestRound: CombatRoundReplayModel | null;
+};
+
+export type CombatRoundReplayModel = {
+  turnNumber: number;
+  attackerShipsBefore: number;
+  defenderShipsBefore: number;
+  attackerShipsAfter: number;
+  defenderShipsAfter: number;
+  mothershipEvents: MothershipDamageReplayModel[];
+};
+
+export type MothershipDamageReplayModel = {
+  side: "attacker" | "defender";
+  colonyShipId: string;
+  name: string;
+  damageApplied: number;
+  damageBefore: number;
+  damageAfter: number;
+  destroyed: boolean;
 };
 
 export type TurnTimelineModel = {
@@ -142,16 +203,24 @@ export type GalaxyStageProps = {
   links: GalaxyLink[];
   galaxyLinks: GalaxyLinkRow[];
   fleetMarkers: FleetMarkerModel[];
+  /** Non-combat colony ships at orbit (idle). */
+  colonyShipMarkers: ColonyShipMarkerModel[];
   pendingSegments: PendingSegmentModel[];
   routeSegments: RouteSegmentModel[];
   enRouteGhosts: EnRouteGhostModel[];
   /** NPC / player traders in flight (cargo haulers). */
   traderShips: TraderShipModel[];
+  /** Active ship battles taking place at star systems. */
+  combatMarkers: CombatMarkerModel[];
   turnTimeline: TurnTimelineModel | null;
   selectedFleetId: string | null;
   onSelectedFleetChange: (fleetId: string | null) => void;
   selectedTraderId: string | null;
   onSelectedTraderChange: (traderId: string | null) => void;
+  /** Selected star/system in the map. Drawn with a prominent pulsing highlight. */
+  selectedSystemId: string | null;
+  selectedColonyShipId: string | null;
+  onSelectedColonyShipChange: (colonyShipId: string | null) => void;
   shipsToDispatch: number;
   /** When true, a successful drag-drop also establishes a recurring route (viewport handles save). */
   repeatNextDragEnabled: boolean;
@@ -167,6 +236,16 @@ export type GalaxyStageProps = {
   foodAlerts: FoodAlertNode[];
   /** Systems where population is actively dying from starvation. */
   starvationAlerts: StarvationNode[];
+  onColonyShipRouteCommit?: (payload: ColonyShipRouteCommitPayload) => Promise<void>;
+  /** Validate ordered destination system ids (first hop through final); return error or null. */
+  validateColonyShipRoute?: (routeSystemIds: string[]) => string | null;
+  /**
+   * Deprecated no-ops — colony dispatch uses fleet-style drag only. Optional so stale Vite HMR
+   * chunks or old call sites never reference undefined identifiers (runtime ReferenceError).
+   */
+  onColonyRouteDraftChange?: unknown;
+  onColonyRouteDragActiveChange?: unknown;
+  colonyRouteDismissNonce?: unknown;
 };
 
 export function GalaxyStage(props: GalaxyStageProps) {
@@ -196,15 +275,20 @@ function GalaxyStageInner({
   links,
   galaxyLinks,
   fleetMarkers,
+  colonyShipMarkers,
   pendingSegments,
   routeSegments,
   enRouteGhosts,
   traderShips,
+  combatMarkers,
   turnTimeline,
   selectedFleetId,
   onSelectedFleetChange,
   selectedTraderId,
   onSelectedTraderChange,
+  selectedSystemId,
+  selectedColonyShipId,
+  onSelectedColonyShipChange,
   shipsToDispatch,
   repeatNextDragEnabled,
   canIssueOrders,
@@ -215,7 +299,16 @@ function GalaxyStageInner({
   onStageBackgroundTap,
   foodAlerts,
   starvationAlerts,
+  onColonyShipRouteCommit,
+  validateColonyShipRoute,
+  onColonyRouteDraftChange,
+  onColonyRouteDragActiveChange,
+  colonyRouteDismissNonce,
 }: GalaxyStageProps) {
+  void onColonyRouteDraftChange;
+  void onColonyRouteDragActiveChange;
+  void colonyRouteDismissNonce;
+
   const { app, isInitialised } = useApplication();
   /** Always read Pixi `app` from here in callbacks/effects — never put `app.canvas` / `app.renderer` in hook deps (React evaluates deps during render and those getters throw before init). */
   const appRef = useRef(app);
@@ -242,6 +335,26 @@ function GalaxyStageInner({
     null,
   );
   const dragShipCountRef = useRef(1);
+  const dragRecurringRef = useRef(false);
+
+  const [dragColonyShipId, setDragColonyShipId] = useState<string | null>(null);
+
+  const colonyDragPropsRef = useRef({
+    nodes: [] as GalaxyNode[],
+    galaxyLinks: [] as GalaxyLinkRow[],
+    colonyShipMarkers: [] as ColonyShipMarkerModel[],
+    onColonyShipRouteCommit: undefined as GalaxyStageProps["onColonyShipRouteCommit"],
+    validateColonyShipRoute: undefined as GalaxyStageProps["validateColonyShipRoute"],
+  });
+  useEffect(() => {
+    colonyDragPropsRef.current = {
+      nodes,
+      galaxyLinks,
+      colonyShipMarkers,
+      onColonyShipRouteCommit,
+      validateColonyShipRoute,
+    };
+  }, [nodes, galaxyLinks, colonyShipMarkers, onColonyShipRouteCommit, validateColonyShipRoute]);
 
   const cameraRef = useRef(camera);
   const onCameraChangeRef = useRef(onCameraChange);
@@ -269,13 +382,12 @@ function GalaxyStageInner({
 
   type DragResolveSnapshot = Pick<
     GalaxyStageProps,
-    "nodes" | "galaxyLinks" | "fleetMarkers" | "repeatNextDragEnabled" | "onFleetMoveCommit"
+    "nodes" | "galaxyLinks" | "fleetMarkers" | "onFleetMoveCommit"
   >;
   const propsRef = useRef<DragResolveSnapshot>({
     nodes: [],
     galaxyLinks: [],
     fleetMarkers: [],
-    repeatNextDragEnabled: false,
     onFleetMoveCommit: undefined,
   });
   useEffect(() => {
@@ -283,10 +395,9 @@ function GalaxyStageInner({
       nodes,
       galaxyLinks,
       fleetMarkers,
-      repeatNextDragEnabled,
       onFleetMoveCommit,
     };
-  }, [nodes, galaxyLinks, fleetMarkers, repeatNextDragEnabled, onFleetMoveCommit]);
+  }, [nodes, galaxyLinks, fleetMarkers, onFleetMoveCommit]);
 
   const clientToScreenPixels = useCallback(
     (clientX: number, clientY: number) => {
@@ -428,13 +539,13 @@ function GalaxyStageInner({
         fleetMarkers: fm,
         galaxyLinks: gl,
         nodes: nd,
-        repeatNextDragEnabled: recurring,
         onFleetMoveCommit: commit,
       } = propsRef.current;
       const { x, y } = clientToWorld(ev.clientX, ev.clientY);
       const dropSystemId = hitTestSystem(nd, x, y);
       const fleet = fm.find((marker) => marker.fleetId === dragFleetId);
       const shipCount = dragShipCountRef.current;
+      const recurring = dragRecurringRef.current;
 
       void (async () => {
         if (
@@ -473,6 +584,86 @@ function GalaxyStageInner({
     };
   }, [dragFleetId, clientToWorld, isInitialised]);
 
+  useEffect(() => {
+    if (!dragColonyShipId || !isInitialised) return;
+
+    const onMove = (ev: PointerEvent) => {
+      setDragCursorPos(clientToWorld(ev.clientX, ev.clientY));
+    };
+
+    const onUp = (ev: PointerEvent) => {
+      const {
+        nodes: nd,
+        galaxyLinks: gl,
+        colonyShipMarkers: cms,
+        onColonyShipRouteCommit: commit,
+        validateColonyShipRoute: valFn,
+      } = colonyDragPropsRef.current;
+      const { x, y } = clientToWorld(ev.clientX, ev.clientY);
+      const dropSystemId = hitTestSystem(nd, x, y);
+      const marker = cms.find((m) => m.colonyShipId === dragColonyShipId);
+
+      void (async () => {
+        if (
+          marker !== undefined &&
+          dropSystemId !== null &&
+          dropSystemId !== marker.originSystemId &&
+          systemsShareLink(gl, marker.originSystemId, dropSystemId) &&
+          commit !== undefined
+        ) {
+          const route = [dropSystemId];
+          const err = valFn !== undefined ? valFn(route) : null;
+          if (err !== null) {
+            console.warn(err);
+          } else {
+            try {
+              await commit({
+                colonyShipId: marker.colonyShipId,
+                routeSystemIds: route,
+              });
+            } catch (error) {
+              console.error(error);
+            }
+          }
+        }
+      })();
+
+      setDragColonyShipId(null);
+      setDragCursorPos(null);
+    };
+
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
+    return () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
+    };
+  }, [dragColonyShipId, clientToWorld, isInitialised]);
+
+  const handleColonyShipPointerDown = useCallback(
+    (ship: ColonyShipMarkerModel, event: FederatedPointerEvent) => {
+      if (!canIssueOrders) return;
+      event.stopPropagation();
+      onSelectedColonyShipChange(ship.colonyShipId);
+      if (ship.canDragDispatchRoute === true && onColonyShipRouteCommit !== undefined) {
+        setDragFleetId(null);
+        setDragColonyShipId(ship.colonyShipId);
+        const cam = cameraRef.current;
+        const w = screenToWorld(event.global.x, event.global.y, cam, viewW, viewH);
+        setDragCursorPos({ x: w.x, y: w.y });
+      }
+    },
+    [
+      viewW,
+      viewH,
+      canIssueOrders,
+      onSelectedColonyShipChange,
+      onColonyShipRouteCommit,
+    ],
+  );
+
   const handleFleetPointerDown = useCallback(
     (fleet: FleetMarkerModel, event: FederatedPointerEvent) => {
       if (!canIssueOrders) return;
@@ -480,21 +671,29 @@ function GalaxyStageInner({
       onSelectedFleetChange(fleet.fleetId);
       const n = Math.max(0, Math.floor(shipsToDispatch));
       dragShipCountRef.current = n;
+      dragRecurringRef.current = repeatNextDragEnabled;
       if (n < 1) {
         return;
       }
+      setDragColonyShipId(null);
       setDragFleetId(fleet.fleetId);
       const cam = cameraRef.current;
       const w = screenToWorld(event.global.x, event.global.y, cam, viewW, viewH);
       setDragCursorPos({ x: w.x, y: w.y });
     },
-    [viewW, viewH, canIssueOrders, onSelectedFleetChange, shipsToDispatch],
+    [viewW, viewH, canIssueOrders, onSelectedFleetChange, shipsToDispatch, repeatNextDragEnabled],
   );
 
   const dragPreviewFleet =
     dragFleetId === null ? null : fleetMarkers.find((m) => m.fleetId === dragFleetId);
+  const dragPreviewColony =
+    dragColonyShipId === null
+      ? null
+      : colonyShipMarkers.find((m) => m.colonyShipId === dragColonyShipId);
 
   const readyCursor = canIssueOrders && shipsToDispatch >= 1;
+  const selectedSystemNode =
+    selectedSystemId === null ? undefined : nodes.find((node) => node.id === selectedSystemId);
 
   if (!isInitialised) {
     return null;
@@ -528,7 +727,7 @@ function GalaxyStageInner({
         />
         {nodes.map((node) => (
           <pixiGraphics
-            key={node.id}
+            key={`${node.id}:${node.ownerColor}`}
             eventMode="static"
             cursor={
               onStarPointerTap !== undefined || onStarDoubleTap !== undefined
@@ -550,10 +749,16 @@ function GalaxyStageInner({
             draw={(graphics) => drawStar(graphics, node)}
           />
         ))}
+        <SelectedStarHighlightGraphics node={selectedSystemNode} />
         <StarAlertGraphics
           foodAlerts={foodAlerts}
           starvationAlerts={starvationAlerts}
           nodes={nodes}
+        />
+        <CombatAnimationGraphics
+          combatMarkers={combatMarkers}
+          nodes={nodes}
+          turnTimeline={turnTimeline}
         />
         <EnRouteGhostGraphics
           ghosts={enRouteGhosts}
@@ -574,7 +779,7 @@ function GalaxyStageInner({
         ))}
         {fleetMarkers.map((fleet) => (
           <pixiGraphics
-            key={fleet.fleetId}
+            key={`${fleet.fleetId}:${fleet.colorHex}`}
             eventMode={canIssueOrders ? "static" : "auto"}
             cursor={readyCursor ? "grab" : canIssueOrders ? "pointer" : "default"}
             onPointerDown={(event: FederatedPointerEvent) =>
@@ -586,6 +791,30 @@ function GalaxyStageInner({
                 fleet,
                 nodes.find((node) => node.id === fleet.originSystemId),
                 selectedFleetId === fleet.fleetId,
+              )
+            }
+          />
+        ))}
+        {colonyShipMarkers.map((ship) => (
+          <pixiGraphics
+            key={`${ship.colonyShipId}:${ship.colorHex}`}
+            eventMode={canIssueOrders ? "static" : "auto"}
+            cursor={
+              canIssueOrders && ship.canDragDispatchRoute === true && onColonyShipRouteCommit
+                ? "grab"
+                : canIssueOrders
+                  ? "pointer"
+                  : "default"
+            }
+            onPointerDown={(event: FederatedPointerEvent) =>
+              handleColonyShipPointerDown(ship, event)
+            }
+            draw={(graphics) =>
+              drawColonyShip(
+                graphics,
+                ship,
+                nodes.find((node) => node.id === ship.originSystemId),
+                selectedColonyShipId === ship.colonyShipId,
               )
             }
           />
@@ -606,6 +835,30 @@ function GalaxyStageInner({
                   {
                     width: 2,
                     color: 0xfbbf24,
+                    alpha: 0.95,
+                    dash: 12,
+                    gap: 8,
+                  },
+                );
+              }}
+            />
+          )}
+        {dragColonyShipId !== null &&
+          dragCursorPos !== null &&
+          dragPreviewColony != null && (
+            <pixiGraphics
+              eventMode="none"
+              draw={(graphics) => {
+                graphics.clear();
+                drawDashedPolyline(
+                  graphics,
+                  dragPreviewColony.x,
+                  dragPreviewColony.y,
+                  dragCursorPos.x,
+                  dragCursorPos.y,
+                  {
+                    width: 2,
+                    color: 0x2dd4bf,
                     alpha: 0.95,
                     dash: 12,
                     gap: 8,
@@ -768,6 +1021,537 @@ function StarAlertGraphics({
   return <pixiGraphics eventMode="none" draw={draw} />;
 }
 
+// ---------------------------------------------------------------------------
+// Active star-system combat animation
+// ---------------------------------------------------------------------------
+
+const COMBAT_RING_R = 26;
+/** Horizontal distance from star center to each fleet centroid (ties formations to the star). */
+const COMBAT_FORMATION_X = 26;
+/** Vertical separation so opposing fleets stack on distinct sides instead of overlapping. */
+const COMBAT_FORMATION_Y_OFFSET = 11;
+const COMBAT_FORMATION_COL_GAP = 6;
+const COMBAT_FORMATION_ROW_GAP = 7;
+const COMBAT_FORMATION_MAX_PER_ROW = 8;
+const COMBAT_MAX_VISUAL_SHIPS_PER_SIDE = 24;
+/** Shrinks fighter silhouettes and strokes together (50% vs prior art). */
+const COMBAT_VISUAL_SCALE = 0.5;
+/** Length past target so bolts read as overshooting the opposing line. */
+const COMBAT_BEAM_OVERSHOOT = 14;
+/** Bolt sweeps from shooter to target in ~this many ms (brief visible pulse). */
+const COMBAT_BEAM_RIPPLE_DURATION_MS = 58;
+/** Idle time before another bolt from the same side. */
+const COMBAT_BEAM_RIPPLE_PERIOD_MS = 420;
+/** Trailing segment length as a fraction of total shot length. */
+const COMBAT_BEAM_RIPPLE_TRAIL_FRAC = 0.24;
+
+type CombatShipToken = {
+  scale: number;
+};
+
+function CombatAnimationGraphics({
+  combatMarkers,
+  nodes,
+  turnTimeline,
+}: {
+  combatMarkers: CombatMarkerModel[];
+  nodes: GalaxyNode[];
+  turnTimeline: TurnTimelineModel | null;
+}) {
+  const [frame, setFrame] = useState(0);
+  useTick(() => {
+    if (combatMarkers.length === 0) return;
+    setFrame((x) => x + 1);
+  });
+
+  const draw = useCallback(
+    (graphics: Graphics) => {
+      void frame;
+      graphics.clear();
+      const now = Date.now();
+
+      for (const marker of combatMarkers) {
+        const node = nodes.find((n) => n.id === marker.systemId);
+        if (node === undefined) continue;
+
+        drawCombatAtStar(graphics, node, marker, now, turnTimeline);
+      }
+    },
+    [combatMarkers, nodes, turnTimeline, frame],
+  );
+
+  if (combatMarkers.length === 0) return null;
+  return <pixiGraphics eventMode="none" draw={draw} />;
+}
+
+function drawCombatAtStar(
+  graphics: Graphics,
+  node: GalaxyNode,
+  marker: CombatMarkerModel,
+  now: number,
+  turnTimeline: TurnTimelineModel | null,
+) {
+  const seed = stableHash(marker.battleId);
+  const phaseOffset = (seed % 1000) / 1000;
+  const seconds = now * 0.001 + phaseOffset * 4;
+  const angle = seconds * 0.9;
+  const volley = (Math.sin(seconds * Math.PI * 2.4) + 1) / 2;
+  const counterVolley = (Math.sin(seconds * Math.PI * 2.4 + Math.PI) + 1) / 2;
+  const clash = Math.max(volley, counterVolley);
+  const ringPulse = (Math.sin(seconds * Math.PI * 2) + 1) / 2;
+
+  const sparkAxisX = Math.cos(angle);
+  const sparkAxisY = Math.sin(angle);
+  const px = -sparkAxisY;
+  const py = sparkAxisX;
+  const attackerColor = hexColorToNumber(marker.attackerColorHex, 0xef4444);
+  const defenderColor = hexColorToNumber(marker.defenderColorHex, 0x60a5fa);
+  const attackerShipsDisplayed = interpolatedCombatShipCount({
+    finalShips: marker.attackerShips,
+    beforeShips: marker.latestRound?.attackerShipsBefore,
+    afterShips: marker.latestRound?.attackerShipsAfter,
+    replayTurn: marker.latestRound?.turnNumber,
+    now,
+    turnTimeline,
+  });
+  const defenderShipsDisplayed = interpolatedCombatShipCount({
+    finalShips: marker.defenderShips,
+    beforeShips: marker.latestRound?.defenderShipsBefore,
+    afterShips: marker.latestRound?.defenderShipsAfter,
+    replayTurn: marker.latestRound?.turnNumber,
+    now,
+    turnTimeline,
+  });
+
+  graphics.circle(node.x, node.y, COMBAT_RING_R + ringPulse * 5).stroke({
+    width: 2.2 + ringPulse * 1.2,
+    color: 0xf97316,
+    alpha: 0.42 + ringPulse * 0.28,
+  });
+
+  for (let i = 0; i < 3; i += 1) {
+    const sparkPhase = (seconds * 2.1 + i / 3) % 1;
+    const sparkA = angle + Math.PI * 2 * (i / 3) + sparkPhase * 0.7;
+    const sparkR = 16 + sparkPhase * 18;
+    graphics
+      .circle(node.x + Math.cos(sparkA) * sparkR, node.y + Math.sin(sparkA) * sparkR, 1.8)
+      .fill({
+        color: i % 2 === 0 ? attackerColor : defenderColor,
+        alpha: 0.7 * (1 - sparkPhase),
+      });
+  }
+
+  const attackerLead = drawCombatShipFormation(
+    graphics,
+    node,
+    "attacker",
+    attackerColor,
+    attackerShipsDisplayed,
+    Math.max(marker.attackerShipsAtStart, marker.latestRound?.attackerShipsBefore ?? 0),
+    seconds,
+  );
+  const defenderLead = drawCombatShipFormation(
+    graphics,
+    node,
+    "defender",
+    defenderColor,
+    defenderShipsDisplayed,
+    Math.max(marker.defenderShipsAtStart, marker.latestRound?.defenderShipsBefore ?? 0),
+    seconds + 0.35,
+  );
+  drawCombatMotherships(
+    graphics,
+    node,
+    "attacker",
+    attackerColor,
+    marker.attackerMotherships,
+    seconds,
+  );
+  drawCombatMotherships(
+    graphics,
+    node,
+    "defender",
+    defenderColor,
+    marker.defenderMotherships,
+    seconds + 0.35,
+  );
+  drawMothershipDetonations(graphics, node, marker, seconds, now, turnTimeline);
+
+  const attackerPhaseMs = stableHash(`${marker.battleId}:atk`) % COMBAT_BEAM_RIPPLE_PERIOD_MS;
+  const defenderPhaseMs =
+    (stableHash(`${marker.battleId}:def`) %
+      COMBAT_BEAM_RIPPLE_PERIOD_MS) +
+    COMBAT_BEAM_RIPPLE_PERIOD_MS * 0.5;
+
+  drawRippleFleetBolt(
+    graphics,
+    attackerLead.x,
+    attackerLead.y,
+    defenderLead.x,
+    defenderLead.y,
+    attackerColor,
+    now,
+    attackerPhaseMs,
+  );
+  drawRippleFleetBolt(
+    graphics,
+    defenderLead.x,
+    defenderLead.y,
+    attackerLead.x,
+    attackerLead.y,
+    defenderColor,
+    now,
+    defenderPhaseMs,
+  );
+
+  if (clash > 0.82) {
+    const burst = (clash - 0.82) / 0.18;
+    graphics.circle(node.x, node.y, 5 + burst * 12).fill({
+      color: 0xfef3c7,
+      alpha: 0.34 * (1 - burst * 0.35),
+    });
+    graphics.circle(node.x, node.y, 2.5 + burst * 5).fill({
+      color: 0xffffff,
+      alpha: 0.65 * (1 - burst * 0.4),
+    });
+  }
+
+  if (marker.phase === "retreating") {
+    drawDashedPolyline(
+      graphics,
+      attackerLead.x,
+      attackerLead.y,
+      attackerLead.x - 22,
+      attackerLead.y,
+      {
+        width: 1.4,
+        color: attackerColor,
+        alpha: 0.55,
+        dash: 5,
+        gap: 5,
+      },
+    );
+  }
+
+  // Small crossfire ticks make active combat readable even while zoomed out.
+  graphics
+    .moveTo(node.x - px * 11, node.y - py * 11)
+    .lineTo(node.x + px * 11, node.y + py * 11)
+    .stroke({ width: 1.2, color: 0xffffff, alpha: 0.18 + ringPulse * 0.16 });
+}
+
+function drawCombatMotherships(
+  graphics: Graphics,
+  node: GalaxyNode,
+  side: "attacker" | "defender",
+  color: number,
+  count: number,
+  seconds: number,
+) {
+  const visibleCount = Math.min(3, finiteVisualShipCount(count));
+  if (visibleCount <= 0) return;
+  const sideSign = side === "attacker" ? -1 : 1;
+  const dirX = side === "attacker" ? 1 : -1;
+  const blockY =
+    side === "attacker" ? node.y - COMBAT_FORMATION_Y_OFFSET : node.y + COMBAT_FORMATION_Y_OFFSET;
+  const fighterWall =
+    COMBAT_FORMATION_X + COMBAT_FORMATION_COL_GAP * (COMBAT_FORMATION_MAX_PER_ROW - 1);
+  const mothershipPastWall = fighterWall + 12;
+  for (let i = 0; i < visibleCount; i += 1) {
+    const x =
+      side === "attacker"
+        ? node.x - mothershipPastWall - i * 8
+        : node.x + mothershipPastWall + i * 8;
+    const y =
+      blockY + (-sideSign) * i * 4 + Math.sin(seconds * 4 + i) * 0.85 * COMBAT_VISUAL_SCALE;
+    drawColonyTransportSilhouette(graphics, x, y, dirX, 0, color, {
+      selected: false,
+      alpha: 0.95,
+      strokeAlpha: 0.9,
+      scale: 1.1 * COMBAT_VISUAL_SCALE,
+    });
+    const ringR = 15 * COMBAT_VISUAL_SCALE;
+    graphics.circle(x, y, ringR).stroke({
+      width: 1.4 * COMBAT_VISUAL_SCALE,
+      color: 0xfef3c7,
+      alpha: 0.42 + Math.sin(seconds * 5 + i) * 0.16,
+    });
+  }
+}
+function drawMothershipDetonations(
+  graphics: Graphics,
+  node: GalaxyNode,
+  marker: CombatMarkerModel,
+  seconds: number,
+  now: number,
+  turnTimeline: TurnTimelineModel | null,
+) {
+  const replayTurn = marker.latestRound?.turnNumber;
+  if (
+    replayTurn === undefined ||
+    turnTimeline === null ||
+    turnTimeline.turnStartedAt === null ||
+    (replayTurn !== turnTimeline.currentTurn && replayTurn !== turnTimeline.currentTurn - 1)
+  ) {
+    return;
+  }
+
+  const durationMs = Math.max(1, turnTimeline.turnDurationMs);
+  const progress = Math.max(0, Math.min(1, (now - turnTimeline.turnStartedAt) / durationMs));
+  const destroyed = marker.latestRound?.mothershipEvents.filter((event) => event.destroyed) ?? [];
+  const fighterWall =
+    COMBAT_FORMATION_X + COMBAT_FORMATION_COL_GAP * (COMBAT_FORMATION_MAX_PER_ROW - 1);
+  const mothershipPastWall = fighterWall + 12;
+  destroyed.forEach((event, index) => {
+    const sideSign = event.side === "attacker" ? -1 : 1;
+    const blockY =
+      event.side === "attacker"
+        ? node.y - COMBAT_FORMATION_Y_OFFSET
+        : node.y + COMBAT_FORMATION_Y_OFFSET;
+    const x =
+      event.side === "attacker"
+        ? node.x - mothershipPastWall - index * 8
+        : node.x + mothershipPastWall + index * 8;
+    const y = blockY + (-sideSign) * index * 4;
+    const pulse = (Math.sin(seconds * 9 + index) + 1) / 2;
+    const alpha = Math.max(0, 1 - progress * 0.75);
+    const radius = 11 + progress * 30 + pulse * 4;
+    graphics.circle(x, y, radius).fill({
+      color: 0xf97316,
+      alpha: 0.24 * alpha,
+    });
+    graphics.circle(x, y, radius * 0.55).fill({
+      color: 0xfef3c7,
+      alpha: 0.34 * alpha,
+    });
+    graphics.circle(x, y, 4 + pulse * 5).fill({
+      color: 0xffffff,
+      alpha: 0.72 * alpha,
+    });
+    for (let i = 0; i < 7; i += 1) {
+      const a = (Math.PI * 2 * i) / 7 + seconds * 0.6;
+      const shardR = 8 + progress * 24 + i;
+      graphics
+        .moveTo(x + Math.cos(a) * 5, y + Math.sin(a) * 5)
+        .lineTo(x + Math.cos(a) * shardR, y + Math.sin(a) * shardR)
+        .stroke({ width: 1.4, color: 0xfde68a, alpha: 0.55 * alpha });
+    }
+  });
+}
+
+function interpolatedCombatShipCount({
+  finalShips,
+  beforeShips,
+  afterShips,
+  replayTurn,
+  now,
+  turnTimeline,
+}: {
+  finalShips: number;
+  beforeShips: number | undefined;
+  afterShips: number | undefined;
+  replayTurn: number | undefined;
+  now: number;
+  turnTimeline: TurnTimelineModel | null;
+}): number {
+  const safeFinalShips = finiteVisualShipCount(finalShips);
+  if (
+    beforeShips === undefined ||
+    afterShips === undefined ||
+    replayTurn === undefined ||
+    turnTimeline === null ||
+    turnTimeline.turnStartedAt === null ||
+    replayTurn !== turnTimeline.currentTurn &&
+    replayTurn !== turnTimeline.currentTurn - 1
+  ) {
+    return safeFinalShips;
+  }
+
+  const durationMs = Math.max(1, turnTimeline.turnDurationMs);
+  const progress = Math.max(0, Math.min(1, (now - turnTimeline.turnStartedAt) / durationMs));
+  const displayed = beforeShips + (afterShips - beforeShips) * progress;
+  return finiteVisualShipCount(displayed, safeFinalShips);
+}
+
+function drawCombatShipFormation(
+  graphics: Graphics,
+  node: GalaxyNode,
+  side: "attacker" | "defender",
+  color: number,
+  shipCount: number,
+  startingShipCount: number,
+  seconds: number,
+): { x: number; y: number } {
+  const tokens = buildCombatShipTokens(shipCount, startingShipCount);
+  const sideSign = side === "attacker" ? -1 : 1;
+  const dirX = side === "attacker" ? 1 : -1;
+  const leadX = node.x + sideSign * COMBAT_FORMATION_X;
+  const leadY =
+    side === "attacker" ? node.y - COMBAT_FORMATION_Y_OFFSET : node.y + COMBAT_FORMATION_Y_OFFSET;
+  if (tokens.length === 0) {
+    return { x: leadX, y: leadY };
+  }
+
+  const rowCount = Math.ceil(tokens.length / COMBAT_FORMATION_MAX_PER_ROW);
+  tokens.forEach((token, index) => {
+    const row = Math.floor(index / COMBAT_FORMATION_MAX_PER_ROW);
+    const col = index % COMBAT_FORMATION_MAX_PER_ROW;
+    const rowStart = row * COMBAT_FORMATION_MAX_PER_ROW;
+    const rowSize = Math.min(
+      COMBAT_FORMATION_MAX_PER_ROW,
+      tokens.length - rowStart,
+    );
+    const x =
+      leadX +
+      sideSign * col * COMBAT_FORMATION_COL_GAP +
+      Math.sin(seconds * 6 + index * 0.7) * 0.5;
+    const y =
+      leadY +
+      (row - (rowCount - 1) / 2) * COMBAT_FORMATION_ROW_GAP +
+      (col - (rowSize - 1) / 2) * 0.42 +
+      Math.cos(seconds * 5 + index * 0.5) * 0.45;
+    drawCombatShip(graphics, x, y, dirX, 0, color, token.scale);
+  });
+
+  return { x: leadX, y: leadY };
+}
+
+function buildCombatShipTokens(shipCount: number, startingShipCount: number): CombatShipToken[] {
+  const current = finiteVisualShipCount(shipCount);
+  if (current <= 0) return [];
+
+  const starting = Math.max(current, finiteVisualShipCount(startingShipCount, current));
+  const initialVisualShips =
+    starting <= COMBAT_MAX_VISUAL_SHIPS_PER_SIDE
+      ? starting
+      : Math.min(COMBAT_MAX_VISUAL_SHIPS_PER_SIDE, Math.ceil(Math.sqrt(starting)));
+  const visualShips = Math.max(
+    1,
+    Math.min(
+      COMBAT_MAX_VISUAL_SHIPS_PER_SIDE,
+      Math.ceil((current / Math.max(1, starting)) * initialVisualShips),
+    ),
+  );
+  const shipsPerToken = current / visualShips;
+  const scale =
+    shipsPerToken >= 1000
+      ? 1.15
+      : shipsPerToken >= 100
+        ? 0.92
+        : shipsPerToken >= 10
+          ? 0.68
+          : 0.48;
+
+  return Array.from({ length: visualShips }, () => ({ scale }));
+}
+
+function finiteVisualShipCount(value: number, fallback = 0): number {
+  return Number.isFinite(value)
+    ? Math.max(0, Math.floor(value))
+    : Math.max(0, Math.floor(fallback));
+}
+
+function drawRippleFleetBolt(
+  graphics: Graphics,
+  xStart: number,
+  yStart: number,
+  xTarget: number,
+  yTarget: number,
+  color: number,
+  nowMs: number,
+  phaseShiftMs: number,
+) {
+  const dx = xTarget - xStart;
+  const dy = yTarget - yStart;
+  const lenBase = Math.hypot(dx, dy) || 1;
+  const ux = dx / lenBase;
+  const uy = dy / lenBase;
+  const fullLen = lenBase + COMBAT_BEAM_OVERSHOOT;
+
+  const shifted =
+    (((nowMs + phaseShiftMs) % COMBAT_BEAM_RIPPLE_PERIOD_MS) + COMBAT_BEAM_RIPPLE_PERIOD_MS) %
+    COMBAT_BEAM_RIPPLE_PERIOD_MS;
+  const uLinear = shifted / COMBAT_BEAM_RIPPLE_DURATION_MS;
+  if (uLinear >= 1) return;
+
+  const envelope = (1 - uLinear) ** 1.45;
+  const headDist = fullLen * uLinear;
+  const rippleLen = Math.max(2.5, fullLen * COMBAT_BEAM_RIPPLE_TRAIL_FRAC);
+  const tailDist = Math.max(0, headDist - rippleLen);
+
+  const xT = xStart + ux * tailDist;
+  const yT = yStart + uy * tailDist;
+  const xH = xStart + ux * headDist;
+  const yH = yStart + uy * headDist;
+
+  const haloA = envelope * 0.24;
+  const coreA = envelope * 0.98;
+  graphics.moveTo(xT, yT).lineTo(xH, yH).stroke({
+    width: 1.75,
+    color,
+    alpha: haloA,
+    cap: "round",
+  });
+  graphics.moveTo(xT, yT).lineTo(xH, yH).stroke({
+    width: 1,
+    color: 0xffffff,
+    alpha: coreA,
+    cap: "round",
+  });
+}
+
+function drawCombatShip(
+  graphics: Graphics,
+  x: number,
+  y: number,
+  dirx: number,
+  diry: number,
+  color: number,
+  scale = 1,
+) {
+  const s = scale * COMBAT_VISUAL_SCALE;
+  const len = Math.hypot(dirx, diry) || 1;
+  const ox = dirx / len;
+  const oy = diry / len;
+  const px = -oy;
+  const py = ox;
+  const nose = 8.5 * s;
+  const wing = 5.2 * s;
+  const tail = 4.2 * s;
+  const tipX = x + ox * nose;
+  const tipY = y + oy * nose;
+  const leftX = x + px * wing - ox * tail;
+  const leftY = y + py * wing - oy * tail;
+  const rightX = x - px * wing - ox * tail;
+  const rightY = y - py * wing - oy * tail;
+
+  graphics.poly([tipX, tipY, leftX, leftY, x - ox * 1.2 * s, y - oy * 1.2 * s, rightX, rightY]).fill({
+    color,
+    alpha: 0.92,
+  });
+  graphics
+    .poly([tipX, tipY, leftX, leftY, x - ox * 1.2 * s, y - oy * 1.2 * s, rightX, rightY])
+    .stroke({
+      width: Math.max(0.85, 1.2 * s),
+      color: 0xffffff,
+      alpha: 0.75,
+      join: "round",
+    });
+}
+
+function hexColorToNumber(hex: string, fallback: number): number {
+  const parsed = Number.parseInt(hex.replace("#", ""), 16);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function stableHash(value: string): number {
+  let hash = 0;
+  for (let i = 0; i < value.length; i += 1) {
+    hash = (hash * 31 + value.charCodeAt(i)) >>> 0;
+  }
+  return hash;
+}
+
 function EnRouteGhostGraphics({
   ghosts,
   nodes,
@@ -789,6 +1573,7 @@ function EnRouteGhostGraphics({
       const now = Date.now();
       const currentTurn = turnTimeline?.currentTurn ?? 0;
       const turnStartedAt = turnTimeline?.turnStartedAt ?? null;
+      const travelAnimMs = Math.max(1, turnTimeline?.turnDurationMs ?? TRAVEL_ANIM_MS);
 
       for (const ghost of ghosts) {
         const from = nodes.find((n) => n.id === ghost.originSystemId);
@@ -802,7 +1587,7 @@ function EnRouteGhostGraphics({
           dispatchedTurn: ghost.dispatchedTurn,
           travelTurnsTotal: t,
           turnStartedAt,
-          travelAnimMs: TRAVEL_ANIM_MS,
+          travelAnimMs,
         });
 
         const gx = from.x + (to.x - from.x) * fraction;
@@ -810,15 +1595,19 @@ function EnRouteGhostGraphics({
         const ox = to.x - from.x;
         const oy = to.y - from.y;
         const len = Math.hypot(ox, oy) || 1;
-        drawFleetShipGhost(
-          graphics,
-          gx,
-          gy,
-          ox / len,
-          oy / len,
-          ghost.colorHex,
-          ghost.strength,
-        );
+        if (ghost.variant === "colony") {
+          drawColonyShipGhost(graphics, gx, gy, ox / len, oy / len, ghost.colorHex);
+        } else {
+          drawFleetShipGhost(
+            graphics,
+            gx,
+            gy,
+            ox / len,
+            oy / len,
+            ghost.colorHex,
+            ghost.strength,
+          );
+        }
       }
     },
     [ghosts, nodes, turnTimeline, frame],
@@ -852,6 +1641,7 @@ function TraderShipMarker({
       const now = Date.now();
       const currentTurn = turnTimeline?.currentTurn ?? 0;
       const turnStartedAt = turnTimeline?.turnStartedAt ?? null;
+      const travelAnimMs = Math.max(1, turnTimeline?.turnDurationMs ?? TRAVEL_ANIM_MS);
 
       const from = nodes.find((n) => n.id === trader.originSystemId);
       const to = nodes.find((n) => n.id === trader.destSystemId);
@@ -864,7 +1654,7 @@ function TraderShipMarker({
         dispatchedTurn: trader.dispatchedTurn,
         travelTurnsTotal: t,
         turnStartedAt,
-        travelAnimMs: TRAVEL_ANIM_MS,
+        travelAnimMs,
       });
 
       const gx = from.x + (to.x - from.x) * fraction;
@@ -978,6 +1768,75 @@ function drawStar(graphics: Graphics, node: GalaxyNode) {
   graphics.hitArea = new Circle(node.x, node.y, STAR_HIT_RADIUS);
 }
 
+function SelectedStarHighlightGraphics({ node }: { node: GalaxyNode | undefined }) {
+  const [frame, setFrame] = useState(0);
+  useTick(() => {
+    setFrame((x) => x + 1);
+  });
+
+  const draw = useCallback(
+    (graphics: Graphics) => {
+      void frame;
+      graphics.clear();
+      if (node === undefined) return;
+
+      const fillColor = Number.parseInt(node.ownerColor.replace("#", ""), 16);
+      const pulse = (Math.sin(Date.now() * 0.0022) + 1) / 2;
+      const glowRadius = 44 + pulse * 12;
+      const coreRadius = 15 + pulse * 2.5;
+
+      graphics.circle(node.x, node.y, glowRadius).fill({
+        color: fillColor,
+        alpha: 0.12 + pulse * 0.08,
+      });
+      graphics.circle(node.x, node.y, glowRadius * 0.68).fill({
+        color: fillColor,
+        alpha: 0.18 + pulse * 0.08,
+      });
+      graphics.circle(node.x, node.y, coreRadius).fill({
+        color: fillColor,
+        alpha: 0.98,
+      });
+      graphics.circle(node.x, node.y, 25 + pulse * 4).stroke({
+        width: 3,
+        color: 0xffffff,
+        alpha: 0.65 + pulse * 0.25,
+      });
+    },
+    [frame, node],
+  );
+
+  if (node === undefined) return null;
+  return <pixiGraphics eventMode="none" draw={draw} />;
+}
+
+/** Colony transport: sleek “sleeper ship” silhouette (non-combat). */
+function drawColonyShip(
+  graphics: Graphics,
+  ship: ColonyShipMarkerModel,
+  homeNode: GalaxyNode | undefined,
+  selected: boolean,
+) {
+  graphics.clear();
+  const fx = ship.x;
+  const fy = ship.y;
+  const sx = homeNode?.x ?? fx;
+  const sy = homeNode?.y ?? fy;
+  const vx = fx - sx;
+  const vy = fy - sy;
+  const len = Math.hypot(vx, vy) || 1;
+  const ox = vx / len;
+  const oy = vy / len;
+  const fillColor = Number.parseInt(ship.colorHex.replace("#", ""), 16);
+  drawColonyTransportSilhouette(graphics, fx, fy, ox, oy, fillColor, {
+    selected,
+    alpha: 0.94,
+    strokeAlpha: 1,
+    scale: 1,
+  });
+  graphics.hitArea = new Circle(fx, fy, 20);
+}
+
 function drawFleetShip(
   graphics: Graphics,
   fleet: FleetMarkerModel,
@@ -1044,6 +1903,77 @@ function drawTraderShip(
   graphics
     .poly([xBow, yBow, xPort, yPort, xStern, yStern, xStar, yStar])
     .stroke({ width: selected ? 2.5 : 1.5, color: selected ? 0xffffff : 0xfde68a, alpha: 1, join: "round" });
+}
+
+/** Translucent colony ship en route (distinct from military chevron). */
+function drawColonyShipGhost(
+  graphics: Graphics,
+  fx: number,
+  fy: number,
+  dirx: number,
+  diry: number,
+  colorHex: string,
+) {
+  const fillColor = Number.parseInt(colorHex.replace("#", ""), 16);
+  drawColonyTransportSilhouette(graphics, fx, fy, dirx, diry, fillColor, {
+    selected: false,
+    alpha: 0.4,
+    strokeAlpha: 0.45,
+    scale: 0.82,
+  });
+}
+
+function drawColonyTransportSilhouette(
+  graphics: Graphics,
+  fx: number,
+  fy: number,
+  ox: number,
+  oy: number,
+  fillColor: number,
+  sel: { selected: boolean; alpha: number; strokeAlpha: number; scale?: number },
+) {
+  const px = -oy;
+  const py = ox;
+  const sc = sel.scale ?? 1;
+  const L = 14 * sc;
+  const W = 5.4 * sc;
+  const cx = fx + ox * (3.2 * sc);
+  const cy = fy + oy * (3.2 * sc);
+  const hull = [
+    cx + ox * (L * 0.58),
+    cy + oy * (L * 0.58),
+    cx + px * W,
+    cy + py * W,
+    cx - ox * (L * 0.42),
+    cy - oy * (L * 0.42),
+    cx - px * W,
+    cy - py * W,
+  ];
+  graphics.poly(hull).fill({ color: fillColor, alpha: sel.alpha });
+  const domeX = cx + ox * (L * 0.12);
+  const domeY = cy + oy * (L * 0.12);
+  graphics.circle(domeX, domeY, 3.4 * sc).fill({ color: 0xcffafe, alpha: sel.alpha * 0.95 });
+  const engLx = cx - px * (W * 0.32) - ox * (L * 0.44);
+  const engLy = cy - py * (W * 0.32) - oy * (L * 0.44);
+  const engRx = cx + px * (W * 0.32) - ox * (L * 0.44);
+  const engRy = cy + py * (W * 0.32) - oy * (L * 0.44);
+  graphics.circle(engLx, engLy, 2.2 * sc).fill({ color: 0x38bdf8, alpha: sel.alpha * 0.75 });
+  graphics.circle(engRx, engRy, 2.2 * sc).fill({ color: 0x38bdf8, alpha: sel.alpha * 0.75 });
+  if (sel.selected) {
+    graphics.poly(hull).stroke({
+      width: 2.4,
+      color: 0xffffff,
+      alpha: sel.strokeAlpha,
+      join: "round",
+    });
+  } else {
+    graphics.poly(hull).stroke({
+      width: 1.2,
+      color: 0xe2e8f0,
+      alpha: sel.strokeAlpha * 0.55,
+      join: "round",
+    });
+  }
 }
 
 /** Translucent detachment traveling along the hyperspace chord (star center to star center). */

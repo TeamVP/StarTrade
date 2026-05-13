@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { useQuery } from "convex/react";
+import { useMutation, useQuery } from "convex/react";
 import { api } from "../../../../convex/_generated/api";
 import type { Id } from "../../../../convex/_generated/dataModel";
 import { Card } from "@/components/ui/card";
@@ -21,6 +21,7 @@ function fmtOptional(n: number | undefined): string {
 
 export function EconomyScreen() {
   const { games, activeGame, setSelectedGameId } = useActiveGame();
+  const setEmpireTaxRate = useMutation(api.eco.mutations.setEmpireTaxRate);
 
   const snapshot = useQuery(
     api.eco.adminQueries.adminEconomySnapshot,
@@ -46,6 +47,8 @@ export function EconomyScreen() {
   const [selectedSystemId, setSelectedSystemId] = useState<Id<"gal_systems"> | null>(
     null,
   );
+  /** Local slider value while dragging; cleared after commit so Convex snapshot is source of truth. */
+  const [taxSliderDraftPercent, setTaxSliderDraftPercent] = useState<number | null>(null);
 
   const focusEmpireId = useMemo((): Id<"emp_states"> | null => {
     if (empires.length === 0) return null;
@@ -62,6 +65,18 @@ export function EconomyScreen() {
     () => (focusEmpireId === null ? null : empires.find((e) => e._id === focusEmpireId) ?? null),
     [empires, focusEmpireId],
   );
+
+  const empireTaxPercentDisplay = useMemo(() => {
+    if (selectedEmpire === null) return 5;
+    return Math.round((selectedEmpire.empireTaxRate ?? 0.05) * 100);
+  }, [selectedEmpire]);
+
+  const taxSliderValue =
+    taxSliderDraftPercent !== null ? taxSliderDraftPercent : empireTaxPercentDisplay;
+
+  const canEditEmpireTax =
+    snapshot?.kind === "ok" &&
+    (snapshot.game.status === "running" || snapshot.game.status === "paused");
 
   const effectiveSelectedSystemId = useMemo((): Id<"gal_systems"> | null => {
     if (selectedSystemId === null || focusEmpireId === null) return null;
@@ -125,13 +140,14 @@ export function EconomyScreen() {
           <select
             className="rounded border border-st-border bg-st-bg px-3 py-2 text-sm text-st-fg"
             value={activeGame?._id ?? ""}
-            onChange={(e) =>
+            onChange={(e) => {
+              setTaxSliderDraftPercent(null);
               setSelectedGameId(
                 e.target.value === ""
                   ? null
                   : (e.target.value as Id<"sim_games">),
-              )
-            }
+              );
+            }}
             disabled={games.length === 0}
           >
             {games.length === 0 ? (
@@ -195,13 +211,14 @@ export function EconomyScreen() {
             <select
               className="mt-2 w-full max-w-md rounded border border-st-border bg-st-bg px-3 py-2 text-sm text-st-fg"
               value={focusEmpireId ?? ""}
-              onChange={(e) =>
+              onChange={(e) => {
+                setTaxSliderDraftPercent(null);
                 setSelectedEmpireId(
                   e.target.value === ""
                     ? null
                     : (e.target.value as Id<"emp_states">),
-                )
-              }
+                );
+              }}
             >
               {empires.map((e) => (
                 <option key={e._id} value={e._id}>
@@ -212,30 +229,84 @@ export function EconomyScreen() {
             </select>
 
             {selectedEmpire !== null ? (
-              <dl className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                <div className="rounded border border-st-border bg-st-bg/50 px-3 py-2">
-                  <dt className="text-xs text-st-muted">Treasury</dt>
-                  <dd className="font-mono text-lg text-st-fg">{fmt(selectedEmpire.treasury)}</dd>
+              <>
+                <dl className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                  <div className="rounded border border-st-border bg-st-bg/50 px-3 py-2">
+                    <dt className="text-xs text-st-muted">Treasury</dt>
+                    <dd className="font-mono text-lg text-st-fg">{fmt(selectedEmpire.treasury)}</dd>
+                  </div>
+                  <div className="rounded border border-st-border bg-st-bg/50 px-3 py-2">
+                    <dt className="text-xs text-st-muted">Population (cached, people)</dt>
+                    <dd className="font-mono text-lg text-st-fg">
+                      {formatPopulationPeople(selectedEmpire.population)}
+                    </dd>
+                  </div>
+                  <div className="rounded border border-st-border bg-st-bg/50 px-3 py-2">
+                    <dt className="text-xs text-st-muted">Research pool</dt>
+                    <dd className="font-mono text-lg text-st-fg">
+                      {fmtOptional(selectedEmpire.researchPool)}
+                    </dd>
+                  </div>
+                  <div className="rounded border border-st-border bg-st-bg/50 px-3 py-2">
+                    <dt className="text-xs text-st-muted">Insolvency streak</dt>
+                    <dd className="font-mono text-lg text-st-fg">
+                      {selectedEmpire.insolvencyTurns ?? 0} turns
+                    </dd>
+                  </div>
+                </dl>
+                <div className="mt-4 rounded border border-st-border bg-st-bg/50 px-3 py-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <label
+                      htmlFor="empire-tax-slider"
+                      className="text-xs font-semibold uppercase tracking-wide text-st-muted"
+                    >
+                      Empire-wide tax
+                    </label>
+                    <span className="font-mono text-sm text-st-fg">{taxSliderValue}%</span>
+                  </div>
+                  <input
+                    id="empire-tax-slider"
+                    type="range"
+                    min={0}
+                    max={30}
+                    step={1}
+                    className="mt-2 w-full max-w-md accent-st-fg disabled:opacity-50"
+                    value={taxSliderValue}
+                    disabled={
+                      selectedEmpire.isCollapsed ||
+                      !canEditEmpireTax ||
+                      activeGame === null
+                    }
+                    onChange={(e) =>
+                      setTaxSliderDraftPercent(Number(e.target.value))
+                    }
+                    onPointerUp={() => {
+                      if (
+                        activeGame === null ||
+                        selectedEmpire.isCollapsed ||
+                        !canEditEmpireTax
+                      ) {
+                        return;
+                      }
+                      void setEmpireTaxRate({
+                        gameId: activeGame._id,
+                        empireId: selectedEmpire._id,
+                        taxPercent: taxSliderValue,
+                      }).then(() => setTaxSliderDraftPercent(null));
+                    }}
+                  />
+                  <p className="mt-2 max-w-xl text-[11px] leading-snug text-st-muted">
+                    Applies to all stars this empire controls on the next processed turn: higher tax
+                    increases population-based treasury income and reduces local food, ships, and
+                    research output. Default is 5%.
+                  </p>
+                  {!canEditEmpireTax ? (
+                    <p className="mt-1 text-[11px] text-amber-500/90">
+                      Editing tax requires the game to be running or paused.
+                    </p>
+                  ) : null}
                 </div>
-                <div className="rounded border border-st-border bg-st-bg/50 px-3 py-2">
-                  <dt className="text-xs text-st-muted">Population (cached, people)</dt>
-                  <dd className="font-mono text-lg text-st-fg">
-                    {formatPopulationPeople(selectedEmpire.population)}
-                  </dd>
-                </div>
-                <div className="rounded border border-st-border bg-st-bg/50 px-3 py-2">
-                  <dt className="text-xs text-st-muted">Research pool</dt>
-                  <dd className="font-mono text-lg text-st-fg">
-                    {fmtOptional(selectedEmpire.researchPool)}
-                  </dd>
-                </div>
-                <div className="rounded border border-st-border bg-st-bg/50 px-3 py-2">
-                  <dt className="text-xs text-st-muted">Insolvency streak</dt>
-                  <dd className="font-mono text-lg text-st-fg">
-                    {selectedEmpire.insolvencyTurns ?? 0} turns
-                  </dd>
-                </div>
-              </dl>
+              </>
             ) : null}
 
             {selectedEmpire !== null ? (
@@ -498,8 +569,15 @@ export function EconomyScreen() {
                     <div>
                       <dt className="text-xs text-st-muted">Holding (tax / production / unrest)</dt>
                       <dd className="mt-1 space-y-1 font-mono text-xs">
+                        <p className="text-[10px] leading-snug text-st-muted">
+                          Live tax is empire-wide (see slider above).{" "}
+                          <span className="font-mono text-st-fg">
+                            Policy {Math.round((selectedEmpire?.empireTaxRate ?? 0.05) * 100)}%
+                          </span>
+                          ; holding taxRate below is legacy and not used in the sim.
+                        </p>
                         <div className="flex justify-between">
-                          <span className="text-st-muted">Tax rate</span>
+                          <span className="text-st-muted">Holding taxRate (legacy)</span>
                           <span className="text-st-fg">{selectedSystem.holding.taxRate}</span>
                         </div>
                         <div className="flex justify-between">

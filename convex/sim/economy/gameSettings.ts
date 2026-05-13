@@ -6,8 +6,9 @@
 import type { Id } from "../../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../../_generated/server";
 import {
+  BG_TRADER_AUTOMATED_INITIAL_MAX_ACTIVE,
   BG_TRADER_DOCKING_COST,
-  BG_TRADER_MAX_ACTIVE,
+  BG_TRADER_HIRE_CHANCE_PCT,
   BG_TRADER_SHIP_HIRE_PER_TURN,
 } from "./constants";
 
@@ -28,10 +29,12 @@ export type GameSettings = {
   traderMinActive: number;
   traderMaxActive: number;
   traderShipHirePerTurn: number;
+  /** Percent chance (0-100) that an NPC hires a ship after seeing a viable job. */
+  traderHireChancePct: number;
   traderDockingCost: number;
-  /** Multiple of one-turn demand above which market is in oversupply (default 3.0). */
+  /** Multiple of one-turn demand above which market is in oversupply (default 20.0). */
   foodStockpileMaxPerPop: number;
-  /** Multiple of one-turn demand below which food stress pricing activates (default 0.5). */
+  /** Multiple of one-turn demand below which food stress pricing activates (default 1.5). */
   foodStockpileMinPerPop: number;
   /** Multiplier on price growth rate when below minimum stockpile (default 1.0). */
   foodStressFactor: number;
@@ -41,6 +44,8 @@ export type GameSettings = {
   foodBasePrice: number;
   /** Multiplier on the probability that collateral damage lands on food stockpiles (default 1.0). */
   combatFoodDamageMult: number;
+  /** When true, min/max NPC trader limits are tuned by the sim from delivery economics. */
+  traderLimitsAutomated: boolean;
 };
 
 export const DEFAULT_GAME_SETTINGS: GameSettings = {
@@ -56,15 +61,17 @@ export const DEFAULT_GAME_SETTINGS: GameSettings = {
   combatDefendMult: 1,
   collateralDamageMult: 1,
   traderMinActive: 0,
-  traderMaxActive: BG_TRADER_MAX_ACTIVE,
+  traderMaxActive: BG_TRADER_AUTOMATED_INITIAL_MAX_ACTIVE,
   traderShipHirePerTurn: BG_TRADER_SHIP_HIRE_PER_TURN,
+  traderHireChancePct: BG_TRADER_HIRE_CHANCE_PCT,
   traderDockingCost: BG_TRADER_DOCKING_COST,
-  foodStockpileMaxPerPop: 3.0,
-  foodStockpileMinPerPop: 0.5,
+  foodStockpileMaxPerPop: 20.0,
+  foodStockpileMinPerPop: 1.5,
   foodStressFactor: 1.0,
   combatDefenderAdvantage: 2.0,
   foodBasePrice: 6,
   combatFoodDamageMult: 1.0,
+  traderLimitsAutomated: true,
 };
 
 export async function loadGameSettings(
@@ -95,6 +102,8 @@ export async function loadGameSettings(
     traderMaxActive: row.traderMaxActive ?? DEFAULT_GAME_SETTINGS.traderMaxActive,
     traderShipHirePerTurn:
       row.traderShipHirePerTurn ?? DEFAULT_GAME_SETTINGS.traderShipHirePerTurn,
+    traderHireChancePct:
+      row.traderHireChancePct ?? DEFAULT_GAME_SETTINGS.traderHireChancePct,
     traderDockingCost: row.traderDockingCost ?? DEFAULT_GAME_SETTINGS.traderDockingCost,
     foodStockpileMaxPerPop:
       row.foodStockpileMaxPerPop ?? DEFAULT_GAME_SETTINGS.foodStockpileMaxPerPop,
@@ -106,5 +115,7 @@ export async function loadGameSettings(
     foodBasePrice: row.foodBasePrice ?? DEFAULT_GAME_SETTINGS.foodBasePrice,
     combatFoodDamageMult:
       row.combatFoodDamageMult ?? DEFAULT_GAME_SETTINGS.combatFoodDamageMult,
+    traderLimitsAutomated:
+      row.traderLimitsAutomated ?? DEFAULT_GAME_SETTINGS.traderLimitsAutomated,
   };
 }

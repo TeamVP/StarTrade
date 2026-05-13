@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { startTransition, useState, useEffect } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "../../../../convex/_generated/api";
 import type { Id } from "../../../../convex/_generated/dataModel";
@@ -21,6 +21,7 @@ type Settings = {
   traderMinActive: number;
   traderMaxActive: number;
   traderShipHirePerTurn: number;
+  traderHireChancePct: number;
   traderDockingCost: number;
   foodStockpileMaxPerPop: number;
   foodStockpileMinPerPop: number;
@@ -28,6 +29,7 @@ type Settings = {
   combatDefenderAdvantage: number;
   foodBasePrice: number;
   combatFoodDamageMult: number;
+  traderLimitsAutomated: boolean;
 };
 
 const DEFAULTS: Settings = {
@@ -43,15 +45,17 @@ const DEFAULTS: Settings = {
   combatDefendMult: 1,
   collateralDamageMult: 1,
   traderMinActive: 0,
-  traderMaxActive: 16,
-  traderShipHirePerTurn: 500,
-  traderDockingCost: 200,
-  foodStockpileMaxPerPop: 3.0,
-  foodStockpileMinPerPop: 0.5,
+  traderMaxActive: 3,
+  traderShipHirePerTurn: 250,
+  traderHireChancePct: 20,
+  traderDockingCost: 100,
+  foodStockpileMaxPerPop: 20.0,
+  foodStockpileMinPerPop: 1.5,
   foodStressFactor: 1.0,
   combatDefenderAdvantage: 2.0,
   foodBasePrice: 6,
   combatFoodDamageMult: 1.0,
+  traderLimitsAutomated: true,
 };
 
 type SliderSpec = {
@@ -63,6 +67,8 @@ type SliderSpec = {
   description: string;
   baseline?: number;
   formatValue?: (v: number) => string;
+  /** When true, slider is read-only while NPC trader limits are automated. */
+  lockedByTraderAutomation?: boolean;
 };
 
 const TRADER_SLIDERS: SliderSpec[] = [
@@ -73,9 +79,10 @@ const TRADER_SLIDERS: SliderSpec[] = [
     max: 16,
     step: 1,
     baseline: 0,
+    lockedByTraderAutomation: true,
     formatValue: (v) => String(Math.round(v)),
     description:
-      "Minimum number of background NPC traders active at once — system spawns extra routes to reach this floor",
+      "Minimum number of background NPC traders active at once — system spawns extra routes to reach this floor. With automation on, this stays at the default while the sim adjusts the max cap.",
   },
   {
     key: "traderMaxActive",
@@ -83,10 +90,11 @@ const TRADER_SLIDERS: SliderSpec[] = [
     min: 0,
     max: 32,
     step: 1,
-    baseline: 16,
+    baseline: 3,
+    lockedByTraderAutomation: true,
     formatValue: (v) => String(Math.round(v)),
     description:
-      "Maximum background NPC traders allowed in transit simultaneously — hard cap on active voyages",
+      "Maximum background NPC traders allowed in transit simultaneously. With automation on, the sim reviews completed deliveries every 10 turns and moves this toward profitability (minimum 1).",
   },
   {
     key: "traderShipHirePerTurn",
@@ -94,7 +102,7 @@ const TRADER_SLIDERS: SliderSpec[] = [
     min: 0,
     max: 2000,
     step: 50,
-    baseline: 500,
+    baseline: 250,
     formatValue: (v) => `${Math.round(v)} cr`,
     description:
       "Credits charged per travel-turn for each NPC trader's hired ship — higher cost raises the price-spread needed to profit, reducing spawns",
@@ -105,7 +113,7 @@ const TRADER_SLIDERS: SliderSpec[] = [
     min: 0,
     max: 2000,
     step: 50,
-    baseline: 200,
+    baseline: 100,
     formatValue: (v) => `${Math.round(v)} cr`,
     description:
       "One-time fee paid when the trader's ship docks at the destination — adds to voyage cost threshold",
@@ -128,23 +136,23 @@ const ECONOMY_SLIDERS: SliderSpec[] = [
     key: "foodStockpileMaxPerPop",
     label: "Stockpile Max (× demand)",
     min: 1,
-    max: 10,
+    max: 50,
     step: 0.5,
-    baseline: 3.0,
+    baseline: 20.0,
     formatValue: (v) => `${v.toFixed(1)}×`,
     description:
-      "When stockFood exceeds this multiple of one-turn demand the market is in oversupply — food prices decrease ~10% per turn until balance is restored",
+      "When stockFood exceeds this multiple of the population-based one-turn demand, the market is in oversupply — food prices decrease ~10% per turn until balance is restored",
   },
   {
     key: "foodStockpileMinPerPop",
     label: "Stockpile Min (× demand)",
     min: 0,
-    max: 2,
+    max: 5,
     step: 0.1,
-    baseline: 0.5,
+    baseline: 1.5,
     formatValue: (v) => `${v.toFixed(1)}×`,
     description:
-      "When stockFood falls below this multiple of one-turn demand, food stress activates — prices rise sharply until the minimum is restored",
+      "When stockFood falls below this multiple of the population-based one-turn demand, food stress activates — prices rise sharply until the minimum is restored",
   },
   {
     key: "foodStressFactor",
@@ -190,10 +198,12 @@ function BalanceSlider({
   spec,
   value,
   onChange,
+  disabled,
 }: {
   spec: SliderSpec;
   value: number;
   onChange: (v: number) => void;
+  disabled?: boolean;
 }) {
   const baseline = spec.baseline ?? 1;
   const tol = baseline >= 10 ? 0.51 : 0.05;
@@ -222,7 +232,7 @@ function BalanceSlider({
           >
             {display}
           </span>
-          {!isDefault && (
+          {!isDefault && !disabled && (
             <button
               type="button"
               onClick={() => onChange(baseline)}
@@ -240,8 +250,11 @@ function BalanceSlider({
         max={spec.max}
         step={spec.step}
         value={value}
+        disabled={disabled}
         onChange={(e) => onChange(parseFloat(e.target.value))}
-        className="w-full h-1.5 appearance-none rounded-full bg-st-border cursor-pointer accent-st-accent"
+        className={`w-full h-1.5 appearance-none rounded-full bg-st-border accent-st-accent ${
+          disabled ? "opacity-50 cursor-not-allowed" : "cursor-pointer"
+        }`}
       />
       <p className="text-xs text-st-muted leading-relaxed">{spec.description}</p>
     </div>
@@ -275,7 +288,8 @@ function BalanceSection({
         <BalanceSlider
           key={spec.key}
           spec={spec}
-          value={settings[spec.key]}
+          value={settings[spec.key] as number}
+          disabled={Boolean(spec.lockedByTraderAutomation && settings.traderLimitsAutomated)}
           onChange={(v) => onChange(spec.key, v)}
         />
       ))}
@@ -297,12 +311,19 @@ export function BalancePanel({ gameId }: { gameId: Id<"sim_games"> }) {
 
   useEffect(() => {
     if (serverSettings !== undefined) {
-      setLocal(serverSettings);
+      startTransition(() => {
+        setLocal(serverSettings);
+      });
     }
   }, [serverSettings]);
 
   function handleChange(key: keyof Settings, value: number) {
     setLocal((prev) => ({ ...prev, [key]: value }));
+    setSavedAt(null);
+  }
+
+  function setTraderLimitsAutomated(automated: boolean) {
+    setLocal((prev) => ({ ...prev, traderLimitsAutomated: automated }));
     setSavedAt(null);
   }
 
@@ -327,7 +348,7 @@ export function BalancePanel({ gameId }: { gameId: Id<"sim_games"> }) {
     }
   }
 
-  const BALANCE_KEYS: Array<keyof Settings> = [
+  const NUMERIC_BALANCE_KEYS: Array<Exclude<keyof Settings, "traderLimitsAutomated">> = [
     "traderMinActive",
     "traderMaxActive",
     "traderShipHirePerTurn",
@@ -342,17 +363,20 @@ export function BalancePanel({ gameId }: { gameId: Id<"sim_games"> }) {
 
   const hasChanges =
     serverSettings !== undefined &&
-    BALANCE_KEYS.some((k) => {
+    (local.traderLimitsAutomated !== serverSettings.traderLimitsAutomated ||
+      NUMERIC_BALANCE_KEYS.some((k) => {
+        const def = DEFAULTS[k];
+        const tol = def >= 10 ? 0.51 : 0.005;
+        return Math.abs(local[k] - (serverSettings[k] ?? def)) > tol;
+      }));
+
+  const anyNonDefault =
+    local.traderLimitsAutomated !== DEFAULTS.traderLimitsAutomated ||
+    NUMERIC_BALANCE_KEYS.some((k) => {
       const def = DEFAULTS[k];
       const tol = def >= 10 ? 0.51 : 0.005;
-      return Math.abs(local[k] - (serverSettings[k] ?? def)) > tol;
+      return Math.abs(local[k] - def) > tol;
     });
-
-  const anyNonDefault = BALANCE_KEYS.some((k) => {
-    const def = DEFAULTS[k];
-    const tol = def >= 10 ? 0.51 : 0.005;
-    return Math.abs(local[k] - def) > tol;
-  });
 
   if (serverSettings === undefined) {
     return (
@@ -364,13 +388,66 @@ export function BalancePanel({ gameId }: { gameId: Id<"sim_games"> }) {
 
   return (
     <div className="space-y-6">
-      <BalanceSection
-        title="Traders"
-        icon="🚀"
-        sliders={TRADER_SLIDERS}
-        settings={local}
-        onChange={handleChange}
-      />
+      <Card className="space-y-5">
+        <div className="flex items-center gap-2 pb-2 border-b border-st-border">
+          <span className="text-lg">🚀</span>
+          <h3 className="text-sm font-semibold uppercase tracking-wider text-st-fg">
+            Traders
+          </h3>
+        </div>
+
+        <div className="space-y-2 rounded-md border border-st-border p-3">
+          <p className="text-xs text-st-muted leading-relaxed">
+            {local.traderLimitsAutomated ? (
+              <>
+                NPC trader limits are{" "}
+                <span className="text-st-fg font-medium">automated</span>. Every 10 turns the sim
+                reviews completed deliveries: if average profit is negative it lowers the max by 1
+                (never below 1); if total sale proceeds versus total voyage costs exceed 1.4×,
+                <span className="text-st-fg font-medium">and</span> at least half of NPC voyages in
+                that window were net-profitable, it raises the max by 1 (capped by the NPC roster).
+                Only voyages assigned to an NPC captain count (admin spawns are excluded). New games
+                start with a max of 3 active traders.
+              </>
+            ) : (
+              <>
+                Automation is <span className="text-st-fg font-medium">off</span>. Min and max NPC
+                traders follow the sliders below until you re-enable automation.
+              </>
+            )}
+          </p>
+          <div className="flex flex-wrap gap-2 pt-1">
+            {local.traderLimitsAutomated ? (
+              <Button
+                type="button"
+                variant="secondary"
+                className="text-xs"
+                onClick={() => setTraderLimitsAutomated(false)}
+              >
+                Override manually
+              </Button>
+            ) : (
+              <Button
+                type="button"
+                className="text-xs"
+                onClick={() => setTraderLimitsAutomated(true)}
+              >
+                Re-enable automation
+              </Button>
+            )}
+          </div>
+        </div>
+
+        {TRADER_SLIDERS.map((spec) => (
+          <BalanceSlider
+            key={spec.key}
+            spec={spec}
+            value={local[spec.key] as number}
+            disabled={Boolean(spec.lockedByTraderAutomation && local.traderLimitsAutomated)}
+            onChange={(v) => handleChange(spec.key, v)}
+          />
+        ))}
+      </Card>
       <BalanceSection
         title="Economy"
         icon="🌾"

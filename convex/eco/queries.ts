@@ -1,6 +1,7 @@
 import { query, type QueryCtx } from "../_generated/server";
 import { v } from "convex/values";
 import type { Doc, Id } from "../_generated/dataModel";
+import { loadGameSettings } from "../sim/economy/gameSettings";
 
 async function attachCaptainFields(
   ctx: QueryCtx,
@@ -94,6 +95,80 @@ export const listRecentDeliveries = query({
 });
 
 /**
+ * Empires and independent systems NPC background traders refuse to serve until the boycott lifts
+ * (set when a buyer could not pay full delivery proceeds).
+ */
+export const listActiveTraderEmbargoes = query({
+  args: { gameId: v.id("sim_games") },
+  handler: async (ctx, args) => {
+    const game = await ctx.db.get("sim_games", args.gameId);
+    if (game === null) {
+      return {
+        currentTurn: 0,
+        empires: [] as Array<{
+          empireId: Id<"emp_states">;
+          name: string;
+          boycottEndsTurn: number;
+          turnsRemaining: number;
+        }>,
+        unownedSystems: [] as Array<{
+          systemId: Id<"gal_systems">;
+          name: string;
+          boycottEndsTurn: number;
+          turnsRemaining: number;
+        }>,
+      };
+    }
+
+    const currentTurn = game.currentTurn;
+
+    const empires = await ctx.db
+      .query("emp_states")
+      .withIndex("by_gameId", (q) => q.eq("gameId", args.gameId))
+      .collect();
+
+    const embargoEmpires = empires
+      .filter(
+        (e) =>
+          e.traderBoycottUntilTurn !== undefined && currentTurn < e.traderBoycottUntilTurn,
+      )
+      .map((e) => ({
+        empireId: e._id,
+        name: e.name,
+        boycottEndsTurn: e.traderBoycottUntilTurn as number,
+        turnsRemaining: (e.traderBoycottUntilTurn as number) - currentTurn,
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+
+    const systems = await ctx.db
+      .query("gal_systems")
+      .withIndex("by_gameId", (q) => q.eq("gameId", args.gameId))
+      .take(512);
+
+    const embargoSystems = systems
+      .filter(
+        (s) =>
+          s.ownerEmpireId === null &&
+          s.traderBoycottUntilTurn !== undefined &&
+          currentTurn < s.traderBoycottUntilTurn,
+      )
+      .map((s) => ({
+        systemId: s._id,
+        name: s.name,
+        boycottEndsTurn: s.traderBoycottUntilTurn as number,
+        turnsRemaining: (s.traderBoycottUntilTurn as number) - currentTurn,
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+
+    return {
+      currentTurn,
+      empires: embargoEmpires,
+      unownedSystems: embargoSystems,
+    };
+  },
+});
+
+/**
  * Returns all systems with their current food prices for a game.
  * Only systems with a known foodPrice (owned, economy has run) are included.
  */
@@ -146,6 +221,18 @@ export const listNpcTraderIdentities = query({
       .query("sim_trader_identities")
       .withIndex("by_gameId", (q) => q.eq("gameId", args.gameId))
       .take(64);
+  },
+});
+
+/** NPC merchant pool tuning shown on the /traders admin screen. */
+export const getNpcTraderPoolSettings = query({
+  args: { gameId: v.id("sim_games") },
+  returns: v.object({
+    traderHireChancePct: v.number(),
+  }),
+  handler: async (ctx, args) => {
+    const settings = await loadGameSettings(ctx, args.gameId);
+    return { traderHireChancePct: settings.traderHireChancePct };
   },
 });
 
@@ -260,6 +347,11 @@ export const listTradersWithDetails = query({
       stockFood: s.stockFood,
     }));
 
-    return { traders: enriched, systems: systemList };
+    const settings = await loadGameSettings(ctx, args.gameId);
+    return {
+      traders: enriched,
+      systems: systemList,
+      traderDockingFee: settings.traderDockingCost,
+    };
   },
 });

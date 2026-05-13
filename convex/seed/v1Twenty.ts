@@ -1,3 +1,5 @@
+import { buildProximityLanes } from "./proximityLanes";
+
 /** Euclidean divisor tuned so legacy α–γ spacing (~289px) rounds to distance 7 at scale 41. */
 export const V1_TWENTY_LINK_DISTANCE_SCALE = 41;
 
@@ -210,39 +212,17 @@ export const V1_TWENTY_SYSTEMS: V1TwentySeedSystem[] = [
   },
 ];
 
-/** Undirected hyperslanes — one directed row each; adjacency resolves either way. */
-export const V1_TWENTY_LANE_KEYS: V1TwentyLaneKey[] = [
-  { fromKey: "luminara-deep", toKey: "frost-jacket" },
-  { fromKey: "luminara-deep", toKey: "cobalt-shallows" },
-  { fromKey: "luminara-deep", toKey: "helix-run" },
-  { fromKey: "frost-jacket", toKey: "amber-regency" },
-  { fromKey: "frost-jacket", toKey: "mirage-coil" },
-  { fromKey: "helix-run", toKey: "amber-regency" },
-  { fromKey: "cobalt-shallows", toKey: "whisper-barrier" },
-  { fromKey: "cobalt-shallows", toKey: "mirage-coil" },
-  { fromKey: "mirage-coil", toKey: "twin-pulse" },
-  { fromKey: "amber-regency", toKey: "void-narthex" },
-  { fromKey: "amber-regency", toKey: "twin-pulse" },
-  { fromKey: "whisper-barrier", toKey: "kepler-rift" },
-  { fromKey: "whisper-barrier", toKey: "veilcrest-station" },
-  { fromKey: "veilcrest-station", toKey: "sapphire-minor" },
-  { fromKey: "kepler-rift", toKey: "twin-pulse" },
-  { fromKey: "kepler-rift", toKey: "sapphire-minor" },
-  { fromKey: "kepler-rift", toKey: "echo-verge" },
-  { fromKey: "sapphire-minor", toKey: "echo-verge" },
-  { fromKey: "echo-verge", toKey: "rust-canal" },
-  { fromKey: "echo-verge", toKey: "solar-quarry" },
-  { fromKey: "rust-canal", toKey: "obsidian-gate" },
-  { fromKey: "rust-canal", toKey: "ashforge-terminal" },
-  { fromKey: "obsidian-gate", toKey: "solar-quarry" },
-  { fromKey: "obsidian-gate", toKey: "ashforge-terminal" },
-  { fromKey: "solar-quarry", toKey: "twin-pulse" },
-  { fromKey: "solar-quarry", toKey: "cascade-point" },
-  { fromKey: "twin-pulse", toKey: "void-narthex" },
-  { fromKey: "void-narthex", toKey: "cascade-point" },
-  { fromKey: "cascade-point", toKey: "iron-kettle" },
-  { fromKey: "cascade-point", toKey: "pilgrim-rest" },
-  { fromKey: "iron-kettle", toKey: "ashforge-terminal" },
-  { fromKey: "iron-kettle", toKey: "pilgrim-rest" },
-  { fromKey: "pilgrim-rest", toKey: "ashforge-terminal" },
-];
+/**
+ * Hyperlanes built with the proximity algorithm:
+ * MST guarantees full connectivity; k-nearest additions keep 90%+ of
+ * routes between geographically close stars.
+ *
+ * Parameters tuned for the 760×520 twenty-star viewport:
+ *   maxAddLaneDistance=200  keeps additions within ~30% of the map diagonal
+ *   kNearest=3              up to 3 local shortcuts per star beyond MST
+ *   maxDegree=5             no star becomes an overwhelming hub
+ */
+export const V1_TWENTY_LANE_KEYS: V1TwentyLaneKey[] = buildProximityLanes(
+  V1_TWENTY_SYSTEMS,
+  { kNearest: 3, maxAddLaneDistance: 200, maxDegree: 5 },
+);

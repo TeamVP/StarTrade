@@ -3,6 +3,7 @@ import type { MutationCtx } from "../../_generated/server";
 import {
   COLLAPSE_INSOLVENCY_TURNS,
   COMMODITY_PRICE_DEFAULTS,
+  DEFAULT_EMPIRE_TAX_RATE,
   EMPIRE_UPKEEP_PER_SIM_POP,
   FOOD_DEMAND_BUFFER,
   FOOD_EMPHASIS_REFERENCE_SHARE,
@@ -11,6 +12,7 @@ import {
   FOOD_PROD_PER_POP,
   HOMEWORLD_PROD_MULT,
   HOMEWORLD_TAX_MULT,
+  MAX_EMPIRE_TAX_RATE,
   MAX_WEAPONS_BONUS,
   POP_GROWTH_RATE,
   SHORTAGE_PROD_MULT,
@@ -28,6 +30,7 @@ import {
 } from "./population";
 import { type GameSettings, loadGameSettings } from "./gameSettings";
 import { computeSystemFoodPrice } from "./foodPricing";
+import { insertSimEvent } from "../eventLog";
 
 function clamp(n: number, lo: number, hi: number): number {
   return Math.min(hi, Math.max(lo, n));
@@ -252,10 +255,38 @@ export async function applyTurnEconomy(
 
   for (const system of systems) {
     const ownerId = system.ownerEmpireId;
-    if (ownerId === null) continue;
+    if (ownerId === null) {
+      // Unaligned worlds: maintain a small local treasury via a flat 5% “tax” baseline.
+      // Uses the same tax base as empires (pop-based) but accrues to `localTreasury`.
+      const populationPeople = clampPopulationPeople(system.population ?? 0);
+      if (populationPeople < POPULATION_MIN_INHABITED_PEOPLE) continue;
+      const taxOk =
+        system.lastContestedTurn !== params.turnNumber &&
+        (system.taxBlockedUntilTurn === undefined ||
+          params.turnNumber > system.taxBlockedUntilTurn);
+      if (!taxOk) continue;
+
+      const simPop = populationToSimUnits(populationPeople);
+      const taxBase = simPop * TAX_PER_POP;
+      // Using DEFAULT_EMPIRE_TAX_RATE (5%) as the unowned-world baseline (so the ratio is 1.0).
+      const income = taxBase * settings.taxMult;
+      if (income > 0) {
+        await ctx.db.patch("gal_systems", system._id, {
+          localTreasury: Math.max(0, (system.localTreasury ?? 0) + income),
+        });
+      }
+      continue;
+    }
 
     const empire = empireById.get(ownerId);
     if (empire === undefined || empire.isCollapsed) continue;
+
+    const r = clamp(
+      empire.empireTaxRate ?? DEFAULT_EMPIRE_TAX_RATE,
+      0,
+      MAX_EMPIRE_TAX_RATE,
+    );
+    const prodAfterTax = 1 - r;
 
     const holding = holdingBySystem.get(system._id);
     const productionModifier = holding?.productionModifier ?? 1;
@@ -296,7 +327,8 @@ export async function applyTurnEconomy(
         homeworldProdMult *
         productionModifier *
         shortageMult *
-        damageProdMult,
+        damageProdMult *
+        prodAfterTax,
     );
 
     // Food production scales with population: more people → more farmers.
@@ -320,6 +352,7 @@ export async function applyTurnEconomy(
         homeworldProdMult *
         productionModifier *
         damageProdMult *
+        prodAfterTax *
         settings.foodProdMult,
     );
     const subsistenceShare = Math.min(1, w.food / FOOD_EMPHASIS_REFERENCE_SHARE);
@@ -327,6 +360,8 @@ export async function applyTurnEconomy(
       foodDemand * FOOD_PROD_MIN_FLOOR_FRACTION * subsistenceShare,
     );
     const foodProduced = Math.max(rawFoodProduced, foodProdFloor);
+    const colonyFoodBonus = system.colonyFoodBonusPerTurn ?? 0;
+    const foodProducedTotal = foodProduced + colonyFoodBonus;
     // Ships/research are capital-intensive (infrastructure-limited, not headcount-limited).
     const shipsProduced = Math.max(
       0,
@@ -334,7 +369,7 @@ export async function applyTurnEconomy(
     );
     const researchProduced = Math.floor(effectiveProductivity * w.research);
 
-    const foodAvailable = stockFood + foodProduced;
+    const foodAvailable = stockFood + foodProducedTotal;
     const foodNet = foodAvailable - foodDemand;
 
     let newPop = populationPeople;
@@ -384,15 +419,58 @@ export async function applyTurnEconomy(
       continue;
     }
 
+    let garrisonShips = shipsProduced;
+    const colonyBuildPatch: Partial<Doc<"gal_systems">> = {};
+    if (
+      isOwnedHomeworld &&
+      system.colonyShipBuildEnabled === true &&
+      (system.colonyShipBuildCost ?? 0) > 0
+    ) {
+      const cost = system.colonyShipBuildCost as number;
+      const progress0 = system.colonyShipBuildProgress ?? 0;
+      if (progress0 < cost) {
+        const divert = Math.min(shipsProduced, cost - progress0);
+        const newProgress = progress0 + divert;
+        garrisonShips = shipsProduced - divert;
+        if (newProgress >= cost) {
+          await ctx.db.insert("col_colony_ships", {
+            gameId: params.gameId,
+            empireId: ownerId,
+            name: `${system.name} colony ship`,
+            originSystemId: system._id,
+            destinationSystemId: null,
+            etaTurn: null,
+            status: "idle",
+          });
+          colonyBuildPatch.colonyShipBuildEnabled = false;
+          colonyBuildPatch.colonyShipBuildProgress = 0;
+          colonyBuildPatch.colonyShipBuildCost = 0;
+          await insertSimEvent(ctx, {
+            gameId: params.gameId,
+            turnNumber: params.turnNumber,
+            eventType: "colony_ship_completed",
+            actorType: "system",
+            actorId: system._id,
+            targetType: "empire",
+            targetId: ownerId,
+            summary: `${system.name}: colony ship ready for launch`,
+            payload: { systemId: system._id, empireId: ownerId },
+          });
+        } else {
+          colonyBuildPatch.colonyShipBuildProgress = newProgress;
+        }
+      }
+    }
+
     let newWeapons = stockWeapons;
-    if (shipsProduced > 0) {
-      const consumed = Math.ceil(shipsProduced * WEAPONS_CONSUMPTION_RATE);
+    if (garrisonShips > 0) {
+      const consumed = Math.ceil(garrisonShips * WEAPONS_CONSUMPTION_RATE);
       newWeapons = Math.max(0, stockWeapons - consumed);
       await addShipsToSystemGarrison(ctx, {
         gameId: params.gameId,
         system,
         empire,
-        shipsToAdd: shipsProduced,
+        shipsToAdd: garrisonShips,
         fleetIdsWithOrdersThisTurn: params.fleetIdsWithOrdersThisTurn,
       });
     }
@@ -403,9 +481,10 @@ export async function applyTurnEconomy(
       (researchByEmpire.get(ownerId) ?? 0) + researchProduced,
     );
 
+    const stockpileDemand = Math.max(1, populationToSimUnits(newPop) * FOOD_PER_POP);
     const foodPrice = computeSystemFoodPrice({
       stockFood: newFoodStock,
-      foodDemand,
+      foodDemand: stockpileDemand,
       foodNet,
       settings,
     });
@@ -416,6 +495,7 @@ export async function applyTurnEconomy(
       stockResearch: newResearchStock,
       population: newPop,
       foodPrice,
+      ...colonyBuildPatch,
     });
 
     empireOwnedPop.set(ownerId, (empireOwnedPop.get(ownerId) ?? 0) + newPop);
@@ -435,7 +515,13 @@ export async function applyTurnEconomy(
         newPop,
         system.recentDamagePopulation ?? 0,
       );
-      const income = taxBase * hwTax * stabMult * damageTax * settings.taxMult;
+      const income =
+        taxBase *
+        hwTax *
+        stabMult *
+        damageTax *
+        settings.taxMult *
+        (r / DEFAULT_EMPIRE_TAX_RATE);
       taxIncomeByEmpire.set(ownerId, (taxIncomeByEmpire.get(ownerId) ?? 0) + income);
     }
 
@@ -444,7 +530,7 @@ export async function applyTurnEconomy(
       systemId: system._id,
       turnNumber: params.turnNumber,
       commodity: "food",
-      produced: foodProduced,
+      produced: foodProducedTotal,
       consumed: foodDemand,
     });
     await ctx.db.insert("eco_system_outputs", {
@@ -453,7 +539,8 @@ export async function applyTurnEconomy(
       turnNumber: params.turnNumber,
       commodity: "ships",
       produced: shipsProduced,
-      consumed: shipsProduced > 0 ? Math.ceil(shipsProduced * WEAPONS_CONSUMPTION_RATE) : 0,
+      consumed:
+        garrisonShips > 0 ? Math.ceil(garrisonShips * WEAPONS_CONSUMPTION_RATE) : 0,
     });
     await ctx.db.insert("eco_system_outputs", {
       gameId: params.gameId,
@@ -466,7 +553,7 @@ export async function applyTurnEconomy(
 
     nOwnedSystems += 1;
     aggFoodPressure +=
-      (foodDemand + FOOD_DEMAND_BUFFER - newFoodStock) / Math.max(1, foodDemand);
+      (stockpileDemand + FOOD_DEMAND_BUFFER - newFoodStock) / stockpileDemand;
     aggWeaponsPressure +=
       (weaponsNeed * 2 - newWeapons) / Math.max(1, weaponsNeed);
     aggHeavyPressure += 1 - clamp(system.resourceRichness, 0, 1);

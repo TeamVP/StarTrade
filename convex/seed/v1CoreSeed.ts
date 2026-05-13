@@ -1,6 +1,7 @@
 import type { MutationCtx } from "../_generated/server";
 import type { Id } from "../_generated/dataModel";
 import { seedNpcTraderIdentitiesForGame } from "./npcTraderIdentitiesSeed";
+import { pickEmpireCatalogColorHex } from "./empireColorPrefLookup";
 
 function seedBaseProductivity(resourceRichness: number): number {
   return Math.max(1, Math.min(10, Math.round(3 + resourceRichness * 7)));
@@ -12,6 +13,7 @@ export async function seedLegacyV1Core(
   gameId: Id<"sim_games">,
   mapScale: number,
   mapKey: string,
+  empireColorPrefLookup: Record<string, string> = {},
 ): Promise<{ systems: number; empires: number; mapKey: string }> {
   const systemAlpha = await ctx.db.insert("gal_systems", {
     gameId,
@@ -73,7 +75,7 @@ export async function seedLegacyV1Core(
     gameId,
     empireKey: "aurora",
     name: "Aurora Combine",
-    colorHex: "#22d3ee",
+    colorHex: pickEmpireCatalogColorHex("aurora", "#22d3ee", empireColorPrefLookup),
     treasury: 1200,
     foodStockpile: 500,
     population: 50_000_000,
@@ -85,12 +87,13 @@ export async function seedLegacyV1Core(
     insolvencyTurns: 0,
     pauseBudgetSeconds: 20,
     lastPauseRefreshAt: pausedNow,
+    empireTaxRate: 0.05,
   });
   const ironEmpireId = await ctx.db.insert("emp_states", {
     gameId,
     empireKey: "iron",
     name: "Iron Dominion",
-    colorHex: "#f97316",
+    colorHex: pickEmpireCatalogColorHex("iron", "#FF0000", empireColorPrefLookup),
     treasury: 1200,
     foodStockpile: 500,
     population: 50_000_000,
@@ -102,6 +105,7 @@ export async function seedLegacyV1Core(
     insolvencyTurns: 0,
     pauseBudgetSeconds: 20,
     lastPauseRefreshAt: pausedNow,
+    empireTaxRate: 0.05,
   });
 
   await ctx.db.patch("gal_systems", systemAlpha, { ownerEmpireId: auroraEmpireId });

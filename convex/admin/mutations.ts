@@ -3,7 +3,6 @@ import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { internal } from "../_generated/api";
 import { assertGameAdmin } from "../sim/helpers";
-import { wipeAllDocumentsForGame } from "../sim/wipeGame";
 import {
   DEFAULT_GAME_SETTINGS,
   loadGameSettings,
@@ -18,8 +17,12 @@ export const reseedGame = mutation({
     ctx,
     args,
   ): Promise<{ systems: number; empires: number; mapKey: string }> => {
+    const userId = await getAuthUserId(ctx);
     const result: { systems: number; empires: number; mapKey: string } =
-      await ctx.runMutation(internal.admin.internal.seedGameData, args);
+      await ctx.runMutation(internal.admin.internal.seedGameData, {
+        ...args,
+        colorPrefsUserId: userId ?? undefined,
+      });
     return result;
   },
 });
@@ -40,6 +43,7 @@ const settingsValidator = v.object({
   traderMinActive: v.number(),
   traderMaxActive: v.number(),
   traderShipHirePerTurn: v.number(),
+  traderHireChancePct: v.number(),
   traderDockingCost: v.number(),
   foodStockpileMaxPerPop: v.number(),
   foodStockpileMinPerPop: v.number(),
@@ -47,6 +51,7 @@ const settingsValidator = v.object({
   combatDefenderAdvantage: v.number(),
   foodBasePrice: v.number(),
   combatFoodDamageMult: v.number(),
+  traderLimitsAutomated: v.boolean(),
 });
 
 /** Returns the current god-mode settings for a game (or defaults if none set). */
@@ -92,13 +97,15 @@ export const updateGameSettings = mutation({
       traderMinActive: clamp(Math.round(s.traderMinActive), 0, 32),
       traderMaxActive: clamp(Math.round(s.traderMaxActive), 0, 64),
       traderShipHirePerTurn: clamp(s.traderShipHirePerTurn, 0, 10_000),
+      traderHireChancePct: clamp(Math.round(s.traderHireChancePct), 0, 100),
       traderDockingCost: clamp(s.traderDockingCost, 0, 5_000),
-      foodStockpileMaxPerPop: clamp(s.foodStockpileMaxPerPop, 1, 20),
+      foodStockpileMaxPerPop: clamp(s.foodStockpileMaxPerPop, 1, 50),
       foodStockpileMinPerPop: clamp(s.foodStockpileMinPerPop, 0, 5),
       foodStressFactor: clamp(s.foodStressFactor, 0.1, 10),
       combatDefenderAdvantage: clamp(s.combatDefenderAdvantage, 0.5, 9),
       foodBasePrice: clamp(Math.round(s.foodBasePrice), 1, 50),
       combatFoodDamageMult: clamp(s.combatFoodDamageMult, 0, 5),
+      traderLimitsAutomated: s.traderLimitsAutomated,
     };
 
     const existing = await ctx.db
@@ -210,9 +217,48 @@ export const killGame = mutation({
     if ((await ctx.db.get("sim_games", args.gameId)) === null) {
       throw new Error("Game not found.");
     }
+    await ctx.db.patch(args.gameId, {
+      status: "finished",
+      endedAt: Date.now(),
+    });
 
-    await wipeAllDocumentsForGame(ctx, args.gameId);
-    await ctx.db.delete("sim_games", args.gameId);
-    return { deleted: true as const };
+    await ctx.scheduler.runAfter(0, internal.admin.internal.continueWipeGame, {
+      gameId: args.gameId,
+      phaseIndex: 0,
+    });
+
+    return { deleting: true as const };
+  },
+});
+
+export const forceRetryTurnResolution = mutation({
+  args: { gameId: v.id("sim_games") },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (userId === null) {
+      throw new Error("Authentication required.");
+    }
+    await assertGameAdmin(ctx, args.gameId, userId);
+
+    await ctx.runMutation(internal.sim.internal.prepareTurnResolutionRetry, {
+      gameId: args.gameId,
+    });
+
+    const begin: {
+      started: boolean;
+      turnNumber: number;
+      alreadyResolving: boolean;
+    } = await ctx.runMutation(internal.sim.internal.beginTurnResolution, {
+      gameId: args.gameId,
+    });
+
+    if (begin.started) {
+      await ctx.scheduler.runAfter(0, internal.sim.actions.resolveTurnJob, {
+        gameId: args.gameId,
+        turnNumber: begin.turnNumber,
+      });
+    }
+
+    return begin;
   },
 });

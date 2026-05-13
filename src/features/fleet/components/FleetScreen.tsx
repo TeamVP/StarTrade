@@ -13,11 +13,11 @@ export function FleetScreen() {
   const gameId = activeGame?._id;
   const fleetsQuery = useQuery(
     api.flt.queries.listFleetsForGame,
-    gameId ? { gameId, limit: 50 } : "skip",
+    gameId ? { gameId, limit: 200 } : "skip",
   );
   const systemsQuery = useQuery(
     api.gal.queries.listSystems,
-    gameId ? { gameId, limit: 50 } : "skip",
+    gameId ? { gameId, limit: 200 } : "skip",
   );
   const myRolesQuery = useQuery(
     api.usr.queries.listMyRoles,
@@ -144,7 +144,6 @@ export function FleetScreen() {
       await issueFleetOrder({
         gameId,
         fleetId,
-        turnNumber: activeGame.currentTurn,
         orderType: "move",
         targetSystemId: targetId,
         ...(partialShipCount !== undefined && partialShipCount < selected.strength

@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { startTransition, useState, useMemo, useEffect } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "../../../../convex/_generated/api";
 import type { Id } from "../../../../convex/_generated/dataModel";
@@ -53,18 +53,241 @@ type EnrichedTrader = {
   captainDisplayName?: string | null;
   captainAffiliation?: string | null;
   operatorKind?: "npc" | "player" | "unknown";
+  /** Net credits on delivery; absent on older rows. */
+  deliveryProfit?: number;
+  deliveryRevenue?: number;
+  deliveryCost?: number;
+  deliveryPurchaseCredits?: number;
+  deliveryShipHireTotal?: number;
+  deliveryDockingFee?: number;
+  deliveryClearingUnitPrice?: number;
+  deliveryNominalUnitPrice?: number;
+  deliveryInvoiceCredits?: number;
+  deliveryTreasuryShortfall?: number;
+  deliveryBuyerUnderpaid?: boolean;
 };
+
+/** Buy price per commodity unit at origin (shown in settlement modal). */
+function fmtBuyPricePerUnit(n: number): string {
+  return n.toFixed(2);
+}
+
+function DeliverySettlementModal({
+  trader,
+  dockingFallback,
+  onClose,
+}: {
+  trader: EnrichedTrader;
+  dockingFallback: number;
+  onClose: () => void;
+}) {
+  const purchase =
+    trader.deliveryPurchaseCredits ?? Math.round(trader.cargoUnits * trader.boughtAtPrice);
+  const shipHire = trader.deliveryShipHireTotal ?? trader.totalShipCost;
+  const docking = trader.deliveryDockingFee ?? dockingFallback;
+  const voyageOverhead = shipHire + docking;
+  const totalExpenses = purchase + voyageOverhead;
+  const revenue = trader.deliveryRevenue;
+  const invoice = trader.deliveryInvoiceCredits;
+  const shortfall = trader.deliveryTreasuryShortfall;
+  const profit = trader.deliveryProfit;
+  const effectiveUnit =
+    revenue !== undefined && trader.cargoUnits > 0 ? revenue / trader.cargoUnits : null;
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/65 backdrop-blur-[2px]"
+      role="presentation"
+      onClick={onClose}
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="settlement-title"
+        className="max-w-md w-full max-h-[min(90vh,520px)] overflow-y-auto rounded-xl border border-st-border bg-st-bg shadow-xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="sticky top-0 flex items-center justify-between gap-2 border-b border-st-border bg-st-bg/95 px-4 py-3">
+          <h2 id="settlement-title" className="text-sm font-semibold text-st-fg">
+            Settlement breakdown
+          </h2>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-md px-2 py-1 text-xs text-st-muted hover:bg-st-panel hover:text-st-fg"
+          >
+            Close
+          </button>
+        </div>
+        <div className="space-y-4 px-4 py-4 text-sm">
+          <p className="text-xs text-st-muted leading-relaxed">
+            {trader.originName} → {trader.destName} · {fmtUnits(trader.cargoUnits)} {trader.commodity}{" "}
+            · delivered turn {trader.etaTurn}
+          </p>
+
+          <div>
+            <h3 className="text-[10px] font-semibold uppercase tracking-wider text-st-muted mb-2">
+              Costs (trader pays)
+            </h3>
+            <table className="w-full text-xs">
+              <tbody className="divide-y divide-st-border/60">
+                <tr>
+                  <td className="py-1.5 text-st-muted">
+                    Purchase at origin ({fmtUnits(trader.cargoUnits)} {trader.commodity} ×{" "}
+                    {fmtBuyPricePerUnit(trader.boughtAtPrice)} cr)
+                  </td>
+                  <td className="py-1.5 text-right font-mono tabular-nums text-st-fg">
+                    {fmtCredits(purchase)}
+                  </td>
+                </tr>
+                <tr>
+                  <td className="py-1.5 text-st-muted">
+                    Ship hire ({fmtCredits(trader.shipHireCostPerTurn)}/turn × {trader.travelTurns})
+                  </td>
+                  <td className="py-1.5 text-right font-mono tabular-nums text-st-fg">
+                    {fmtCredits(shipHire)}
+                  </td>
+                </tr>
+                <tr>
+                  <td className="py-1.5 text-st-muted">Docking fee</td>
+                  <td className="py-1.5 text-right font-mono tabular-nums text-st-fg">
+                    {fmtCredits(docking)}
+                  </td>
+                </tr>
+                <tr className="font-medium">
+                  <td className="py-2 text-st-fg">Total expenses</td>
+                  <td className="py-2 text-right font-mono tabular-nums text-st-fg">
+                    {fmtCredits(totalExpenses)}
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div>
+            <h3 className="text-[10px] font-semibold uppercase tracking-wider text-st-muted mb-2">
+              Sale (buyer pays captain)
+            </h3>
+            {trader.commodity === "food" &&
+            trader.deliveryClearingUnitPrice !== undefined &&
+            trader.deliveryNominalUnitPrice !== undefined ? (
+              <p className="text-[11px] text-st-muted mb-2 leading-relaxed">
+                Food uses the destination&apos;s <span className="text-st-fg">market clearing</span> price after
+                your cargo is added. When several ships dock the same turn, payment is{" "}
+                <span className="text-st-fg">split fairly</span> from one treasury withdrawal.
+                Arrivals on different turns each see an updated price and treasury.
+              </p>
+            ) : null}
+            {revenue === undefined ? (
+              <p className="text-xs text-st-muted">Revenue not stored for this legacy delivery.</p>
+            ) : (
+              <table className="w-full text-xs">
+                <tbody className="divide-y divide-st-border/60">
+                  {trader.deliveryClearingUnitPrice !== undefined ? (
+                    <tr>
+                      <td className="py-1.5 text-st-muted">Clearing price / unit (at delivery)</td>
+                      <td className="py-1.5 text-right font-mono tabular-nums text-st-fg">
+                        {trader.deliveryClearingUnitPrice.toFixed(2)} cr
+                      </td>
+                    </tr>
+                  ) : null}
+                  {trader.deliveryNominalUnitPrice !== undefined ? (
+                    <tr>
+                      <td className="py-1.5 text-st-muted">Nominal invoice / unit (full subsidy + clearing)</td>
+                      <td className="py-1.5 text-right font-mono tabular-nums text-st-fg">
+                        {trader.deliveryNominalUnitPrice.toFixed(2)} cr
+                      </td>
+                    </tr>
+                  ) : null}
+                  {invoice !== undefined ? (
+                    <tr>
+                      <td className="py-1.5 text-st-muted">Nominal invoice (this cargo)</td>
+                      <td className="py-1.5 text-right font-mono tabular-nums text-st-fg">
+                        {fmtCredits(invoice)}
+                      </td>
+                    </tr>
+                  ) : null}
+                  <tr className="font-medium">
+                    <td className="py-1.5 text-st-fg">Credits actually received</td>
+                    <td className="py-1.5 text-right font-mono tabular-nums text-emerald-300">
+                      {fmtCredits(revenue)}
+                    </td>
+                  </tr>
+                  {effectiveUnit !== null ? (
+                    <tr>
+                      <td className="py-1.5 text-st-muted">Effective price received / unit</td>
+                      <td className="py-1.5 text-right font-mono tabular-nums text-st-fg">
+                        {effectiveUnit.toFixed(2)} cr
+                      </td>
+                    </tr>
+                  ) : null}
+                  {shortfall !== undefined && shortfall > 0 ? (
+                    <tr>
+                      <td className="py-1.5 text-amber-400">Treasury shortfall (unpaid invoice)</td>
+                      <td className="py-1.5 text-right font-mono tabular-nums text-amber-400">
+                        {fmtCredits(shortfall)}
+                      </td>
+                    </tr>
+                  ) : null}
+                </tbody>
+              </table>
+            )}
+            {trader.deliveryBuyerUnderpaid ? (
+              <p className="mt-2 text-[11px] text-amber-300/95 leading-relaxed">
+                The destination could not pay the full nominal invoice (empty treasury / import budget).
+                Traders are paid only what was actually debited — this can look like a huge loss versus
+                expected market price.
+              </p>
+            ) : null}
+          </div>
+
+          <div
+            className={`rounded-lg border px-3 py-2.5 ${
+              profit === undefined
+                ? "border-st-border bg-st-panel text-st-muted"
+                : profit >= 0
+                  ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-200"
+                  : "border-red-500/40 bg-red-500/10 text-red-200"
+            }`}
+          >
+            <p className="text-[10px] font-semibold uppercase tracking-wide text-st-muted mb-1">
+              Net P&amp;L
+            </p>
+            <p className="text-sm font-mono tabular-nums leading-relaxed">
+              {profit === undefined
+                ? "—"
+                : (() => {
+                    const rec = revenue ?? 0;
+                    const exp = totalExpenses;
+                    if (profit >= 0) {
+                      return `${fmtCredits(rec)} − ${fmtCredits(exp)} = ${fmtCredits(profit)} profit`;
+                    }
+                    return `${fmtCredits(rec)} − ${fmtCredits(exp)} = −${fmtCredits(-profit)} loss`;
+                  })()}
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function TraderCard({
   trader,
   currentTurn,
+  dockingFeeDefault,
 }: {
   trader: EnrichedTrader;
   currentTurn: number;
+  dockingFeeDefault: number;
 }) {
+  const [detailOpen, setDetailOpen] = useState(false);
   const turnsLeft = Math.max(0, trader.etaTurn - currentTurn);
-  const totalCost = trader.totalShipCost + 20; // 20 = BG_TRADER_DOCKING_COST
-  const revenue = trader.cargoUnits * trader.boughtAtPrice; // notional buy cost
+  const purchaseCredits =
+    trader.deliveryPurchaseCredits ?? Math.round(trader.cargoUnits * trader.boughtAtPrice);
+  const shipHire = trader.deliveryShipHireTotal ?? trader.totalShipCost;
+  const docking = trader.deliveryDockingFee ?? dockingFeeDefault;
+  const voyageOverhead = shipHire + docking;
   const progressPct =
     trader.travelTurns > 0
       ? Math.min(100, ((trader.travelTurns - turnsLeft) / trader.travelTurns) * 100)
@@ -124,21 +347,67 @@ function TraderCard({
         </div>
       )}
 
+      {trader.status === "delivered" ? (
+        <div className="space-y-2">
+        <div
+          className={`rounded-md border px-3 py-2 text-sm ${
+            trader.deliveryProfit === undefined
+              ? "border-st-border bg-st-panel text-st-muted"
+              : trader.deliveryProfit >= 0
+                ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-200"
+                : "border-red-500/40 bg-red-500/10 text-red-200"
+          }`}
+        >
+          {trader.deliveryProfit === undefined ? (
+            <span>Voyage result: not recorded (legacy delivery).</span>
+          ) : trader.deliveryProfit >= 0 ? (
+            <span>
+              <span className="font-semibold">Made money</span>
+              <span className="text-st-muted"> — net profit </span>
+              <span className="font-mono tabular-nums">{fmtCredits(trader.deliveryProfit)}</span>
+            </span>
+          ) : (
+            <span>
+              <span className="font-semibold">Lost money</span>
+              <span className="text-st-muted"> — net loss </span>
+              <span className="font-mono tabular-nums">{fmtCredits(-trader.deliveryProfit)}</span>
+            </span>
+          )}
+        </div>
+          <button
+            type="button"
+            onClick={() => setDetailOpen(true)}
+            className="text-xs text-sky-400 hover:text-sky-300 underline underline-offset-2"
+          >
+            Settlement details…
+          </button>
+        </div>
+      ) : null}
+
+      {detailOpen ? (
+        <DeliverySettlementModal
+          trader={trader}
+          dockingFallback={dockingFeeDefault}
+          onClose={() => setDetailOpen(false)}
+        />
+      ) : null}
+
       {/* Cost breakdown */}
       <div className="grid grid-cols-3 gap-2 text-xs">
         <div className="rounded bg-st-panel px-2 py-1.5 space-y-0.5">
-          <p className="text-st-muted uppercase tracking-wide text-[9px]">Cargo value</p>
-          <p className="font-semibold tabular-nums">{fmtCredits(revenue)}</p>
+          <p className="text-st-muted uppercase tracking-wide text-[9px]">Purchase</p>
+          <p className="font-semibold tabular-nums">{fmtCredits(purchaseCredits)}</p>
+          <p className="text-[9px] text-st-muted">origin buy</p>
         </div>
         <div className="rounded bg-st-panel px-2 py-1.5 space-y-0.5">
           <p className="text-st-muted uppercase tracking-wide text-[9px]">Ship hire</p>
-          <p className="font-semibold tabular-nums">{fmtCredits(trader.totalShipCost)}</p>
+          <p className="font-semibold tabular-nums">{fmtCredits(shipHire)}</p>
           <p className="text-[9px] text-st-muted">{fmtCredits(trader.shipHireCostPerTurn)}/turn × {trader.travelTurns}</p>
         </div>
         <div className="rounded bg-st-panel px-2 py-1.5 space-y-0.5">
-          <p className="text-st-muted uppercase tracking-wide text-[9px]">Total cost</p>
-          <p className="font-semibold tabular-nums">{fmtCredits(totalCost)}</p>
-          <p className="text-[9px] text-st-muted">+20 cr docking</p>
+          <p className="text-st-muted uppercase tracking-wide text-[9px]">Docking</p>
+          <p className="font-semibold tabular-nums">{fmtCredits(docking)}</p>
+          <p className="text-[9px] text-st-muted">voyage overhead {fmtCredits(voyageOverhead)}</p>
         </div>
       </div>
     </div>
@@ -191,8 +460,8 @@ function SpawnTraderForm({
     try {
       const result = await spawnTrader({
         gameId,
-        originSystemId: originId as Id<"gal_systems">,
-        destinationSystemId: destId as Id<"gal_systems">,
+        originSystemId: originId,
+        destinationSystemId: destId,
         commodity,
         cargoUnits,
       });
@@ -365,14 +634,32 @@ function SpawnTraderForm({
 
 // ─── Main screen ──────────────────────────────────────────────────────────────
 
-type TabKey = "active" | "delivered" | "spawn";
+type TabKey = "npcTraders" | "inTransit" | "delivered" | "embargoes" | "spawn";
 
 export function TraderScreen() {
   const { games, activeGame, setSelectedGameId } = useActiveGame();
-  const [tab, setTab] = useState<TabKey>("active");
+  const [tab, setTab] = useState<TabKey>("npcTraders");
+  const [npcFundBusyId, setNpcFundBusyId] = useState<Id<"sim_trader_identities"> | null>(null);
+  const [npcPoolError, setNpcPoolError] = useState<string | null>(null);
+  const [npcHireChancePct, setNpcHireChancePct] = useState(20);
+  const [npcHireChanceSaving, setNpcHireChanceSaving] = useState(false);
+
+  const addNpcTraderTreasuryFunds = useMutation(api.eco.mutations.addNpcTraderTreasuryFunds);
+  const updateNpcTraderHireChancePct = useMutation(
+    api.eco.mutations.updateNpcTraderHireChancePct,
+  );
 
   const gameId = activeGame?._id;
   const currentTurn = activeGame?.currentTurn ?? 0;
+
+  useEffect(() => {
+    startTransition(() => {
+      setNpcPoolError(null);
+      setNpcFundBusyId(null);
+      setNpcHireChanceSaving(false);
+      setNpcHireChancePct(20);
+    });
+  }, [gameId]);
 
   const activeData = useQuery(
     api.eco.queries.listTradersWithDetails,
@@ -384,6 +671,11 @@ export function TraderScreen() {
     gameId ? { gameId } : "skip",
   );
 
+  const npcPoolSettings = useQuery(
+    api.eco.queries.getNpcTraderPoolSettings,
+    gameId ? { gameId } : "skip",
+  );
+
   const deliveredData = useQuery(
     api.eco.queries.listTradersWithDetails,
     gameId && tab === "delivered"
@@ -391,13 +683,36 @@ export function TraderScreen() {
       : "skip",
   );
 
+  const embargoData = useQuery(
+    api.eco.queries.listActiveTraderEmbargoes,
+    gameId ? { gameId } : "skip",
+  );
+
   const activeTraders = activeData?.traders ?? [];
   const deliveredTraders = deliveredData?.traders ?? [];
   const allSystems = activeData?.systems ?? [];
+  const traderDockingFeeDefault =
+    activeData?.traderDockingFee ?? deliveredData?.traderDockingFee ?? 100;
+  const serverHireChancePct = npcPoolSettings?.traderHireChancePct;
+  const hireChanceDirty =
+    serverHireChancePct !== undefined &&
+    Math.round(npcHireChancePct) !== Math.round(serverHireChancePct);
+
+  useEffect(() => {
+    if (serverHireChancePct === undefined) return;
+    startTransition(() => {
+      setNpcHireChancePct(serverHireChancePct);
+    });
+  }, [serverHireChancePct]);
+
+  const embargoRowCount =
+    (embargoData?.empires.length ?? 0) + (embargoData?.unownedSystems.length ?? 0);
 
   const tabs: { key: TabKey; label: string; count?: number }[] = [
-    { key: "active", label: "Active", count: activeTraders.length },
+    { key: "npcTraders", label: "NPC Traders" },
+    { key: "inTransit", label: "In transit", count: activeTraders.length > 0 ? activeTraders.length : undefined },
     { key: "delivered", label: "Delivered" },
+    { key: "embargoes", label: "Embargoes", count: embargoRowCount > 0 ? embargoRowCount : undefined },
     { key: "spawn", label: "Spawn Trader" },
   ];
 
@@ -438,7 +753,7 @@ export function TraderScreen() {
       ) : (
         <>
           {/* Tab bar */}
-          <div className="flex gap-1 border-b border-st-border">
+          <div className="flex flex-wrap gap-1 border-b border-st-border">
             {tabs.map(({ key, label, count }) => (
               <button
                 key={key}
@@ -460,44 +775,162 @@ export function TraderScreen() {
             ))}
           </div>
 
-          {npcRoster !== undefined && npcRoster.length > 0 ? (
-            <Card>
-              <h3 className="text-xs font-semibold uppercase tracking-wide text-st-muted mb-2">
-                NPC merchant pool
-              </h3>
-              <ul className="max-h-48 overflow-y-auto space-y-1 text-[11px]">
-                {[...npcRoster]
-                  .sort((a, b) => a.slotOrder - b.slotOrder)
-                  .map((r) => (
-                    <li
-                      key={r._id}
-                      className="flex flex-wrap items-baseline justify-between gap-x-2 gap-y-0.5 border-b border-st-border/50 pb-1 last:border-0"
-                    >
-                      <span className="min-w-0 flex-1 truncate font-medium text-st-fg">
-                        {r.displayName}
+          {tab === "npcTraders" && (
+            <div className="space-y-3">
+              {npcRoster === undefined && (
+                <p className="text-sm text-st-muted text-center py-8">Loading…</p>
+              )}
+              {npcRoster !== undefined && npcRoster.length === 0 && (
+                <Card>
+                  <p className="text-sm text-st-muted text-center py-6">
+                    No NPC merchant pool for this game yet.
+                  </p>
+                </Card>
+              )}
+              {npcRoster !== undefined && npcRoster.length > 0 ? (
+                <Card>
+                  <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
+                    <h3 className="text-xs font-semibold uppercase tracking-wide text-st-muted">
+                      NPC merchant pool
+                    </h3>
+                    <span className="text-[10px] font-normal text-amber-400/90 uppercase tracking-wide">
+                      Admin
+                    </span>
+                  </div>
+                  <p className="mb-2 text-[10px] text-st-muted">
+                    Add Funds credits 10,000 cr to that merchant (game admins only).
+                  </p>
+                  {npcPoolError !== null ? (
+                    <p className="mb-2 text-[11px] text-red-400">{npcPoolError}</p>
+                  ) : null}
+                  <div className="mb-3 rounded-md border border-st-border/60 bg-st-bg/60 p-3">
+                    <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <div className="text-[11px] font-semibold uppercase tracking-wide text-st-fg">
+                          Ship hire chance
+                        </div>
+                        <p className="text-[10px] text-st-muted">
+                          Chance an NPC accepts a viable trade job on the next turn.
+                        </p>
+                      </div>
+                      <span className="font-mono text-sm font-semibold tabular-nums text-amber-300">
+                        {Math.round(npcHireChancePct)}%
                       </span>
-                      <span
-                        className={
-                          r.state === "active"
-                            ? "text-emerald-400"
-                            : r.state === "bankrupt"
-                              ? "text-red-400"
-                              : "text-st-muted"
+                    </div>
+                    <div className="flex flex-wrap items-center gap-3">
+                      <input
+                        type="range"
+                        min={0}
+                        max={100}
+                        step={5}
+                        value={npcHireChancePct}
+                        disabled={npcPoolSettings === undefined || npcHireChanceSaving}
+                        onChange={(e) => {
+                          setNpcHireChancePct(Number(e.target.value));
+                        }}
+                        className="min-w-48 flex-1 h-1.5 appearance-none rounded-full bg-st-border cursor-pointer accent-st-accent disabled:cursor-not-allowed disabled:opacity-60"
+                      />
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        className="h-7 px-2 text-[10px]"
+                        disabled={
+                          activeGame === null ||
+                          npcPoolSettings === undefined ||
+                          npcHireChanceSaving ||
+                          !hireChanceDirty
                         }
+                        onClick={() => {
+                          if (activeGame === null) return;
+                          void (async () => {
+                            setNpcPoolError(null);
+                            setNpcHireChanceSaving(true);
+                            try {
+                              const result = await updateNpcTraderHireChancePct({
+                                gameId: activeGame._id,
+                                traderHireChancePct: npcHireChancePct,
+                              });
+                              setNpcHireChancePct(result.traderHireChancePct);
+                            } catch (e) {
+                              setNpcPoolError(
+                                e instanceof Error ? e.message : "Could not update hire chance.",
+                              );
+                            } finally {
+                              setNpcHireChanceSaving(false);
+                            }
+                          })();
+                        }}
                       >
-                        {r.state}
-                      </span>
-                      <span className="shrink-0 font-mono tabular-nums text-st-muted">
-                        {Math.round(r.treasury).toLocaleString()} cr
-                      </span>
-                    </li>
-                  ))}
-              </ul>
-            </Card>
-          ) : null}
+                        {npcHireChanceSaving ? "Saving…" : "Apply"}
+                      </Button>
+                    </div>
+                  </div>
+                  <ul className="max-h-56 overflow-y-auto space-y-1 text-[11px]">
+                    {[...npcRoster]
+                      .sort((a, b) => a.slotOrder - b.slotOrder)
+                      .map((r) => (
+                        <li
+                          key={r._id}
+                          className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1 border-b border-st-border/50 pb-2 last:border-0"
+                        >
+                          <div className="min-w-0 flex-1">
+                            <div className="truncate font-medium text-st-fg">{r.displayName}</div>
+                            <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                              <span
+                                className={
+                                  r.state === "active"
+                                    ? "text-emerald-400"
+                                    : r.state === "bankrupt"
+                                      ? "text-red-400"
+                                      : "text-st-muted"
+                                }
+                              >
+                                {r.state}
+                              </span>
+                              <span className="font-mono tabular-nums text-st-muted">
+                                {Math.round(r.treasury).toLocaleString()} cr
+                              </span>
+                            </div>
+                          </div>
+                          {r.kind === "npc" ? (
+                            <Button
+                              type="button"
+                              variant="secondary"
+                              className="h-7 shrink-0 px-2 text-[10px]"
+                              disabled={npcFundBusyId === r._id || activeGame === null}
+                              onClick={() => {
+                                if (activeGame === null) return;
+                                void (async () => {
+                                  setNpcPoolError(null);
+                                  setNpcFundBusyId(r._id);
+                                  try {
+                                    await addNpcTraderTreasuryFunds({
+                                      gameId: activeGame._id,
+                                      traderIdentityId: r._id,
+                                    });
+                                  } catch (e) {
+                                    setNpcPoolError(
+                                      e instanceof Error ? e.message : "Could not add funds.",
+                                    );
+                                  } finally {
+                                    setNpcFundBusyId(null);
+                                  }
+                                })();
+                              }}
+                            >
+                              {npcFundBusyId === r._id ? "Adding…" : "Add Funds"}
+                            </Button>
+                          ) : null}
+                        </li>
+                      ))}
+                  </ul>
+                </Card>
+              ) : null}
+            </div>
+          )}
 
-          {/* Active traders */}
-          {tab === "active" && (
+          {/* In transit — cargo en route */}
+          {tab === "inTransit" && (
             <div className="space-y-3">
               {activeData === undefined && (
                 <p className="text-sm text-st-muted text-center py-8">Loading…</p>
@@ -505,7 +938,8 @@ export function TraderScreen() {
               {activeData !== undefined && activeTraders.length === 0 && (
                 <Card>
                   <p className="text-sm text-st-muted text-center py-6">
-                    No traders currently en route. Use <strong>Spawn Trader</strong> to inject one.
+                    No cargo in transit. Use <strong>Spawn Trader</strong> to inject a voyage, or wait
+                    for the economy to dispatch NPC routes.
                   </p>
                 </Card>
               )}
@@ -514,6 +948,7 @@ export function TraderScreen() {
                   key={t._id}
                   trader={t as EnrichedTrader}
                   currentTurn={currentTurn}
+                  dockingFeeDefault={traderDockingFeeDefault}
                 />
               ))}
             </div>
@@ -537,8 +972,102 @@ export function TraderScreen() {
                   key={t._id}
                   trader={t as EnrichedTrader}
                   currentTurn={currentTurn}
+                  dockingFeeDefault={traderDockingFeeDefault}
                 />
               ))}
+            </div>
+          )}
+
+          {/* NPC trade embargoes (non-payment) */}
+          {tab === "embargoes" && (
+            <div className="space-y-3">
+              {embargoData === undefined && (
+                <p className="text-sm text-st-muted text-center py-8">Loading…</p>
+              )}
+              {embargoData !== undefined && embargoRowCount === 0 && (
+                <Card>
+                  <p className="text-sm text-st-muted text-center py-6 leading-relaxed">
+                    No active embargoes. Background NPC traders may still avoid a destination for
+                    other reasons, but no empire or independent system is currently under a payment
+                    boycott.
+                  </p>
+                </Card>
+              )}
+              {embargoData !== undefined && embargoRowCount > 0 ? (
+                <Card className="space-y-4">
+                  <div>
+                    <h3 className="text-xs font-semibold uppercase tracking-wide text-st-muted">
+                      Trade embargoes
+                    </h3>
+                    <p className="mt-1 text-[11px] text-st-muted leading-relaxed">
+                      These powers did not pay traders in full when cargo arrived. NPC background
+                      traders will not <span className="text-st-fg">start new deliveries</span> to
+                      their worlds until the embargo ends (30 turns from the incident). Turn{" "}
+                      <span className="font-mono text-st-fg">{embargoData.currentTurn}</span>.
+                    </p>
+                  </div>
+
+                  {embargoData.empires.length > 0 ? (
+                    <div className="space-y-2">
+                      <p className="text-[10px] font-semibold uppercase tracking-wider text-st-muted">
+                        Empires
+                      </p>
+                      <ul className="space-y-2 text-sm">
+                        {embargoData.empires.map((e) => (
+                          <li
+                            key={e.empireId}
+                            className="flex flex-wrap items-baseline justify-between gap-2 rounded-md border border-st-border/80 bg-st-panel/40 px-3 py-2"
+                          >
+                            <span className="font-medium text-st-fg">{e.name}</span>
+                            <span className="text-xs text-st-muted">
+                              Lifts turn{" "}
+                              <span className="font-mono tabular-nums text-amber-300">
+                                {e.boycottEndsTurn}
+                              </span>
+                              <span className="text-st-muted"> · </span>
+                              <span className="text-st-fg">
+                                {e.turnsRemaining === 1
+                                  ? "1 turn left"
+                                  : `${e.turnsRemaining} turns left`}
+                              </span>
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  ) : null}
+
+                  {embargoData.unownedSystems.length > 0 ? (
+                    <div className="space-y-2">
+                      <p className="text-[10px] font-semibold uppercase tracking-wider text-st-muted">
+                        Independent systems
+                      </p>
+                      <ul className="space-y-2 text-sm">
+                        {embargoData.unownedSystems.map((s) => (
+                          <li
+                            key={s.systemId}
+                            className="flex flex-wrap items-baseline justify-between gap-2 rounded-md border border-st-border/80 bg-st-panel/40 px-3 py-2"
+                          >
+                            <span className="font-medium text-st-fg">{s.name}</span>
+                            <span className="text-xs text-st-muted">
+                              Lifts turn{" "}
+                              <span className="font-mono tabular-nums text-amber-300">
+                                {s.boycottEndsTurn}
+                              </span>
+                              <span className="text-st-muted"> · </span>
+                              <span className="text-st-fg">
+                                {s.turnsRemaining === 1
+                                  ? "1 turn left"
+                                  : `${s.turnsRemaining} turns left`}
+                              </span>
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  ) : null}
+                </Card>
+              ) : null}
             </div>
           )}
 
@@ -560,13 +1089,13 @@ export function TraderScreen() {
               {allSystems.length === 0 ? (
                 <p className="text-sm text-st-muted">Loading systems…</p>
               ) : (
-                <SpawnTraderForm gameId={activeGame._id} systems={allSystems as SystemInfo[]} />
+                <SpawnTraderForm gameId={activeGame._id} systems={allSystems} />
               )}
             </Card>
           )}
 
           {/* Summary footer */}
-          {tab === "active" && activeTraders.length > 0 && (
+          {tab === "inTransit" && activeTraders.length > 0 && (
             <div className="grid grid-cols-3 gap-3">
               <Card className="text-center">
                 <p className="text-2xl font-bold text-sky-400">{activeTraders.length}</p>

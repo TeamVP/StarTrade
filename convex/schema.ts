@@ -20,6 +20,13 @@ export default defineSchema({
     endedAt: v.union(v.number(), v.null()),
     /** Global turn timer pause (real-time ms); cron skips resolve while Date.now() < this. */
     turnPausedUntilMs: v.optional(v.number()),
+    /**
+     * When true, the StarTrade cron does not auto-start turn resolution for this game.
+     * Status stays `running`; manual “Step turn” still works. Use to isolate a broken sim.
+     */
+    simCronTurnsDisabled: v.optional(v.boolean()),
+    /** Selected NPC empire roster keys to seed when the map is created. */
+    npcEmpireKeys: v.optional(v.array(v.string())),
   }).index("by_status", ["status"]),
 
   sim_turns: defineTable({
@@ -27,6 +34,19 @@ export default defineSchema({
     turnNumber: v.number(),
     startedAt: v.number(),
     resolvedAt: v.union(v.number(), v.null()),
+    resolvingStartedAt: v.optional(v.number()),
+    resolutionPhase: v.optional(
+      v.union(
+        v.literal("movement"),
+        v.literal("economy"),
+        v.literal("npc"),
+        v.literal("trade"),
+        v.literal("traderSetup"),
+        v.literal("tradeSpawn"),
+        v.literal("garrisons"),
+        v.literal("finalize"),
+      ),
+    ),
     state: v.union(
       v.literal("open"),
       v.literal("resolving"),
@@ -83,6 +103,19 @@ export default defineSchema({
     analyticsConsent: v.boolean(),
   }).index("by_userId", ["userId"]),
 
+  /**
+   * Per-user default colors for empire roster slots. Keys match `emp_states.empireKey` for
+   * scripted empires (e.g. aurora, iron) or `emp_states.npcPlayerKey` for catalog NPCs (e.g.
+   * tomas-varek). Applied when that user creates or starts a game that runs map seeding.
+   */
+  usr_empire_color_prefs: defineTable({
+    userId: v.id("users"),
+    preferenceKey: v.string(),
+    colorHex: v.string(),
+  })
+    .index("by_userId", ["userId"])
+    .index("by_userId_and_preferenceKey", ["userId", "preferenceKey"]),
+
   usr_game_roles: defineTable({
     gameId: v.id("sim_games"),
     userId: v.id("users"),
@@ -132,6 +165,13 @@ export default defineSchema({
     /** Independent / breakaway treasury after empire collapse. */
     localTreasury: v.optional(v.number()),
     /**
+     * When set and `currentTurn < traderBoycottUntilTurn`, background NPC traders refuse to
+     * deliver or spawn voyages to this unowned system (it previously could not pay).
+     *
+     * Only applies when `ownerEmpireId === null`.
+     */
+    traderBoycottUntilTurn: v.optional(v.number()),
+    /**
      * Local food market price (credits per food unit). Derived each turn from
      * stockFood vs demand. Low when surplus, high when scarce. Background traders
      * exploit differentials between systems.
@@ -142,10 +182,45 @@ export default defineSchema({
      * (routing + payout). Paid from empire treasury or localTreasury when cargo arrives.
      */
     foodImportSubsidyPerUnit: v.optional(v.number()),
+    /** Accumulated ship-production points toward a colony ship (homeworld build project). */
+    colonyShipBuildProgress: v.optional(v.number()),
+    /** Target ship points to complete one colony ship (set when build starts). */
+    colonyShipBuildCost: v.optional(v.number()),
+    /** When true, ship production diverts into colonyShipBuildProgress until cost is met. */
+    colonyShipBuildEnabled: v.optional(v.boolean()),
+    /** Flat food units added per turn from landed colony-ship infrastructure. */
+    colonyFoodBonusPerTurn: v.optional(v.number()),
   })
     .index("by_gameId", ["gameId"])
     .index("by_gameId_and_systemKey", ["gameId", "systemKey"])
     .index("by_gameId_and_ownerEmpireId", ["gameId", "ownerEmpireId"]),
+
+  /**
+   * Player-built colony ships: non-combat, not in flt_fleets. Single-use until colonize.
+   */
+  col_colony_ships: defineTable({
+    gameId: v.id("sim_games"),
+    empireId: v.id("emp_states"),
+    name: v.string(),
+    originSystemId: v.id("gal_systems"),
+    destinationSystemId: v.union(v.id("gal_systems"), v.null()),
+    etaTurn: v.union(v.number(), v.null()),
+    status: v.union(v.literal("idle"), v.literal("enRoute")),
+    dispatchedTurn: v.optional(v.number()),
+    travelTurnsTotal: v.optional(v.number()),
+    /** Battle damage to mothership defenses while idle in a contested system; 50 destroys it. */
+    mothershipDefenseDamage: v.optional(v.number()),
+    /** After the current destination, further systems on this voyage (same dispatch). */
+    routeRemainingSystemIds: v.optional(v.array(v.id("gal_systems"))),
+  })
+    .index("by_gameId", ["gameId"])
+    .index("by_gameId_and_empireId", ["gameId", "empireId"])
+    .index("by_gameId_and_status", ["gameId", "status"])
+    .index("by_gameId_and_originSystemId_and_status", [
+      "gameId",
+      "originSystemId",
+      "status",
+    ]),
 
   gal_links: defineTable({
     gameId: v.id("sim_games"),
@@ -175,6 +250,21 @@ export default defineSchema({
     insolvencyTurns: v.optional(v.number()),
     pauseBudgetSeconds: v.optional(v.number()),
     lastPauseRefreshAt: v.optional(v.number()),
+    /** Empire-wide tax fraction 0–0.30; dampens local production and scales pop tax to treasury. */
+    empireTaxRate: v.optional(v.number()),
+    /** Human/player empires are commandable through usr_game_roles; NPC empires are sim-owned. */
+    controller: v.optional(v.union(v.literal("human"), v.literal("npc"))),
+    /** Roster key when this empire was created from the NPC empire player catalog. */
+    npcPlayerKey: v.optional(v.string()),
+    /** Display name for the player or NPC persona controlling this empire. */
+    playerName: v.optional(v.string()),
+    /** Editable automation brain for NPCs or humans that opt into scripted empire management. */
+    strategyJson: v.optional(v.string()),
+    /**
+     * When set and `currentTurn < traderBoycottUntilTurn`, background NPC traders refuse to
+     * deliver or spawn voyages to systems owned by this empire (they previously could not pay).
+     */
+    traderBoycottUntilTurn: v.optional(v.number()),
   })
     .index("by_gameId", ["gameId"])
     .index("by_gameId_and_empireKey", ["gameId", "empireKey"]),
@@ -243,6 +333,16 @@ export default defineSchema({
     /** 1–100: share of combined idle garrison at origin to send toward destination. */
     dispatchPct: v.number(),
     enabled: v.boolean(),
+    /** True when this standing order is maintained from an empire strategy brain. */
+    managedByStrategy: v.optional(v.boolean()),
+    strategyPurpose: v.optional(
+      v.union(
+        v.literal("earlyRush"),
+        v.literal("borderReinforce"),
+        v.literal("enemyAttack"),
+      ),
+    ),
+    strategyUpdatedTurn: v.optional(v.number()),
   })
     .index("by_gameId", ["gameId"])
     .index("by_gameId_and_empireId", ["gameId", "empireId"])
@@ -283,20 +383,22 @@ export default defineSchema({
     // ─── Balance page settings ────────────────────────────────────────────────
     /** Minimum background NPC traders active at once (0–8, default 0). */
     traderMinActive: v.optional(v.number()),
-    /** Maximum background NPC traders active at once (0–32, default 16). */
+    /** Maximum background NPC traders active at once (0–32, default 3 when automated). */
     traderMaxActive: v.optional(v.number()),
-    /** Ship hire cost per travel-turn in credits (default 500). */
+    /** Ship hire cost per travel-turn in credits (default 250). */
     traderShipHirePerTurn: v.optional(v.number()),
-    /** One-time docking fee on trader arrival in credits (default 200). */
+    /** Chance from 0-100 that an NPC accepts a viable job and hires a ship (default 20). */
+    traderHireChancePct: v.optional(v.number()),
+    /** One-time docking fee on trader arrival in credits (default 100). */
     traderDockingCost: v.optional(v.number()),
     /**
      * Food stockpile threshold above which prices fall as a multiple of demand.
-     * e.g. 3.0 = when stock > 3× one-turn demand the market is in oversupply (default 3.0).
+     * e.g. 20.0 = when stock > 20× one-turn demand the market is in oversupply (default 20.0).
      */
     foodStockpileMaxPerPop: v.optional(v.number()),
     /**
      * Food stockpile threshold below which food stress activates, as a multiple of demand.
-     * e.g. 0.5 = when stock < 0.5× one-turn demand, prices rise sharply (default 0.5).
+     * e.g. 1.5 = when stock < 1.5× one-turn demand, prices rise sharply (default 1.5).
      */
     foodStockpileMinPerPop: v.optional(v.number()),
     /**
@@ -319,6 +421,11 @@ export default defineSchema({
      * All per-system food prices scale proportionally (default 6 cr).
      */
     foodBasePrice: v.optional(v.number()),
+    /**
+     * When true (default), min/max NPC trader counts are adjusted by the sim every 10 turns from delivery economics.
+     * When false, Balance sliders control `traderMinActive` / `traderMaxActive` manually.
+     */
+    traderLimitsAutomated: v.optional(v.boolean()),
   }).index("by_gameId", ["gameId"]),
 
   /**
@@ -392,6 +499,33 @@ export default defineSchema({
     dispatchedTurn: v.number(),
     /** Ship hire cost per turn of travel (credits). */
     shipHireCostPerTurn: v.number(),
+    /** Net credits to the trader on delivery (sale − purchase − voyage cost); set when status becomes delivered. */
+    deliveryProfit: v.optional(v.number()),
+    /** Turn when the voyage completed (`status` → delivered); used for automated NPC trader limit reviews. */
+    deliveredTurn: v.optional(v.number()),
+    /** Credits received from the destination payer on delivery (before subtracting costs). */
+    deliveryRevenue: v.optional(v.number()),
+    /** Purchase + ship hire + docking costs for this voyage (credits). */
+    deliveryCost: v.optional(v.number()),
+    /** Commodity purchase at origin (credits): cargoUnits × boughtAtPrice. */
+    deliveryPurchaseCredits: v.optional(v.number()),
+    /** Ship hire only (credits): shipHireCostPerTurn × travelTurns. */
+    deliveryShipHireTotal: v.optional(v.number()),
+    /** Docking fee paid on arrival (from Balance settings at delivery time). */
+    deliveryDockingFee: v.optional(v.number()),
+    /**
+     * Food: per-unit market clearing price at destination after **all** same-turn food
+     * to this system is applied (batch settlement).
+     */
+    deliveryClearingUnitPrice: v.optional(v.number()),
+    /** Food: per-unit price if the buyer paid subsidy + clearing in full (invoice basis). */
+    deliveryNominalUnitPrice: v.optional(v.number()),
+    /** Full nominal payment owed to this captain for the cargo (before treasury cap). */
+    deliveryInvoiceCredits: v.optional(v.number()),
+    /** max(0, invoice − actual credits received) — buyer treasury ran dry or batch-split shortfall. */
+    deliveryTreasuryShortfall: v.optional(v.number()),
+    /** True when the destination could not pay the full invoice (trader short-changed). */
+    deliveryBuyerUnderpaid: v.optional(v.boolean()),
     status: v.union(
       v.literal("enRoute"),
       v.literal("delivered"),
@@ -404,7 +538,8 @@ export default defineSchema({
       "gameId",
       "destinationSystemId",
       "status",
-    ]),
+    ])
+    .index("by_gameId_and_deliveredTurn", ["gameId", "deliveredTurn"]),
 
   trd_charters: defineTable({
     gameId: v.id("sim_games"),

@@ -86,7 +86,8 @@ export const issueFleetOrder = mutation({
   args: {
     gameId: v.id("sim_games"),
     fleetId: v.id("flt_fleets"),
-    turnNumber: v.number(),
+    /** Deprecated client hint; orders are stamped with the authoritative server-side current turn. */
+    turnNumber: v.optional(v.number()),
     orderType: v.union(v.literal("move"), v.literal("hold"), v.literal("retreat")),
     targetSystemId: v.union(v.id("gal_systems"), v.null()),
     shipCount: v.optional(v.number()),
@@ -114,9 +115,6 @@ export const issueFleetOrder = mutation({
     }
     if (!gameAllowsPlayerActions(game.status)) {
       throw new Error("Game must be running or paused to issue fleet orders.");
-    }
-    if (args.turnNumber !== game.currentTurn) {
-      throw new Error(`Orders must target the current turn (${game.currentTurn}).`);
     }
 
     if (args.orderType !== "move" && args.shipCount !== undefined) {
@@ -182,7 +180,7 @@ export const issueFleetOrder = mutation({
       gameId: args.gameId,
       fleetId: args.fleetId,
       issuedByUserId: userId,
-      turnNumber: args.turnNumber,
+      turnNumber: game.currentTurn,
       orderType: args.orderType,
       targetSystemId: args.targetSystemId,
       ...(args.shipCount !== undefined ? { shipCount: args.shipCount } : {}),
