@@ -7,6 +7,23 @@ export function travelTurnsFromLinkCost(travelCost: number): number {
   return Math.max(1, Math.ceil(travelCost / 6));
 }
 
+const DETACHMENT_SUFFIX = " detachment";
+
+/** Remove stacked ` detachment` tails (any casing) before appending a fresh detachment label. */
+function stripTrailingDetachments(name: string): string {
+  let base = name.trimEnd();
+  const suffixLen = DETACHMENT_SUFFIX.length;
+  const suffixLower = DETACHMENT_SUFFIX.toLowerCase();
+
+  while (base.length >= suffixLen) {
+    const tail = base.slice(-suffixLen).toLowerCase();
+    if (tail !== suffixLower) break;
+    base = base.slice(0, base.length - suffixLen).trimEnd();
+  }
+
+  return base.length > 0 ? base : name.trim();
+}
+
 /**
  * Dispatches a move from an idle fleet (full fleet or partial split). Mirrors manual move orders.
  * @returns whether dispatch succeeded (link ok, fleet idle, ship count valid).
@@ -54,7 +71,7 @@ export async function dispatchMoveFromFleet(
 
   if (ships < fleet.strength) {
     const childFleetKey = `${fleet.fleetKey}-det-${params.dispatchKeySuffix}`;
-    const childName = `${fleet.name} detachment`;
+    const childName = `${stripTrailingDetachments(fleet.name)}${DETACHMENT_SUFFIX}`;
     const childId = await ctx.db.insert("flt_fleets", {
       gameId: params.gameId,
       empireId: fleet.empireId,
@@ -67,7 +84,6 @@ export async function dispatchMoveFromFleet(
       status: "enRoute",
       dispatchedTurn: params.turnNumber,
       travelTurnsTotal: turns,
-      retreatSystemId: fleet.originSystemId,
     });
     await ctx.db.patch("flt_fleets", fleet._id, {
       strength: fleet.strength - ships,
@@ -97,7 +113,6 @@ export async function dispatchMoveFromFleet(
       status: "enRoute",
       dispatchedTurn: params.turnNumber,
       travelTurnsTotal: turns,
-      retreatSystemId: fleet.originSystemId,
     });
     await insertSimEvent(ctx, {
       gameId: params.gameId,

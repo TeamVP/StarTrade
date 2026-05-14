@@ -21,10 +21,9 @@ import {
   DEFENDER_BASE_MULTIPLIER,
   resolveFullCombatRound,
   resolveOpeningStrike,
-  resolveRetreatStrike,
 } from "./combat";
 import { insertSimEvent } from "./eventLog";
-import { applyFleetMoveOrders } from "./fleetOrders";
+import { applyFleetMoveOrders, cleanupFleetOrdersForTurn } from "./fleetOrders";
 import { applyGarrisonRoutes } from "./garrisonRoutes";
 import { reconcileSystemHolding } from "./systemHoldings";
 import { POPULATION_MIN_INHABITED_PEOPLE } from "./economy/population";
@@ -65,6 +64,19 @@ async function loadIdleFleetsForGame(
       q.eq("gameId", gameId).eq("status", "idle"),
     )
     .take(MAX_IDLE_FLEETS_SCAN);
+}
+
+async function loadActiveBattleSystemIds(
+  ctx: MutationCtx,
+  gameId: Id<"sim_games">,
+): Promise<Set<string>> {
+  const battles = await ctx.db
+    .query("cmb_battles")
+    .withIndex("by_gameId_and_status", (q) =>
+      q.eq("gameId", gameId).eq("status", "active"),
+    )
+    .take(128);
+  return new Set(battles.map((battle) => battle.systemId as string));
 }
 
 const DEFAULT_COLLATERAL_STATE: CollateralState = {
@@ -125,7 +137,7 @@ async function decayRecentBattleDamage(
   const systems = await ctx.db
     .query("gal_systems")
     .withIndex("by_gameId", (q) => q.eq("gameId", gameId))
-    .take(200);
+    .take(512);
 
   for (const system of systems) {
     const recentBattleTurns = Math.max(0, (system.recentBattleTurns ?? 0) - 1);
@@ -372,10 +384,156 @@ function chooseDefender(
   return [...groups].sort((a, b) => b.ships - a.ships)[0];
 }
 
-function chooseAttacker(groups: FleetGroup[], defenderEmpireId: Id<"emp_states">) {
-  return [...groups]
-    .filter((group) => group.empireId !== defenderEmpireId)
-    .sort((a, b) => b.ships - a.ships)[0];
+type BattleParticipant = {
+  empireId: Id<"emp_states">;
+  fleet: Doc<"flt_fleets">;
+  ships: number;
+};
+
+function primaryAttacker(
+  attackers: BattleParticipant[],
+): BattleParticipant | undefined {
+  return [...attackers].sort(
+    (a, b) => b.ships - a.ships || a.fleet._id.localeCompare(b.fleet._id),
+  )[0];
+}
+
+function battleAttackerFleetIds(battle: Doc<"cmb_battles">): Id<"flt_fleets">[] {
+  return battle.attackerFleetIds ?? [battle.attackerFleetId];
+}
+
+function battleDefenderFleetIds(battle: Doc<"cmb_battles">): Id<"flt_fleets">[] {
+  return battle.defenderFleetIds ?? [battle.defenderFleetId];
+}
+
+function uniqueFleetIds(ids: Id<"flt_fleets">[]): Id<"flt_fleets">[] {
+  return Array.from(new Set(ids));
+}
+
+function participantFromFleet(fleet: Doc<"flt_fleets">): BattleParticipant {
+  return {
+    empireId: fleet.empireId,
+    fleet,
+    ships: Math.max(0, Math.floor(fleet.strength)),
+  };
+}
+
+async function loadBattleParticipants(
+  ctx: MutationCtx,
+  battle: Doc<"cmb_battles">,
+): Promise<{ attackers: BattleParticipant[]; defender: BattleParticipant } | null> {
+  const attackers: BattleParticipant[] = [];
+  for (const fleetId of uniqueFleetIds(battleAttackerFleetIds(battle))) {
+    const fleet = await ctx.db.get("flt_fleets", fleetId);
+    if (fleet !== null && fleet.strength > 0) {
+      attackers.push(participantFromFleet(fleet));
+    }
+  }
+
+  const defenderFleetId = uniqueFleetIds(battleDefenderFleetIds(battle))[0];
+  if (defenderFleetId === undefined) return null;
+  const defenderFleet = await ctx.db.get("flt_fleets", defenderFleetId);
+  if (defenderFleet === null || defenderFleet.strength <= 0) {
+    return null;
+  }
+
+  return {
+    attackers,
+    defender: participantFromFleet(defenderFleet),
+  };
+}
+
+function participantFleetGroup(participant: BattleParticipant): FleetGroup {
+  return {
+    empireId: participant.empireId,
+    fleets: [participant.fleet],
+    ships: participant.ships,
+  };
+}
+
+function aggregateAttackerFleetGroup(attackers: BattleParticipant[]): FleetGroup {
+  const primary = primaryAttacker(attackers);
+  if (primary === undefined) {
+    throw new Error("Cannot aggregate an empty attacker side.");
+  }
+  return {
+    empireId: primary.empireId,
+    fleets: attackers.map((attacker) => attacker.fleet),
+    ships: attackers.reduce((sum, attacker) => sum + attacker.ships, 0),
+  };
+}
+
+function allocateLossesByShips(
+  participants: BattleParticipant[],
+  incomingLosses: number,
+): Map<string, number> {
+  const losses = new Map<string, number>();
+  const totalShips = participants.reduce((sum, participant) => sum + participant.ships, 0);
+  const totalLosses = Math.max(
+    0,
+    Math.min(Math.floor(incomingLosses), totalShips),
+  );
+  if (totalShips <= 0 || totalLosses <= 0) return losses;
+
+  const shares = participants.map((participant) => {
+    const exact = (totalLosses * participant.ships) / totalShips;
+    const base = Math.min(participant.ships, Math.floor(exact));
+    return {
+      participant,
+      base,
+      remainder: exact - base,
+    };
+  });
+
+  let allocated = shares.reduce((sum, share) => sum + share.base, 0);
+  for (const share of shares) {
+    losses.set(share.participant.fleet._id, share.base);
+  }
+
+  const byRemainder = [...shares].sort(
+    (a, b) =>
+      b.remainder - a.remainder ||
+      b.participant.ships - a.participant.ships ||
+      a.participant.fleet._id.localeCompare(b.participant.fleet._id),
+  );
+  for (const share of byRemainder) {
+    if (allocated >= totalLosses) break;
+    const current = losses.get(share.participant.fleet._id) ?? 0;
+    if (current >= share.participant.ships) continue;
+    losses.set(share.participant.fleet._id, current + 1);
+    allocated += 1;
+  }
+
+  return losses;
+}
+
+async function patchBattleParticipants(
+  ctx: MutationCtx,
+  battle: Doc<"cmb_battles">,
+  params: {
+    attackers: BattleParticipant[];
+    defender: BattleParticipant;
+    phase: Doc<"cmb_battles">["phase"];
+    roundNumber: number;
+    updatedTurn: number;
+  },
+): Promise<void> {
+  const primary = primaryAttacker(params.attackers);
+  if (primary === undefined) {
+    throw new Error("Cannot patch a battle with no attackers.");
+  }
+
+  await ctx.db.patch("cmb_battles", battle._id, {
+    attackerEmpireId: primary.empireId,
+    attackerFleetId: primary.fleet._id,
+    attackerFleetIds: params.attackers.map((attacker) => attacker.fleet._id),
+    defenderEmpireId: params.defender.empireId,
+    defenderFleetId: params.defender.fleet._id,
+    defenderFleetIds: [params.defender.fleet._id],
+    phase: params.phase,
+    roundNumber: params.roundNumber,
+    updatedTurn: params.updatedTurn,
+  });
 }
 
 async function loadIdleMothershipTargets(
@@ -464,39 +622,53 @@ async function applyMothershipPriorityDamage(
   return { fleetLosses: remainingDamage, events };
 }
 
-async function applyMothershipPriorityToRound(
+async function applyMultiAttackerMothershipPriorityToRound(
   ctx: MutationCtx,
   params: {
     gameId: Id<"sim_games">;
     systemId: Id<"gal_systems">;
-    attackerEmpireId: Id<"emp_states">;
-    defenderEmpireId: Id<"emp_states">;
+    attackers: BattleParticipant[];
+    defender: BattleParticipant;
     round: BattleRoundResult;
   },
-): Promise<{ round: BattleRoundResult; events: MothershipDamageEvent[] }> {
-  const attackerDamage = await applyMothershipPriorityDamage(ctx, {
-    gameId: params.gameId,
-    systemId: params.systemId,
-    empireId: params.attackerEmpireId,
-    side: "attacker",
-    incomingLosses: params.round.attackerLosses,
-  });
+): Promise<{
+  round: BattleRoundResult;
+  attackerLossesByFleetId: Map<string, number>;
+  defenderLosses: number;
+  events: MothershipDamageEvent[];
+}> {
+  const attackerIncomingLosses = allocateLossesByShips(
+    params.attackers,
+    params.round.attackerLosses,
+  );
+  const attackerLossesByFleetId = new Map<string, number>();
+  const events: MothershipDamageEvent[] = [];
+  let attackerLosses = 0;
+
+  for (const attacker of params.attackers) {
+    const incomingLosses = attackerIncomingLosses.get(attacker.fleet._id) ?? 0;
+    const damage = await applyMothershipPriorityDamage(ctx, {
+      gameId: params.gameId,
+      systemId: params.systemId,
+      empireId: attacker.empireId,
+      side: "attacker",
+      incomingLosses,
+    });
+    const fleetLosses = Math.min(attacker.ships, damage.fleetLosses);
+    attackerLossesByFleetId.set(attacker.fleet._id, fleetLosses);
+    attackerLosses += fleetLosses;
+    events.push(...damage.events);
+  }
+
   const defenderDamage = await applyMothershipPriorityDamage(ctx, {
     gameId: params.gameId,
     systemId: params.systemId,
-    empireId: params.defenderEmpireId,
+    empireId: params.defender.empireId,
     side: "defender",
     incomingLosses: params.round.defenderLosses,
   });
-
-  const attackerLosses = Math.min(
-    params.round.attackerShipsBefore,
-    attackerDamage.fleetLosses,
-  );
-  const defenderLosses = Math.min(
-    params.round.defenderShipsBefore,
-    defenderDamage.fleetLosses,
-  );
+  const defenderLosses = Math.min(params.defender.ships, defenderDamage.fleetLosses);
+  events.push(...defenderDamage.events);
 
   return {
     round: {
@@ -506,8 +678,33 @@ async function applyMothershipPriorityToRound(
       attackerShipsAfter: params.round.attackerShipsBefore - attackerLosses,
       defenderShipsAfter: params.round.defenderShipsBefore - defenderLosses,
     },
-    events: [...attackerDamage.events, ...defenderDamage.events],
+    attackerLossesByFleetId,
+    defenderLosses,
+    events,
   };
+}
+
+async function applyParticipantLosses(
+  ctx: MutationCtx,
+  participants: BattleParticipant[],
+  lossesByFleetId: Map<string, number>,
+): Promise<BattleParticipant[]> {
+  const survivors: BattleParticipant[] = [];
+  for (const participant of participants) {
+    const losses = Math.max(0, lossesByFleetId.get(participant.fleet._id) ?? 0);
+    const ships = Math.max(0, participant.ships - losses);
+    if (ships <= 0) {
+      await ctx.db.delete("flt_fleets", participant.fleet._id);
+      continue;
+    }
+    await ctx.db.patch("flt_fleets", participant.fleet._id, { strength: ships });
+    survivors.push({
+      ...participant,
+      fleet: { ...participant.fleet, strength: ships },
+      ships,
+    });
+  }
+  return survivors;
 }
 
 async function writeFleetGroupStrength(
@@ -533,6 +730,164 @@ async function writeFleetGroupStrength(
   }
   group.fleets = [keeper];
   group.ships = ships;
+}
+
+async function loadIdleFleetsAtSystem(
+  ctx: MutationCtx,
+  params: {
+    gameId: Id<"sim_games">;
+    systemId: Id<"gal_systems">;
+  },
+): Promise<Doc<"flt_fleets">[]> {
+  const idle = await loadIdleFleetsForGame(ctx, params.gameId);
+  return idle.filter(
+    (fleet) => fleet.originSystemId === params.systemId && fleet.strength > 0,
+  );
+}
+
+async function absorbIdleGroupIntoParticipant(
+  ctx: MutationCtx,
+  params: {
+    gameId: Id<"sim_games">;
+    turnNumber: number;
+    systemId: Id<"gal_systems">;
+    battleId: Id<"cmb_battles">;
+    systemName: string;
+    side: BattleSideRole;
+    participant: BattleParticipant;
+    idleGroup: FleetGroup;
+  },
+): Promise<BattleParticipant> {
+  const reinforcementShips = params.idleGroup.ships;
+  for (const fleet of params.idleGroup.fleets) {
+    await ctx.db.delete("flt_fleets", fleet._id);
+  }
+
+  const strength = params.participant.ships + reinforcementShips;
+  await ctx.db.patch("flt_fleets", params.participant.fleet._id, { strength });
+  await insertSimEvent(ctx, {
+    gameId: params.gameId,
+    turnNumber: params.turnNumber,
+    eventType: "battle_reinforced",
+    actorType: "empire",
+    actorId: params.participant.empireId,
+    targetType: "system",
+    targetId: params.systemId,
+    summary: `${params.systemName}: ${reinforcementShips} ${params.side} reinforcement ships joined the battle`,
+    payload: {
+      battleId: params.battleId,
+      systemId: params.systemId,
+      empireId: params.participant.empireId,
+      side: params.side,
+      reinforcementShips,
+      mergedFleetCount: params.idleGroup.fleets.length,
+      battleFleetId: params.participant.fleet._id,
+    },
+  });
+
+  const updated = await ctx.db.get("flt_fleets", params.participant.fleet._id);
+  if (updated === null) {
+    throw new Error("Battle fleet disappeared while absorbing reinforcements.");
+  }
+  return participantFromFleet(updated);
+}
+
+async function addIdleFleetsToActiveBattle(
+  ctx: MutationCtx,
+  params: {
+    gameId: Id<"sim_games">;
+    turnNumber: number;
+    battle: Doc<"cmb_battles">;
+    system: Doc<"gal_systems">;
+    attackers: BattleParticipant[];
+    defender: BattleParticipant;
+  },
+): Promise<{ attackers: BattleParticipant[]; defender: BattleParticipant }> {
+  const idleGroups = groupIdleFleetsByEmpire(
+    await loadIdleFleetsAtSystem(ctx, {
+      gameId: params.gameId,
+      systemId: params.system._id,
+    }),
+  );
+
+  let attackers = [...params.attackers];
+  let defender = params.defender;
+
+  for (const idleGroup of idleGroups) {
+    if (idleGroup.empireId === defender.empireId) {
+      defender = await absorbIdleGroupIntoParticipant(ctx, {
+        gameId: params.gameId,
+        turnNumber: params.turnNumber,
+        systemId: params.system._id,
+        battleId: params.battle._id,
+        systemName: params.system.name,
+        side: "defender",
+        participant: defender,
+        idleGroup,
+      });
+      continue;
+    }
+
+    const existingAttackerIndex = attackers.findIndex(
+      (attacker) => attacker.empireId === idleGroup.empireId,
+    );
+    if (existingAttackerIndex >= 0) {
+      const existing = attackers[existingAttackerIndex];
+      if (existing === undefined) continue;
+      const updated = await absorbIdleGroupIntoParticipant(ctx, {
+        gameId: params.gameId,
+        turnNumber: params.turnNumber,
+        systemId: params.system._id,
+        battleId: params.battle._id,
+        systemName: params.system.name,
+        side: "attacker",
+        participant: existing,
+        idleGroup,
+      });
+      attackers = attackers.map((attacker, index) =>
+        index === existingAttackerIndex ? updated : attacker,
+      );
+      continue;
+    }
+
+    const fleet = await mergeFleetGroupForBattle(ctx, idleGroup);
+    await ctx.db.patch("flt_fleets", fleet._id, {
+      status: "engaged",
+      activeBattleId: params.battle._id,
+    });
+    attackers.push(participantFromFleet({ ...fleet, status: "engaged" }));
+    await insertSimEvent(ctx, {
+      gameId: params.gameId,
+      turnNumber: params.turnNumber,
+      eventType: "battle_reinforced",
+      actorType: "empire",
+      actorId: idleGroup.empireId,
+      targetType: "system",
+      targetId: params.system._id,
+      summary: `${params.system.name}: ${idleGroup.ships} third-party attacking ships joined the battle`,
+      payload: {
+        battleId: params.battle._id,
+        systemId: params.system._id,
+        empireId: idleGroup.empireId,
+        side: "attacker",
+        reinforcementShips: idleGroup.ships,
+        mergedFleetCount: idleGroup.fleets.length,
+        battleFleetId: fleet._id,
+      },
+    });
+  }
+
+  if (attackers.length > 0) {
+    await patchBattleParticipants(ctx, params.battle, {
+      attackers,
+      defender,
+      phase: params.battle.phase,
+      roundNumber: params.battle.roundNumber,
+      updatedTurn: params.turnNumber,
+    });
+  }
+
+  return { attackers, defender };
 }
 
 function damageTotals(collateral: CollateralDamageResult[]) {
@@ -676,7 +1031,7 @@ async function finishBattle(
     eventTurn: number;
     winnerEmpireId: Id<"emp_states"> | null;
     winnerFleetId: Id<"flt_fleets"> | null;
-    eventType: "system_conquered" | "system_held" | "battle_retreat_succeeded";
+    eventType: "system_conquered" | "system_held";
     summary: string;
     payload: Record<string, unknown>;
   },
@@ -694,10 +1049,7 @@ async function finishBattle(
 
   if (params.winnerEmpireId !== null) {
     const ownerPatch: Partial<Doc<"gal_systems">> = {
-      ownerEmpireId:
-        params.eventType === "battle_retreat_succeeded"
-          ? params.system.ownerEmpireId
-          : params.winnerEmpireId,
+      ownerEmpireId: params.winnerEmpireId,
       underAttack: false,
       recentBattleTurns: Math.max(params.system.recentBattleTurns ?? 0, 3),
     };
@@ -740,6 +1092,59 @@ async function finishBattle(
   });
 }
 
+async function continueBattleWithNewDefender(
+  ctx: MutationCtx,
+  params: {
+    battle: Doc<"cmb_battles">;
+    system: Doc<"gal_systems">;
+    eventTurn: number;
+    attackers: BattleParticipant[];
+    newDefender: BattleParticipant;
+    roundNumber: number;
+  },
+): Promise<void> {
+  await ctx.db.patch("gal_systems", params.system._id, {
+    ownerEmpireId: params.newDefender.empireId,
+    underAttack: true,
+    lastContestedTurn: params.eventTurn,
+    taxBlockedUntilTurn: params.eventTurn + 1,
+    recentBattleTurns: Math.max(params.system.recentBattleTurns ?? 0, 3),
+  });
+  await reconcileSystemHolding(ctx, {
+    gameId: params.battle.gameId,
+    systemId: params.system._id,
+    winnerEmpireId: params.newDefender.empireId,
+  });
+
+  await patchBattleParticipants(ctx, params.battle, {
+    attackers: params.attackers,
+    defender: params.newDefender,
+    phase: "awaitingAttackerDecision",
+    roundNumber: params.roundNumber,
+    updatedTurn: params.eventTurn,
+  });
+
+  await insertSimEvent(ctx, {
+    gameId: params.battle.gameId,
+    turnNumber: params.eventTurn,
+    eventType: "battle_defender_changed",
+    actorType: "empire",
+    actorId: params.newDefender.empireId,
+    targetType: "system",
+    targetId: params.system._id,
+    summary: `${params.system.name}: the strongest surviving attacker became the new defender`,
+    payload: {
+      battleId: params.battle._id,
+      systemId: params.system._id,
+      defenderEmpireId: params.newDefender.empireId,
+      defenderFleetId: params.newDefender.fleet._id,
+      survivingShips: params.newDefender.ships,
+      attackerEmpireIds: params.attackers.map((attacker) => attacker.empireId),
+      attackerFleetIds: params.attackers.map((attacker) => attacker.fleet._id),
+    },
+  });
+}
+
 async function resolveActiveBattles(
   ctx: MutationCtx,
   params: {
@@ -756,26 +1161,18 @@ async function resolveActiveBattles(
       q.eq("gameId", params.gameId).eq("status", "active"),
     )
     .take(64);
-  const retreatOrders = new Set(
-    params.orders
-      .filter((order) => order.orderType === "retreat")
-      .map((order) => order.fleetId as string),
-  );
-
   for (const battle of battles) {
     let system = await ctx.db.get("gal_systems", battle.systemId);
-    const attacker = await ctx.db.get("flt_fleets", battle.attackerFleetId);
-    const defender = await ctx.db.get("flt_fleets", battle.defenderFleetId);
-    if (system === null || attacker === null || defender === null) {
-      if (attacker !== null && attacker.status === "engaged") {
-        await ctx.db.patch("flt_fleets", attacker._id, {
-          status: "idle",
-        });
-      }
-      if (defender !== null && defender.status === "engaged") {
-        await ctx.db.patch("flt_fleets", defender._id, {
-          status: "idle",
-        });
+    const loaded = await loadBattleParticipants(ctx, battle);
+    if (system === null || loaded === null || loaded.attackers.length === 0) {
+      for (const fleetId of [
+        ...battleAttackerFleetIds(battle),
+        ...battleDefenderFleetIds(battle),
+      ]) {
+        const fleet = await ctx.db.get("flt_fleets", fleetId);
+        if (fleet !== null && fleet.status === "engaged") {
+          await ctx.db.patch("flt_fleets", fleet._id, { status: "idle" });
+        }
       }
       await ctx.db.patch("cmb_battles", battle._id, {
         status: "resolved",
@@ -785,105 +1182,42 @@ async function resolveActiveBattles(
       continue;
     }
 
+    const withArrivals = await addIdleFleetsToActiveBattle(ctx, {
+      gameId: params.gameId,
+      turnNumber: params.turnNumber,
+      battle,
+      system,
+      attackers: loaded.attackers,
+      defender: loaded.defender,
+    });
+    const attackers = withArrivals.attackers;
+    const defender = withArrivals.defender;
+    const attackerShips = attackers.reduce((sum, attacker) => sum + attacker.ships, 0);
+    if (attackerShips <= 0) continue;
+
     const isDefenderHomeworld =
-      system.isHomeworld && system.ownerEmpireId === battle.defenderEmpireId;
-
-    if (retreatOrders.has(battle.attackerFleetId)) {
-      const rawRound = resolveRetreatStrike({
-        attackerShips: attacker.strength,
-        defenderShips: defender.strength,
-        isDefenderHomeworld,
-        roundNumber: battle.roundNumber + 1,
-        multipliers: params.combatMultipliers,
-      });
-      const adjusted = await applyMothershipPriorityToRound(ctx, {
-        gameId: params.gameId,
-        systemId: system._id,
-        attackerEmpireId: battle.attackerEmpireId,
-        defenderEmpireId: battle.defenderEmpireId,
-        round: rawRound,
-      });
-      const round = adjusted.round;
-      await writeBattleRoundEvents(ctx, {
-        gameId: params.gameId,
-        turnNumber: params.turnNumber,
-        battleId: battle._id,
-        system,
-        attacker: {
-          empireId: battle.attackerEmpireId,
-          fleets: [attacker],
-          ships: attacker.strength,
-        },
-        defender: {
-          empireId: battle.defenderEmpireId,
-          fleets: [defender],
-          ships: defender.strength,
-        },
-        rounds: [round],
-        mothershipEvents: adjusted.events,
-      });
-
-      if (round.attackerShipsAfter <= 0) {
-        await ctx.db.delete("flt_fleets", attacker._id);
-        await ctx.db.patch("flt_fleets", defender._id, { status: "idle" });
-        await finishBattle(ctx, {
-          battle,
-          system,
-          eventTurn: params.turnNumber,
-          winnerEmpireId: battle.defenderEmpireId,
-          winnerFleetId: defender._id,
-          eventType: "system_held",
-          summary: `${system.name}: retreat failed and defenders destroyed the attackers`,
-          payload: {
-            winnerEmpireId: battle.defenderEmpireId,
-            attackerEmpireId: battle.attackerEmpireId,
-            retreatSucceeded: false,
-          },
-        });
-      } else {
-        await ctx.db.patch("flt_fleets", attacker._id, {
-          strength: round.attackerShipsAfter,
-          originSystemId: battle.retreatTargetSystemId,
-          status: "idle",
-        });
-        await ctx.db.patch("flt_fleets", defender._id, { status: "idle" });
-        await finishBattle(ctx, {
-          battle,
-          system,
-          eventTurn: params.turnNumber,
-          winnerEmpireId: battle.defenderEmpireId,
-          winnerFleetId: defender._id,
-          eventType: "battle_retreat_succeeded",
-          summary: `${system.name}: attackers escaped after losing ${round.attackerLosses} ships during retreat`,
-          payload: {
-            defenderEmpireId: battle.defenderEmpireId,
-            attackerEmpireId: battle.attackerEmpireId,
-            retreatTargetSystemId: battle.retreatTargetSystemId,
-            retreatingShips: round.attackerShipsAfter,
-          },
-        });
-      }
-      continue;
-    }
+      system.isHomeworld && system.ownerEmpireId === defender.empireId;
+    const currentPrimaryAttacker = primaryAttacker(attackers);
+    if (currentPrimaryAttacker === undefined) continue;
 
     const fullRound = resolveFullCombatRound({
-      attackerShips: attacker.strength,
-      defenderShips: defender.strength,
+      attackerShips,
+      defenderShips: defender.ships,
       seed: params.seed,
       systemId: system._id,
       turnNumber: params.turnNumber,
-      attackerEmpireId: battle.attackerEmpireId,
-      defenderEmpireId: battle.defenderEmpireId,
+      attackerEmpireId: currentPrimaryAttacker.empireId,
+      defenderEmpireId: defender.empireId,
       roundNumber: battle.roundNumber + 1,
       isDefenderHomeworld,
       collateralState: systemCollateralState(system),
       multipliers: params.combatMultipliers,
     });
-    const adjusted = await applyMothershipPriorityToRound(ctx, {
+    const adjusted = await applyMultiAttackerMothershipPriorityToRound(ctx, {
       gameId: params.gameId,
       systemId: system._id,
-      attackerEmpireId: battle.attackerEmpireId,
-      defenderEmpireId: battle.defenderEmpireId,
+      attackers,
+      defender,
       round: fullRound.round,
     });
     const round = adjusted.round;
@@ -893,16 +1227,8 @@ async function resolveActiveBattles(
       turnNumber: params.turnNumber,
       battleId: battle._id,
       system,
-      attacker: {
-        empireId: battle.attackerEmpireId,
-        fleets: [attacker],
-        ships: attacker.strength,
-      },
-      defender: {
-        empireId: battle.defenderEmpireId,
-        fleets: [defender],
-        ships: defender.strength,
-      },
+      attacker: aggregateAttackerFleetGroup(attackers),
+      defender: participantFleetGroup(defender),
       rounds: [round],
       mothershipEvents: adjusted.events,
     });
@@ -919,64 +1245,76 @@ async function resolveActiveBattles(
       fullRound.collateral,
     );
 
-    if (round.attackerShipsAfter <= 0) {
-      await ctx.db.delete("flt_fleets", attacker._id);
-    } else {
-      await ctx.db.patch("flt_fleets", attacker._id, {
-        strength: round.attackerShipsAfter,
-      });
-    }
+    const survivingAttackers = await applyParticipantLosses(
+      ctx,
+      attackers,
+      adjusted.attackerLossesByFleetId,
+    );
 
-    if (round.defenderShipsAfter <= 0) {
-      await ctx.db.delete("flt_fleets", defender._id);
+    let survivingDefender: BattleParticipant | null = null;
+    if (round.defenderShipsAfter <= 0 || adjusted.defenderLosses >= defender.ships) {
+      await ctx.db.delete("flt_fleets", defender.fleet._id);
     } else {
-      await ctx.db.patch("flt_fleets", defender._id, {
+      await ctx.db.patch("flt_fleets", defender.fleet._id, {
         strength: round.defenderShipsAfter,
       });
+      survivingDefender = {
+        ...defender,
+        fleet: { ...defender.fleet, strength: round.defenderShipsAfter },
+        ships: round.defenderShipsAfter,
+      };
     }
 
-    if (
-      round.attackerShipsAfter > 0 &&
-      round.defenderShipsAfter <= 0
-    ) {
-      await ctx.db.patch("flt_fleets", attacker._id, { status: "idle" });
+    if (survivingAttackers.length > 0 && survivingDefender === null) {
+      if (survivingAttackers.length === 1) {
+        const winner = survivingAttackers[0];
+        await ctx.db.patch("flt_fleets", winner.fleet._id, { status: "idle" });
+        await finishBattle(ctx, {
+          battle,
+          system,
+          eventTurn: params.turnNumber,
+          winnerEmpireId: winner.empireId,
+          winnerFleetId: winner.fleet._id,
+          eventType: "system_conquered",
+          summary: `${system.name} was conquered after round ${round.roundNumber}`,
+          payload: {
+            winnerEmpireId: winner.empireId,
+            previousOwnerEmpireId: battle.originalOwnerEmpireId,
+            survivingShips: winner.ships,
+          },
+        });
+      } else {
+        const newDefender = primaryAttacker(survivingAttackers);
+        if (newDefender === undefined) continue;
+        const remainingAttackers = survivingAttackers.filter(
+          (attacker) => attacker.fleet._id !== newDefender.fleet._id,
+        );
+        await continueBattleWithNewDefender(ctx, {
+          battle,
+          system,
+          eventTurn: params.turnNumber,
+          attackers: remainingAttackers,
+          newDefender,
+          roundNumber: round.roundNumber,
+        });
+      }
+    } else if (survivingDefender !== null && survivingAttackers.length === 0) {
+      await ctx.db.patch("flt_fleets", survivingDefender.fleet._id, { status: "idle" });
       await finishBattle(ctx, {
         battle,
         system,
         eventTurn: params.turnNumber,
-        winnerEmpireId: battle.attackerEmpireId,
-        winnerFleetId: attacker._id,
-        eventType: "system_conquered",
-        summary: `${system.name} was conquered after round ${round.roundNumber}`,
-        payload: {
-          winnerEmpireId: battle.attackerEmpireId,
-          previousOwnerEmpireId: battle.originalOwnerEmpireId,
-          survivingShips: round.attackerShipsAfter,
-        },
-      });
-    } else if (
-      round.defenderShipsAfter > 0 &&
-      round.attackerShipsAfter <= 0
-    ) {
-      await ctx.db.patch("flt_fleets", defender._id, { status: "idle" });
-      await finishBattle(ctx, {
-        battle,
-        system,
-        eventTurn: params.turnNumber,
-        winnerEmpireId: battle.defenderEmpireId,
-        winnerFleetId: defender._id,
+        winnerEmpireId: survivingDefender.empireId,
+        winnerFleetId: survivingDefender.fleet._id,
         eventType: "system_held",
         summary: `${system.name} held after attackers were destroyed`,
         payload: {
-          winnerEmpireId: battle.defenderEmpireId,
-          attackerEmpireId: battle.attackerEmpireId,
-          survivingShips: round.defenderShipsAfter,
+          winnerEmpireId: survivingDefender.empireId,
+          attackerEmpireIds: attackers.map((attacker) => attacker.empireId),
+          survivingShips: survivingDefender.ships,
         },
       });
-    } else if (
-      round.attackerShipsAfter <= 0 &&
-      round.defenderShipsAfter <= 0
-    ) {
+    } else if (survivingDefender === null && survivingAttackers.length === 0) {
       await finishBattle(ctx, {
         battle,
         system,
@@ -986,12 +1324,14 @@ async function resolveActiveBattles(
         eventType: "system_held",
         summary: `${system.name}: both battle fleets were destroyed`,
         payload: {
-          attackerEmpireId: battle.attackerEmpireId,
-          defenderEmpireId: battle.defenderEmpireId,
+          attackerEmpireIds: attackers.map((attacker) => attacker.empireId),
+          defenderEmpireId: defender.empireId,
         },
       });
-    } else {
-      await ctx.db.patch("cmb_battles", battle._id, {
+    } else if (survivingDefender !== null) {
+      await patchBattleParticipants(ctx, battle, {
+        attackers: survivingAttackers,
+        defender: survivingDefender,
         phase: "awaitingAttackerDecision",
         roundNumber: round.roundNumber,
         updatedTurn: params.turnNumber,
@@ -1000,14 +1340,11 @@ async function resolveActiveBattles(
         underAttack: true,
         lastContestedTurn: params.turnNumber,
       });
+    } else {
+      throw new Error("Unhandled battle outcome.");
     }
   }
 
-  for (const order of params.orders) {
-    if (order.orderType === "retreat") {
-      await ctx.db.delete("flt_orders", order._id);
-    }
-  }
 }
 
 async function startNewBattlesAndClaimUnopposedSystems(
@@ -1019,6 +1356,7 @@ async function startNewBattlesAndClaimUnopposedSystems(
   },
 ): Promise<void> {
   const fleets = await loadIdleFleetsForGame(ctx, params.gameId);
+  const activeBattleSystemIds = await loadActiveBattleSystemIds(ctx, params.gameId);
 
   const bySystem = new Map<string, Doc<"flt_fleets">[]>();
   for (const fleet of fleets) {
@@ -1029,6 +1367,7 @@ async function startNewBattlesAndClaimUnopposedSystems(
   }
 
   for (const [systemId, systemFleets] of bySystem) {
+    if (activeBattleSystemIds.has(systemId)) continue;
     const groups = groupIdleFleetsByEmpire(systemFleets);
     const system = await ctx.db.get("gal_systems", systemId as Id<"gal_systems">);
     if (system === null) continue;
@@ -1077,31 +1416,45 @@ async function startNewBattlesAndClaimUnopposedSystems(
       continue;
     }
 
-    const defender = chooseDefender(groups, system.ownerEmpireId);
-    const attacker = chooseAttacker(groups, defender.empireId);
-    if (attacker === undefined) continue;
+    const defenderGroup = chooseDefender(groups, system.ownerEmpireId);
+    const attackerGroups = groups
+      .filter((group) => group.empireId !== defenderGroup.empireId)
+      .sort((a, b) => b.ships - a.ships);
+    if (attackerGroups.length === 0) continue;
 
-    const attackerFleet = await mergeFleetGroupForBattle(ctx, attacker);
-    const defenderFleet = await mergeFleetGroupForBattle(ctx, defender);
+    const defenderFleet = await mergeFleetGroupForBattle(ctx, defenderGroup);
+    const defender = participantFromFleet(defenderFleet);
+    const attackers: BattleParticipant[] = [];
+    for (const attackerGroup of attackerGroups) {
+      const fleet = await mergeFleetGroupForBattle(ctx, attackerGroup);
+      attackers.push(participantFromFleet(fleet));
+    }
+    const attacker = primaryAttacker(attackers);
+    if (attacker === undefined) continue;
+    const attackerShips = attackers.reduce((sum, participant) => sum + participant.ships, 0);
+
     const battleId = await ctx.db.insert("cmb_battles", {
       gameId: params.gameId,
       systemId: system._id,
       attackerEmpireId: attacker.empireId,
-      defenderEmpireId: defender.empireId,
-      attackerFleetId: attackerFleet._id,
+      defenderEmpireId: defenderGroup.empireId,
+      attackerFleetId: attacker.fleet._id,
       defenderFleetId: defenderFleet._id,
+      attackerFleetIds: attackers.map((participant) => participant.fleet._id),
+      defenderFleetIds: [defenderFleet._id],
       originalOwnerEmpireId: system.ownerEmpireId,
-      retreatTargetSystemId: attackerFleet.retreatSystemId ?? system._id,
       status: "active",
       phase: "opening",
       roundNumber: 0,
       startedTurn: params.turnNumber,
       updatedTurn: params.turnNumber,
     });
-    await ctx.db.patch("flt_fleets", attackerFleet._id, {
-      status: "engaged",
-      activeBattleId: battleId,
-    });
+    for (const participant of attackers) {
+      await ctx.db.patch("flt_fleets", participant.fleet._id, {
+        status: "engaged",
+        activeBattleId: battleId,
+      });
+    }
     await ctx.db.patch("flt_fleets", defenderFleet._id, {
       status: "engaged",
       activeBattleId: battleId,
@@ -1111,15 +1464,20 @@ async function startNewBattlesAndClaimUnopposedSystems(
       lastContestedTurn: params.turnNumber,
     });
 
-    const attackerMotherships = await loadIdleMothershipTargets(ctx, {
-      gameId: params.gameId,
-      systemId: system._id,
-      empireId: attacker.empireId,
-    });
+    let attackerMotherships = 0;
+    for (const participant of attackers) {
+      attackerMotherships += (
+        await loadIdleMothershipTargets(ctx, {
+          gameId: params.gameId,
+          systemId: system._id,
+          empireId: participant.empireId,
+        })
+      ).length;
+    }
     const defenderMotherships = await loadIdleMothershipTargets(ctx, {
       gameId: params.gameId,
       systemId: system._id,
-      empireId: defender.empireId,
+      empireId: defenderGroup.empireId,
     });
 
     await insertSimEvent(ctx, {
@@ -1130,31 +1488,32 @@ async function startNewBattlesAndClaimUnopposedSystems(
       actorId: attacker.empireId,
       targetType: "system",
       targetId: system._id,
-      summary: `${system.name}: ${attacker.ships} attacking ships engaged ${defender.ships} defenders`,
+      summary: `${system.name}: ${attackerShips} attacking ships engaged ${defender.ships} defenders`,
       payload: {
         battleId,
         systemId: system._id,
         attackerEmpireId: attacker.empireId,
-        defenderEmpireId: defender.empireId,
-        attackerShips: attacker.ships,
+        attackerEmpireIds: attackers.map((participant) => participant.empireId),
+        defenderEmpireId: defenderGroup.empireId,
+        attackerShips,
         defenderShips: defender.ships,
-        attackerMotherships: attackerMotherships.length,
+        attackerMotherships,
         defenderMotherships: defenderMotherships.length,
       },
     });
 
     const rawOpening = resolveOpeningStrike({
-      attackerShips: attacker.ships,
+      attackerShips,
       defenderShips: defender.ships,
       isDefenderHomeworld:
-        system.isHomeworld && system.ownerEmpireId === defender.empireId,
+        system.isHomeworld && system.ownerEmpireId === defenderGroup.empireId,
       multipliers: params.combatMultipliers,
     });
-    const adjusted = await applyMothershipPriorityToRound(ctx, {
+    const adjusted = await applyMultiAttackerMothershipPriorityToRound(ctx, {
       gameId: params.gameId,
       systemId: system._id,
-      attackerEmpireId: attacker.empireId,
-      defenderEmpireId: defender.empireId,
+      attackers,
+      defender,
       round: rawOpening,
     });
     const opening = adjusted.round;
@@ -1163,14 +1522,18 @@ async function startNewBattlesAndClaimUnopposedSystems(
       turnNumber: params.turnNumber,
       battleId,
       system,
-      attacker,
-      defender,
+      attacker: aggregateAttackerFleetGroup(attackers),
+      defender: participantFleetGroup(defender),
       rounds: [opening],
       mothershipEvents: adjusted.events,
     });
 
-    if (opening.attackerShipsAfter <= 0) {
-      await ctx.db.delete("flt_fleets", attackerFleet._id);
+    const survivingAttackers = await applyParticipantLosses(
+      ctx,
+      attackers,
+      adjusted.attackerLossesByFleetId,
+    );
+    if (survivingAttackers.length === 0) {
       await ctx.db.patch("flt_fleets", defenderFleet._id, { status: "idle" });
       const battle = await ctx.db.get("cmb_battles", battleId);
       if (battle !== null) {
@@ -1178,39 +1541,46 @@ async function startNewBattlesAndClaimUnopposedSystems(
           battle,
           system,
           eventTurn: params.turnNumber,
-          winnerEmpireId: defender.empireId,
+          winnerEmpireId: defenderGroup.empireId,
           winnerFleetId: defenderFleet._id,
           eventType: "system_held",
           summary: `${system.name} held after the opening defensive strike`,
           payload: {
-            winnerEmpireId: defender.empireId,
-            attackerEmpireId: attacker.empireId,
+            winnerEmpireId: defenderGroup.empireId,
+            attackerEmpireIds: attackers.map((participant) => participant.empireId),
             survivingShips: defender.ships,
           },
         });
       }
     } else {
-      await ctx.db.patch("flt_fleets", attackerFleet._id, {
-        strength: opening.attackerShipsAfter,
-      });
-      await ctx.db.patch("cmb_battles", battleId, {
-        phase: "awaitingAttackerDecision",
-        updatedTurn: params.turnNumber,
-      });
+      const battle = await ctx.db.get("cmb_battles", battleId);
+      if (battle !== null) {
+        await patchBattleParticipants(ctx, battle, {
+          attackers: survivingAttackers,
+          defender,
+          phase: "awaitingAttackerDecision",
+          roundNumber: 0,
+          updatedTurn: params.turnNumber,
+        });
+      }
+      const nextPrimary = primaryAttacker(survivingAttackers);
+      if (nextPrimary === undefined) continue;
       await insertSimEvent(ctx, {
         gameId: params.gameId,
         turnNumber: params.turnNumber,
-        eventType: "battle_awaiting_retreat_decision",
+        eventType: "battle_continues",
         actorType: "empire",
-        actorId: attacker.empireId,
+        actorId: nextPrimary.empireId,
         targetType: "system",
         targetId: system._id,
-        summary: `${system.name}: attackers survived opening fire and may retreat this turn`,
+        summary: `${system.name}: attackers survived opening fire; battle continues next turn`,
         payload: {
           battleId,
           systemId: system._id,
-          attackerFleetId: attackerFleet._id,
-          attackerEmpireId: attacker.empireId,
+          attackerFleetId: nextPrimary.fleet._id,
+          attackerFleetIds: survivingAttackers.map((participant) => participant.fleet._id),
+          attackerEmpireId: nextPrimary.empireId,
+          attackerEmpireIds: survivingAttackers.map((participant) => participant.empireId),
           attackerShips: opening.attackerShipsAfter,
         },
       });
@@ -1378,8 +1748,16 @@ export const beginTurnResolution = internalMutation({
       };
     }
 
-    const turnNumber = game.currentTurn;
     const now = Date.now();
+    if (game.turnPausedUntilMs !== undefined && now < game.turnPausedUntilMs) {
+      return {
+        started: false,
+        turnNumber: game.currentTurn,
+        alreadyResolving: false,
+      };
+    }
+
+    const turnNumber = game.currentTurn;
     const turn = await loadTurnRow(ctx, args.gameId, turnNumber);
     if (turn === null) {
       await ctx.db.insert("sim_turns", {
@@ -1606,6 +1984,11 @@ export const finalizeTurnResolution = internalMutation({
 
     const t = args.turnNumber;
     const nextTurn = t + 1;
+    await cleanupFleetOrdersForTurn(ctx, {
+      gameId: args.gameId,
+      turnNumber: t,
+    });
+
     await ctx.db.patch("sim_turns", phase.turn._id, {
       resolvedAt: Date.now(),
       state: "resolved",
@@ -1613,7 +1996,27 @@ export const finalizeTurnResolution = internalMutation({
       resolvingStartedAt: undefined,
     });
 
-    await ctx.db.patch("sim_games", args.gameId, { currentTurn: nextTurn });
+    const gameBeforeAdvance = await ctx.db.get("sim_games", args.gameId);
+    if (gameBeforeAdvance === null) {
+      throw new Error("Game not found.");
+    }
+    const scheduledRatio = gameBeforeAdvance.nextTurnAutoResolveDelayRatio;
+    const gamePatch: {
+      currentTurn: number;
+      nextTurnAutoResolveDelayRatio?: undefined;
+      turnPausedUntilMs?: number;
+    } = { currentTurn: nextTurn };
+    if (scheduledRatio !== undefined && Number.isFinite(scheduledRatio)) {
+      gamePatch.nextTurnAutoResolveDelayRatio = undefined;
+      const r = Math.max(0, Math.min(1, scheduledRatio));
+      if (r > 0) {
+        const delayMs = Math.round(r * Math.max(1, gameBeforeAdvance.turnDurationMs));
+        gamePatch.turnPausedUntilMs = Date.now() + delayMs;
+      } else {
+        gamePatch.turnPausedUntilMs = undefined;
+      }
+    }
+    await ctx.db.patch("sim_games", args.gameId, gamePatch);
 
     const existingNextTurn = await loadTurnRow(ctx, args.gameId, nextTurn);
     if (existingNextTurn === null) {

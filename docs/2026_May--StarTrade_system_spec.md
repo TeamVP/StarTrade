@@ -660,7 +660,7 @@ Then empire collapses.
 Suggested default for new independent treasury:
 
 ```ts
-localTreasury = max(50, baseProductivity * 10)
+localTreasury = 10000
 ```
 
 ## 19. Trader market model

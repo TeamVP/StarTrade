@@ -22,7 +22,7 @@ export type CollateralState = {
 export type DamageCategory = keyof CollateralState;
 
 export type BattleRoundResult = {
-  phase: "opening" | "full" | "retreat";
+  phase: "opening" | "full";
   roundNumber: number;
   attackerShipsBefore: number;
   defenderShipsBefore: number;
@@ -178,7 +178,7 @@ export type CombatMultipliers = {
   attackMult?: number;
   defendMult?: number;
   collateralDamageMult?: number;
-  /** Scales relative probability that collateral hits food stockpiles (default 1.0). */
+  /** Scales relative probability that collateral hits food stockpiles. */
   foodDamageMult?: number;
 };
 
@@ -208,39 +208,6 @@ export function resolveOpeningStrike(input: {
   return {
     phase: "opening",
     roundNumber: 0,
-    attackerShipsBefore,
-    defenderShipsBefore,
-    attackerLosses,
-    defenderLosses: 0,
-    attackerShipsAfter: attackerShipsBefore - attackerLosses,
-    defenderShipsAfter: defenderShipsBefore,
-  };
-}
-
-export function resolveRetreatStrike(input: {
-  attackerShips: number;
-  defenderShips: number;
-  isDefenderHomeworld: boolean;
-  roundNumber: number;
-  multipliers?: CombatMultipliers;
-}): BattleRoundResult {
-  const defendMult = input.multipliers?.defendMult ?? 1;
-  const attackerShipsBefore = Math.max(0, Math.floor(input.attackerShips));
-  const defenderShipsBefore = Math.max(0, Math.floor(input.defenderShips));
-  const attackerLosses = clampLosses(
-    Math.ceil(
-      defenderShipsBefore *
-        defenderMultiplier(input.isDefenderHomeworld) *
-        defendMult *
-        COMBAT_LOSS_FACTOR *
-        0.5,
-    ),
-    attackerShipsBefore,
-  );
-
-  return {
-    phase: "retreat",
-    roundNumber: input.roundNumber,
     attackerShipsBefore,
     defenderShipsBefore,
     attackerLosses,

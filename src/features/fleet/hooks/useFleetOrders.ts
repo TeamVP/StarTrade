@@ -6,9 +6,10 @@ type IssueOrderArgs = {
   gameId: Id<"sim_games">;
   fleetId: Id<"flt_fleets">;
   turnNumber?: number;
-  orderType: "move" | "hold" | "retreat";
+  orderType: "move" | "hold";
   targetSystemId: Id<"gal_systems"> | null;
   shipCount?: number;
+  standingRouteDispatchPct?: number;
 };
 
 export function useFleetOrders() {

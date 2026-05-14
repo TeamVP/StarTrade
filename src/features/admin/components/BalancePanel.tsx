@@ -18,11 +18,13 @@ type Settings = {
   combatAttackMult: number;
   combatDefendMult: number;
   collateralDamageMult: number;
+  shipProdEmphasisPower: number;
   traderMinActive: number;
   traderMaxActive: number;
   traderShipHirePerTurn: number;
   traderHireChancePct: number;
   traderDockingCost: number;
+  localTreasuryAddsPer100Cr: number;
   foodStockpileMaxPerPop: number;
   foodStockpileMinPerPop: number;
   foodStressFactor: number;
@@ -44,17 +46,19 @@ const DEFAULTS: Settings = {
   combatAttackMult: 1,
   combatDefendMult: 1,
   collateralDamageMult: 1,
+  shipProdEmphasisPower: 1.8,
   traderMinActive: 0,
   traderMaxActive: 3,
   traderShipHirePerTurn: 250,
   traderHireChancePct: 20,
   traderDockingCost: 100,
+  localTreasuryAddsPer100Cr: 50,
   foodStockpileMaxPerPop: 20.0,
-  foodStockpileMinPerPop: 1.5,
+  foodStockpileMinPerPop: 2.0,
   foodStressFactor: 1.0,
-  combatDefenderAdvantage: 2.0,
+  combatDefenderAdvantage: 3.0,
   foodBasePrice: 6,
-  combatFoodDamageMult: 1.0,
+  combatFoodDamageMult: 4.0,
   traderLimitsAutomated: true,
 };
 
@@ -116,11 +120,22 @@ const TRADER_SLIDERS: SliderSpec[] = [
     baseline: 100,
     formatValue: (v) => `${Math.round(v)} cr`,
     description:
-      "One-time fee paid when the trader's ship docks at the destination — adds to voyage cost threshold",
+      "One-time fee paid to the destination system when the trader's ship docks — adds to voyage cost threshold",
   },
 ];
 
 const ECONOMY_SLIDERS: SliderSpec[] = [
+  {
+    key: "localTreasuryAddsPer100Cr",
+    label: "Local Treasury Adds",
+    min: 0,
+    max: 100,
+    step: 1,
+    baseline: 50,
+    formatValue: (v) => `${Math.round(v)} cr / 100 cr`,
+    description:
+      "How much an owned destination system's local treasury may add per 100 cr still owed to traders after the empire treasury runs short. 50 cr means local funds cover half the remaining shortfall.",
+  },
   {
     key: "foodBasePrice",
     label: "Base Food Price",
@@ -149,7 +164,7 @@ const ECONOMY_SLIDERS: SliderSpec[] = [
     min: 0,
     max: 5,
     step: 0.1,
-    baseline: 1.5,
+    baseline: 2.0,
     formatValue: (v) => `${v.toFixed(1)}×`,
     description:
       "When stockFood falls below this multiple of the population-based one-turn demand, food stress activates — prices rise sharply until the minimum is restored",
@@ -165,6 +180,17 @@ const ECONOMY_SLIDERS: SliderSpec[] = [
     description:
       "Multiplier on price growth rate during food stress (below minimum stockpile). 1.0 = standard ~25%/turn increase; 2.0 = ~50%/turn until minimum is achieved",
   },
+  {
+    key: "shipProdEmphasisPower",
+    label: "Ship Production Focus Power",
+    min: 1,
+    max: 3,
+    step: 0.1,
+    baseline: 1.8,
+    formatValue: (v) => `p=${v.toFixed(1)}`,
+    description:
+      "Nonlinear boost for systems that specialize in ships. 1.0 = linear old behavior; 1.8 keeps ~33% emphasis near baseline and rewards higher ship focus; 3.0 is extreme specialization.",
+  },
 ];
 
 const COMBAT_SLIDERS: SliderSpec[] = [
@@ -174,10 +200,10 @@ const COMBAT_SLIDERS: SliderSpec[] = [
     min: 0,
     max: 5,
     step: 0.1,
-    baseline: 1.0,
+    baseline: 4.0,
     formatValue: (v) => `${v.toFixed(1)}×`,
     description:
-      "Scales the likelihood that each round of collateral damage targets food stockpiles. 0 = food is immune; 1.0 = default (~35% of hits); 3.0 = food takes the vast majority of collateral each turn — expect severe food crises in protracted sieges",
+      "Scales the likelihood that each round of collateral damage targets food stockpiles. 0 = food is immune; 4.0 = default and makes food stockpiles the dominant collateral target — expect severe food crises in protracted sieges",
   },
   {
     key: "combatDefenderAdvantage",
@@ -185,10 +211,10 @@ const COMBAT_SLIDERS: SliderSpec[] = [
     min: 0.5,
     max: 9,
     step: 0.1,
-    baseline: 2.0,
+    baseline: 3.0,
     formatValue: (v) => `${v.toFixed(1)}:1`,
     description:
-      "Defender-to-attacker combat ratio — 2:1 means defenders inflict twice as many losses per ship than attackers; range 0.5:1 (easier to attack) to 9:1 (near-impenetrable defences)",
+      "Defender-to-attacker combat ratio — 3:1 means defenders inflict three times as many losses per ship than attackers; range 0.5:1 (easier to attack) to 9:1 (near-impenetrable defences)",
   },
 ];
 
@@ -353,10 +379,12 @@ export function BalancePanel({ gameId }: { gameId: Id<"sim_games"> }) {
     "traderMaxActive",
     "traderShipHirePerTurn",
     "traderDockingCost",
+    "localTreasuryAddsPer100Cr",
     "foodBasePrice",
     "foodStockpileMaxPerPop",
     "foodStockpileMinPerPop",
     "foodStressFactor",
+    "shipProdEmphasisPower",
     "combatDefenderAdvantage",
     "combatFoodDamageMult",
   ];

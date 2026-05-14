@@ -18,6 +18,7 @@ type SeedNpcEmpiresArgs = {
   coordByKey: ReadonlyMap<string, { x: number; y: number }>;
   pausedNow: number;
   empireColorPrefLookup: Record<string, string>;
+  homeworldKeys?: readonly string[];
 };
 
 function chooseNpcHomeworldKeys(
@@ -75,11 +76,14 @@ export async function seedSelectedNpcEmpires(
     return 0;
   }
 
-  const homeKeys = chooseNpcHomeworldKeys(
-    npcPlayers.length,
-    args.systems,
-    args.coordByKey,
-  );
+  const homeKeys =
+    args.homeworldKeys ??
+    chooseNpcHomeworldKeys(npcPlayers.length, args.systems, args.coordByKey);
+  if (homeKeys.length < npcPlayers.length) {
+    throw new Error(
+      `NPC empire seed: expected ${npcPlayers.length} homeworlds, received ${homeKeys.length}.`,
+    );
+  }
 
   for (let i = 0; i < npcPlayers.length; i++) {
     const player = npcPlayers[i];

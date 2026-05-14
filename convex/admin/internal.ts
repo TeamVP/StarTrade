@@ -15,12 +15,21 @@ export const seedGameData = internalMutation({
     colorPrefsUserId: v.optional(v.id("users")),
   },
   handler: async (ctx, args) => {
-    const existingSystems = await ctx.db
+    const empiresAlready = await ctx.db
+      .query("emp_states")
+      .withIndex("by_gameId", (q) => q.eq("gameId", args.gameId))
+      .take(1);
+
+    if (empiresAlready.length > 0) {
+      throw new Error("Game is already seeded.");
+    }
+
+    const systemsPeek = await ctx.db
       .query("gal_systems")
       .withIndex("by_gameId", (q) => q.eq("gameId", args.gameId))
       .take(1);
 
-    if (existingSystems.length > 0) {
+    if (args.mapKey !== "v1-spiral" && systemsPeek.length > 0) {
       throw new Error("Game is already seeded.");
     }
 
@@ -40,6 +49,7 @@ export const seedGameData = internalMutation({
         ctx,
         args.gameId,
         args.mapKey,
+        game.seed,
         npcEmpireKeys,
         empireColorPrefLookup,
       );
@@ -50,9 +60,18 @@ export const seedGameData = internalMutation({
         ctx,
         args.gameId,
         args.mapKey,
+        game.seed,
         npcEmpireKeys,
         empireColorPrefLookup,
       );
+    }
+
+    if (args.mapKey === "v1-spiral") {
+      await ctx.scheduler.runAfter(0, internal.seed.spiralSeedAction.runFullSpiralSeed, {
+        gameId: args.gameId,
+        colorPrefsUserId: args.colorPrefsUserId,
+      });
+      return { systems: 200, empires: 0, mapKey: args.mapKey };
     }
 
     const mapScale = args.mapKey === "v1-large" ? 2 : 1;

@@ -29,7 +29,7 @@ type MothershipDamageReplay = {
 
 type BattleRoundReplay = {
   turnNumber: number;
-  phase: "opening" | "full" | "retreat";
+  phase: "opening" | "full";
   roundNumber: number;
   attackerShipsBefore: number;
   defenderShipsBefore: number;
@@ -48,13 +48,25 @@ function finiteWholeNumber(value: unknown): number | null {
 }
 
 function roundPhase(value: unknown): BattleRoundReplay["phase"] | null {
-  return value === "opening" || value === "full" || value === "retreat"
+  return value === "opening" || value === "full"
     ? value
     : null;
 }
 
 function sideRole(value: unknown): MothershipDamageReplay["side"] | null {
   return value === "attacker" || value === "defender" ? value : null;
+}
+
+function battleAttackerFleetIds(battle: Doc<"cmb_battles">): Id<"flt_fleets">[] {
+  return battle.attackerFleetIds ?? [battle.attackerFleetId];
+}
+
+function battleDefenderFleetIds(battle: Doc<"cmb_battles">): Id<"flt_fleets">[] {
+  return battle.defenderFleetIds ?? [battle.defenderFleetId];
+}
+
+function uniqueFleetIds(ids: Id<"flt_fleets">[]): Id<"flt_fleets">[] {
+  return Array.from(new Set(ids));
 }
 
 function mothershipEventsFromPayload(value: unknown): MothershipDamageReplay[] {
@@ -224,6 +236,33 @@ async function countIdleMotherships(
   return ships.filter((ship) => ship.empireId === empireId).length;
 }
 
+async function countIdleMothershipsForEmpires(
+  ctx: QueryCtx,
+  battle: Doc<"cmb_battles">,
+  empireIds: Id<"emp_states">[],
+): Promise<number> {
+  let total = 0;
+  for (const empireId of Array.from(new Set(empireIds))) {
+    total += await countIdleMotherships(ctx, battle, empireId);
+  }
+  return total;
+}
+
+async function sumFleetStrengths(
+  ctx: QueryCtx,
+  fleetIds: Id<"flt_fleets">[],
+): Promise<{ ships: number; empireIds: Id<"emp_states">[] }> {
+  let ships = 0;
+  const empireIds: Id<"emp_states">[] = [];
+  for (const fleetId of uniqueFleetIds(fleetIds)) {
+    const fleet = await ctx.db.get("flt_fleets", fleetId);
+    if (fleet === null) continue;
+    ships += Math.max(0, Math.floor(fleet.strength));
+    empireIds.push(fleet.empireId);
+  }
+  return { ships, empireIds };
+}
+
 async function loadLatestBattleRoundReplay(
   ctx: QueryCtx,
   battle: Doc<"cmb_battles">,
@@ -261,18 +300,18 @@ export const listActiveBattles = query({
 
     const result: ActiveBattleWithShipCounts[] = [];
     for (const battle of battles) {
-      const attackerFleet: Doc<"flt_fleets"> | null = await ctx.db.get(
-        "flt_fleets",
-        battle.attackerFleetId,
-      );
-      const defenderFleet: Doc<"flt_fleets"> | null = await ctx.db.get(
-        "flt_fleets",
-        battle.defenderFleetId,
-      );
       const startCounts = await loadBattleStartCounts(ctx, battle);
       const latestRound = await loadLatestBattleRoundReplay(ctx, battle);
-      const attackerShips = attackerFleet?.strength ?? 0;
-      const defenderShips = defenderFleet?.strength ?? 0;
+      const attackerCounts = await sumFleetStrengths(
+        ctx,
+        battleAttackerFleetIds(battle),
+      );
+      const defenderCounts = await sumFleetStrengths(
+        ctx,
+        battleDefenderFleetIds(battle),
+      );
+      const attackerShips = attackerCounts.ships;
+      const defenderShips = defenderCounts.ships;
 
       result.push({
         ...battle,
@@ -280,8 +319,16 @@ export const listActiveBattles = query({
         defenderShips,
         attackerShipsAtStart: startCounts.attackerShipsAtStart ?? attackerShips,
         defenderShipsAtStart: startCounts.defenderShipsAtStart ?? defenderShips,
-        attackerMotherships: await countIdleMotherships(ctx, battle, battle.attackerEmpireId),
-        defenderMotherships: await countIdleMotherships(ctx, battle, battle.defenderEmpireId),
+        attackerMotherships: await countIdleMothershipsForEmpires(
+          ctx,
+          battle,
+          attackerCounts.empireIds,
+        ),
+        defenderMotherships: await countIdleMothershipsForEmpires(
+          ctx,
+          battle,
+          defenderCounts.empireIds,
+        ),
         latestRound,
       });
     }

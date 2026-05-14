@@ -6,18 +6,20 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { useGalaxyData } from "@/features/galaxy/hooks/useGalaxyData";
 import { gameAllowsPlayerOrders } from "@/features/sim/gameStatus";
+import { normalizeFleetDetachmentDisplayName } from "@/lib/fleetDisplayName";
 
-export function FleetScreen() {
+export function FleetScreen(props: { playerEmpireId?: Id<"emp_states"> | null }) {
+  const playerEmpireId = props.playerEmpireId ?? null;
   const { activeGame, links } = useGalaxyData();
   const ordersAllowed = gameAllowsPlayerOrders(activeGame?.status);
   const gameId = activeGame?._id;
   const fleetsQuery = useQuery(
     api.flt.queries.listFleetsForGame,
-    gameId ? { gameId, limit: 200 } : "skip",
+    gameId ? { gameId, limit: 256 } : "skip",
   );
   const systemsQuery = useQuery(
     api.gal.queries.listSystems,
-    gameId ? { gameId, limit: 200 } : "skip",
+    gameId ? { gameId, limit: 256 } : "skip",
   );
   const myRolesQuery = useQuery(
     api.usr.queries.listMyRoles,
@@ -41,11 +43,21 @@ export function FleetScreen() {
   const [busy, setBusy] = useState(false);
 
   const myEmpireId = useMemo(() => {
-    const role = myRoles[0];
-    if (role === undefined || role.role !== "empire") return null;
+    if (playerEmpireId !== null) return playerEmpireId;
+    const role = myRoles.find((r) => r.role === "empire");
+    if (role === undefined || role.empireId === null) return null;
     return role.empireId;
-  }, [myRoles]);
+  }, [myRoles, playerEmpireId]);
 
+  const fleetsVisible = useMemo(() => {
+    if (myEmpireId === null) return fleets;
+    return fleets.filter((f) => f.empireId === myEmpireId);
+  }, [fleets, myEmpireId]);
+
+  const garrisonRoutesVisible = useMemo(() => {
+    if (myEmpireId === null) return garrisonRoutes;
+    return garrisonRoutes.filter((r) => r.empireId === myEmpireId);
+  }, [garrisonRoutes, myEmpireId]);
   const ownedSystems = useMemo(() => {
     if (myEmpireId === null) return [];
     return systems.filter((s) => s.ownerEmpireId === myEmpireId);
@@ -60,7 +72,7 @@ export function FleetScreen() {
   function handleRouteOriginChange(nextId: Id<"gal_systems"> | "") {
     setRouteOriginId(nextId);
     if (nextId === "") return;
-    const hit = garrisonRoutes.find((r) => r.originSystemId === nextId);
+    const hit = garrisonRoutesVisible.find((r) => r.originSystemId === nextId);
     if (hit !== undefined) {
       setRouteTargetId(hit.destinationSystemId);
       setRoutePct(hit.dispatchPct);
@@ -82,7 +94,13 @@ export function FleetScreen() {
     return ids;
   }, [links, routeOriginId]);
 
-  const routeTargets = systems.filter((s) => routeNeighborIds.has(s._id));
+  const routeOrigin = routeOriginId === "" ? null : systems.find((s) => s._id === routeOriginId);
+  const routeTargets = systems.filter(
+    (s) =>
+      routeNeighborIds.has(s._id) &&
+      routeOrigin?.ownerEmpireId !== null &&
+      routeOrigin?.ownerEmpireId !== undefined,
+  );
 
   async function onSaveRoute(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -126,7 +144,7 @@ export function FleetScreen() {
 
     setBusy(true);
     try {
-      const selected = fleets.find((f) => f._id === fleetId);
+      const selected = fleetsVisible.find((f) => f._id === fleetId);
       if (selected === undefined) return;
       const trimmed = shipCountInput.trim();
       let partialShipCount: number | undefined;
@@ -155,7 +173,7 @@ export function FleetScreen() {
     }
   }
 
-  const selectedFleet = fleets.find((f) => f._id === fleetId);
+  const selectedFleet = fleetsVisible.find((f) => f._id === fleetId);
 
   function syncShipPlaceholder() {
     if (selectedFleet === undefined) {
@@ -200,12 +218,12 @@ export function FleetScreen() {
                 setFleetId(event.target.value as Id<"flt_fleets">);
                 setShipCountInput("");
               }}
-              disabled={!gameId || fleets.length === 0}
+              disabled={!gameId || fleetsVisible.length === 0}
             >
               <option value="">Select fleet</option>
-              {fleets.map((fleet) => (
+              {fleetsVisible.map((fleet) => (
                 <option key={fleet._id} value={fleet._id}>
-                  {fleet.name} ({fleet.status}, origin #{fleet.originSystemId.slice(-4)})
+                  {normalizeFleetDetachmentDisplayName(fleet.name)} ({fleet.status}, origin #{fleet.originSystemId.slice(-4)})
                 </option>
               ))}
             </select>
@@ -367,15 +385,18 @@ export function FleetScreen() {
                 </Button>
               </div>
             </form>
-            {garrisonRoutes.length > 0 ? (
+            {garrisonRoutesVisible.length > 0 ? (
               <ul className="mt-4 space-y-1 border-t border-st-border pt-3 text-xs text-st-muted">
-                {garrisonRoutes.map((r) => {
+                {garrisonRoutesVisible.map((r) => {
                   const o = systems.find((s) => s._id === r.originSystemId);
                   const d = systems.find((s) => s._id === r.destinationSystemId);
                   return (
                     <li key={r._id}>
                       {o?.name ?? "?"} → {d?.name ?? "?"} · {r.dispatchPct}% ·{" "}
                       {r.enabled ? "on" : "paused"}
+                      {r.managedByStrategy === true ? (
+                        <span className="text-slate-400"> · automation</span>
+                      ) : null}
                     </li>
                   );
                 })}
@@ -390,9 +411,9 @@ export function FleetScreen() {
           Fleet status
         </h3>
         <ul className="mt-2 space-y-2 text-sm">
-          {fleets.map((fleet) => (
+          {fleetsVisible.map((fleet) => (
             <li key={fleet._id} className="flex flex-wrap justify-between gap-2">
-              <span>{fleet.name}</span>
+              <span>{normalizeFleetDetachmentDisplayName(fleet.name)}</span>
               <span className="text-st-muted">
                 {fleet.strength} ships · {fleet.status}
                 {fleet.status === "enRoute" && fleet.etaTurn !== null
@@ -402,7 +423,7 @@ export function FleetScreen() {
             </li>
           ))}
         </ul>
-        {fleets.length === 0 ? (
+        {fleetsVisible.length === 0 ? (
           <p className="mt-2 text-xs text-st-muted">Seed a game to spawn fleets.</p>
         ) : null}
       </Card>

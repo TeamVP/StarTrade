@@ -105,6 +105,7 @@ export function AdminPanel() {
           >
             <option value="v1-twenty">Small game - 20 stars</option>
             <option value="v1-medium">Medium game - 120 stars</option>
+            <option value="v1-spiral">Large game - 200 stars (sparse spirals)</option>
           </select>
         </label>
         <fieldset className="rounded border border-st-border bg-st-bg/40 p-3">

@@ -13,8 +13,7 @@ const CATEGORY_EVENT_TYPES: Record<Exclude<Category, "all">, string[]> = {
   combat: [
     "battle_started",
     "battle_round_resolved",
-    "battle_awaiting_retreat_decision",
-    "battle_retreat_succeeded",
+    "battle_continues",
     "collateral_damage_applied",
     "system_conquered",
     "system_held",
@@ -73,8 +72,7 @@ const CATEGORY_STYLE: Record<Exclude<Category, "all">, StyleConfig> = {
 const EVENT_TYPE_LABEL: Record<string, string> = {
   battle_started:                    "Battle Started",
   battle_round_resolved:             "Battle Round",
-  battle_awaiting_retreat_decision:  "Awaiting Retreat Decision",
-  battle_retreat_succeeded:          "Retreat",
+  battle_continues:                  "Battle Continues",
   collateral_damage_applied:         "Collateral Damage",
   system_conquered:                  "System Conquered",
   system_held:                       "System Held",
@@ -213,7 +211,8 @@ function TurnDivider({ turn }: { turn: number }) {
 
 const PAGE_SIZE = 40;
 
-export function HistoryScreen() {
+export function HistoryScreen(props: { hideGamePicker?: boolean }) {
+  const hideGamePicker = props.hideGamePicker === true;
   const { games, activeGame, setSelectedGameId } = useActiveGame();
   const [category, setCategory] = useState<Category>("all");
 
@@ -274,6 +273,7 @@ export function HistoryScreen() {
   return (
     <div className="space-y-4">
       {/* Game selector */}
+      {!hideGamePicker ? (
       <Card>
         <div className="flex flex-wrap items-center gap-3">
           <h2 className="text-sm font-semibold uppercase tracking-wide text-st-muted shrink-0">
@@ -302,11 +302,14 @@ export function HistoryScreen() {
           )}
         </div>
       </Card>
+      ) : null}
 
       {activeGame == null ? (
         <Card>
           <p className="text-sm text-st-muted text-center py-8">
-            Select a game above to view its event history.
+            {hideGamePicker
+              ? "No active game is selected. Choose a game from the main StarTrade Games page, then return to this player view."
+              : "Select a game above to view its event history."}
           </p>
         </Card>
       ) : (

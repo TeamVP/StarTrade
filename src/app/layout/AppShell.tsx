@@ -4,15 +4,36 @@ type AppShellProps = {
   children: ReactNode;
   nav?: ReactNode;
   headerTrailing?: ReactNode;
+  /** Classes for the main content wrapper (width, padding). */
+  mainClassName?: string;
+  /** When false, the default “StarTrade V1” product title in the header is hidden (player / embedded layouts). */
+  showProductTitle?: boolean;
+  /** Override inner header flex container (width constraints). */
+  headerContentClassName?: string;
+  /** Classes for `<header>` (border, padding). Overrides default padding when set. */
+  headerClassName?: string;
+  /** Classes for the outer page wrapper (e.g. `min-h-dvh flex flex-col` for fill-height layouts). */
+  rootClassName?: string;
 };
 
-export function AppShell({ children, nav, headerTrailing }: AppShellProps) {
+export function AppShell({
+  children,
+  nav,
+  headerTrailing,
+  mainClassName = "mx-auto w-full max-w-7xl p-4",
+  showProductTitle = true,
+  headerContentClassName = "mx-auto flex max-w-7xl flex-col gap-4 sm:flex-row sm:items-center sm:justify-between",
+  headerClassName = "border-b border-st-border px-6 py-4",
+  rootClassName = "min-h-screen bg-st-bg text-st-fg",
+}: AppShellProps) {
   return (
-    <div className="min-h-screen bg-st-bg text-st-fg">
-      <header className="border-b border-st-border px-6 py-4">
-        <div className="mx-auto flex max-w-7xl flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+    <div className={rootClassName}>
+      <header className={headerClassName}>
+        <div className={headerContentClassName}>
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-8">
-            <h1 className="text-xl font-semibold tracking-wide">StarTrade V1</h1>
+            {showProductTitle ? (
+              <h1 className="text-xl font-semibold tracking-wide">StarTrade V1</h1>
+            ) : null}
             {nav}
           </div>
           {headerTrailing ? (
@@ -20,7 +41,7 @@ export function AppShell({ children, nav, headerTrailing }: AppShellProps) {
           ) : null}
         </div>
       </header>
-      <main className="mx-auto w-full max-w-7xl p-4">{children}</main>
+      <main className={mainClassName}>{children}</main>
     </div>
   );
 }

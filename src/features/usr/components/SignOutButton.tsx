@@ -12,7 +12,7 @@ export function SignOutButton() {
     <Button
       type="button"
       variant="secondary"
-      className="px-3 py-1 text-xs"
+      className="px-3 py-px text-xs"
       onClick={() => void signOut()}
     >
       Sign out

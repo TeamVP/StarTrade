@@ -27,10 +27,10 @@ import {
  * (multi-hop allowed). Weak profitability and missing routes return `{ ok: false, ... }`
  * instead of throwing so the UI can show inline feedback.
  *
- * For food and weapons, cargo is removed from the origin system stockpile and the seller
- * (owning empire treasury, or `localTreasury` when unaligned) receives the purchase credits,
- * matching automated background trade settlement. Heavy metals still spawn without an origin
- * stock ledger until per-system inventory exists.
+ * For food and weapons, cargo is removed from the origin system stockpile and the
+ * origin system receives the purchase credits in `localTreasury`, matching automated
+ * background trade settlement. Heavy metals still spawn without an origin stock ledger
+ * until per-system inventory exists.
  *
  * Requires the caller to be a game admin.
  */
@@ -128,24 +128,13 @@ export const spawnTrader = mutation({
         foodDemand,
         settings,
       });
-      if (origin.ownerEmpireId !== null) {
-        const empire = await ctx.db.get("emp_states", origin.ownerEmpireId);
-        if (empire !== null && purchaseCredits > 0) {
-          await ctx.db.patch("emp_states", empire._id, {
-            treasury: empire.treasury + purchaseCredits,
-          });
-        }
-        await ctx.db.patch("gal_systems", origin._id, {
-          stockFood: newStock,
-          foodPrice: newFoodPrice,
-        });
-      } else {
-        await ctx.db.patch("gal_systems", origin._id, {
-          stockFood: newStock,
-          foodPrice: newFoodPrice,
-          localTreasury: Math.max(0, (origin.localTreasury ?? 0) + purchaseCredits),
-        });
-      }
+      await ctx.db.patch("gal_systems", origin._id, {
+        stockFood: newStock,
+        foodPrice: newFoodPrice,
+        ...(purchaseCredits > 0
+          ? { localTreasury: Math.max(0, (origin.localTreasury ?? 0) + purchaseCredits) }
+          : {}),
+      });
     } else if (args.commodity === "weapons") {
       const stock0 = Math.max(0, origin.stockWeapons ?? 0);
       if (stock0 < args.cargoUnits) {
@@ -156,20 +145,16 @@ export const spawnTrader = mutation({
         };
       }
       const newStock = stock0 - args.cargoUnits;
-      if (origin.ownerEmpireId !== null) {
-        const empire = await ctx.db.get("emp_states", origin.ownerEmpireId);
-        if (empire !== null && purchaseCredits > 0) {
-          await ctx.db.patch("emp_states", empire._id, {
-            treasury: empire.treasury + purchaseCredits,
-          });
-        }
-        await ctx.db.patch("gal_systems", origin._id, { stockWeapons: newStock });
-      } else {
-        await ctx.db.patch("gal_systems", origin._id, {
-          stockWeapons: newStock,
-          localTreasury: Math.max(0, (origin.localTreasury ?? 0) + purchaseCredits),
-        });
-      }
+      await ctx.db.patch("gal_systems", origin._id, {
+        stockWeapons: newStock,
+        ...(purchaseCredits > 0
+          ? { localTreasury: Math.max(0, (origin.localTreasury ?? 0) + purchaseCredits) }
+          : {}),
+      });
+    } else if (purchaseCredits > 0) {
+      await ctx.db.patch("gal_systems", origin._id, {
+        localTreasury: Math.max(0, (origin.localTreasury ?? 0) + purchaseCredits),
+      });
     }
 
     const currentTurn = game.currentTurn;

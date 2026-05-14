@@ -27,13 +27,13 @@ function damagePenaltyMultiplier(
 
 /**
  * Max military ships/turn this homeworld could produce if 100% effort went to ships
- * (same formula as {@link applyTurnEconomy} `shipsProduced` with w.ships = 1).
+ * (same formula as {@link applyTurnEconomy} `shipsProduced` with 100% ship emphasis).
  */
 export function estimateHomeworldMaxShipsPerTurn(params: {
   system: Doc<"gal_systems">;
   holding: Doc<"emp_system_holdings"> | undefined;
   empireTaxRate: number;
-  settings: Pick<GameSettings, "shipProdMult">;
+  settings: Pick<GameSettings, "shipProdMult" | "shipProdEmphasisPower">;
 }): number {
   const { system, holding, empireTaxRate, settings } = params;
   const r = clamp(empireTaxRate, 0, MAX_EMPIRE_TAX_RATE);
@@ -60,6 +60,10 @@ export function estimateHomeworldMaxShipsPerTurn(params: {
   );
 
   const wShips = 1;
+  const referenceShare = 1 / 3;
+  const shipPower = clamp(settings.shipProdEmphasisPower, 1, 3);
+  const shipProductionWeight =
+    Math.pow(wShips, shipPower) / Math.pow(referenceShare, shipPower - 1);
   const weaponsNeed = Math.max(1, Math.floor(simPop * 0.1));
   const weaponsCoverage = Math.min(1, stockWeapons / weaponsNeed);
   const weaponsBonusMult = 1 + MAX_WEAPONS_BONUS * weaponsCoverage * wShips;
@@ -77,7 +81,10 @@ export function estimateHomeworldMaxShipsPerTurn(params: {
   return Math.max(
     0,
     Math.floor(
-      effectiveProductivity * wShips * weaponsBonusMult * settings.shipProdMult,
+      effectiveProductivity *
+        shipProductionWeight *
+        weaponsBonusMult *
+        settings.shipProdMult,
     ),
   );
 }

@@ -25,6 +25,12 @@ export default defineSchema({
      * Status stays `running`; manual “Step turn” still works. Use to isolate a broken sim.
      */
     simCronTurnsDisabled: v.optional(v.boolean()),
+    /**
+     * If set (0–1), when the current turn finishes resolving the next open turn will set
+     * `turnPausedUntilMs` so resolution cannot start until this fraction of `turnDurationMs`
+     * has elapsed (player-chosen “execute after this point in the following turn’s window”).
+     */
+    nextTurnAutoResolveDelayRatio: v.optional(v.number()),
     /** Selected NPC empire roster keys to seed when the map is created. */
     npcEmpireKeys: v.optional(v.array(v.string())),
   }).index("by_status", ["status"]),
@@ -78,13 +84,17 @@ export default defineSchema({
     defenderEmpireId: v.id("emp_states"),
     attackerFleetId: v.id("flt_fleets"),
     defenderFleetId: v.id("flt_fleets"),
+    /** Multi-empire battles keep one merged fleet per attacking empire. */
+    attackerFleetIds: v.optional(v.array(v.id("flt_fleets"))),
+    /** Reserved for symmetry/future-proofing; currently a battle has one defending empire. */
+    defenderFleetIds: v.optional(v.array(v.id("flt_fleets"))),
     originalOwnerEmpireId: v.union(v.id("emp_states"), v.null()),
-    retreatTargetSystemId: v.id("gal_systems"),
+    /** Deprecated: kept optional for old battle rows created before retreat was removed. */
+    retreatTargetSystemId: v.optional(v.id("gal_systems")),
     status: v.union(v.literal("active"), v.literal("resolved")),
     phase: v.union(
       v.literal("opening"),
       v.literal("awaitingAttackerDecision"),
-      v.literal("retreating"),
       v.literal("resolved"),
     ),
     roundNumber: v.number(),
@@ -162,7 +172,12 @@ export default defineSchema({
     underAttack: v.optional(v.boolean()),
     /** Turn number when combat last occurred here; blocks tax that same turn (spec §12.2). */
     lastContestedTurn: v.optional(v.number()),
-    /** Independent / breakaway treasury after empire collapse. */
+    /**
+     * Per-system treasury. Systems collect local tax share, docking fees, and origin-sale
+     * commodity revenue. Independent systems use it as their only buyer treasury; owned
+     * systems can spend it as an emergency top-up for imports when the empire treasury
+     * cannot cover the full invoice.
+     */
     localTreasury: v.optional(v.number()),
     /**
      * When set and `currentTurn < traderBoycottUntilTurn`, background NPC traders refuse to
@@ -182,6 +197,12 @@ export default defineSchema({
      * (routing + payout). Paid from empire treasury or localTreasury when cargo arrives.
      */
     foodImportSubsidyPerUnit: v.optional(v.number()),
+    /** Consecutive economy turns where this system could not meet local food demand. */
+    foodShortageTurns: v.optional(v.number()),
+    /** Most recent turn where this system could not meet local food demand. */
+    lastFoodShortageTurn: v.optional(v.number()),
+    /** Length of the most recent food-shortage streak. */
+    lastFoodShortageTurns: v.optional(v.number()),
     /** Accumulated ship-production points toward a colony ship (homeworld build project). */
     colonyShipBuildProgress: v.optional(v.number()),
     /** Target ship points to complete one colony ship (set when build starts). */
@@ -265,6 +286,59 @@ export default defineSchema({
      * deliver or spawn voyages to systems owned by this empire (they previously could not pay).
      */
     traderBoycottUntilTurn: v.optional(v.number()),
+    /**
+     * Optional manual overrides for the five strategic posture sliders.
+     * Omitted keys use defaults derived from `strategyJson` each turn.
+     */
+    strategicSliderOverrides: v.optional(
+      v.object({
+        militaryAggression: v.optional(
+          v.union(
+            v.literal("lowest"),
+            v.literal("low"),
+            v.literal("medium"),
+            v.literal("high"),
+            v.literal("highest"),
+          ),
+        ),
+        expansion: v.optional(
+          v.union(
+            v.literal("lowest"),
+            v.literal("low"),
+            v.literal("medium"),
+            v.literal("high"),
+            v.literal("highest"),
+          ),
+        ),
+        defensivePosture: v.optional(
+          v.union(
+            v.literal("lowest"),
+            v.literal("low"),
+            v.literal("medium"),
+            v.literal("high"),
+            v.literal("highest"),
+          ),
+        ),
+        priorityOperations: v.optional(
+          v.union(
+            v.literal("lowest"),
+            v.literal("low"),
+            v.literal("medium"),
+            v.literal("high"),
+            v.literal("highest"),
+          ),
+        ),
+        economicMobilization: v.optional(
+          v.union(
+            v.literal("lowest"),
+            v.literal("low"),
+            v.literal("medium"),
+            v.literal("high"),
+            v.literal("highest"),
+          ),
+        ),
+      }),
+    ),
   })
     .index("by_gameId", ["gameId"])
     .index("by_gameId_and_empireKey", ["gameId", "empireKey"]),
@@ -281,6 +355,17 @@ export default defineSchema({
     .index("by_gameId_and_empireId", ["gameId", "empireId"])
     .index("by_gameId_and_systemId", ["gameId", "systemId"]),
 
+  emp_priority_stars: defineTable({
+    gameId: v.id("sim_games"),
+    empireId: v.id("emp_states"),
+    systemId: v.id("gal_systems"),
+    createdByUserId: v.id("users"),
+    createdAt: v.number(),
+  })
+    .index("by_gameId", ["gameId"])
+    .index("by_gameId_and_empireId", ["gameId", "empireId"])
+    .index("by_gameId_and_empireId_and_systemId", ["gameId", "empireId", "systemId"]),
+
   flt_fleets: defineTable({
     gameId: v.id("sim_games"),
     empireId: v.id("emp_states"),
@@ -296,7 +381,7 @@ export default defineSchema({
     dispatchedTurn: v.optional(v.number()),
     /** Hyperspace hops for current voyage; cleared when idle. */
     travelTurnsTotal: v.optional(v.number()),
-    /** System to fall back to if this fleet retreats from a battle after arrival. */
+    /** Deprecated: old fallback target from the removed retreat order flow. */
     retreatSystemId: v.optional(v.id("gal_systems")),
     activeBattleId: v.optional(v.id("cmb_battles")),
   })
@@ -315,11 +400,13 @@ export default defineSchema({
     fleetId: v.id("flt_fleets"),
     issuedByUserId: v.id("users"),
     turnNumber: v.number(),
-    orderType: v.union(v.literal("move"), v.literal("hold"), v.literal("retreat")),
+    orderType: v.union(v.literal("move"), v.literal("hold")),
     targetSystemId: v.union(v.id("gal_systems"), v.null()),
     /** Ships to send on a move order; omit to move the entire fleet. */
     shipCount: v.optional(v.number()),
     issuedAt: v.number(),
+    /** Set once movement has consumed this order; kept through later automation phases as a manual lock. */
+    movementAppliedAt: v.optional(v.number()),
   })
     .index("by_gameId_and_turnNumber", ["gameId", "turnNumber"])
     .index("by_gameId_and_fleetId", ["gameId", "fleetId"]),
@@ -333,10 +420,18 @@ export default defineSchema({
     /** 1–100: share of combined idle garrison at origin to send toward destination. */
     dispatchPct: v.number(),
     enabled: v.boolean(),
-    /** True when this standing order is maintained from an empire strategy brain. */
+    /** When true, empire strategy maintains this route; false/omitted = player standing order. */
     managedByStrategy: v.optional(v.boolean()),
+    /** Consecutive route-application turns where the origin was not owned or the destination was missing. */
+    ownershipInvalidTurns: v.optional(v.number()),
     strategyPurpose: v.optional(
       v.union(
+        v.literal("emergencyReinforce"),
+        v.literal("priorityOwnedCorridor"),
+        v.literal("priorityNeutralTarget"),
+        v.literal("priorityEnemyStaging"),
+        v.literal("priorityEnemyAttack"),
+        v.literal("priorityApproach"),
         v.literal("earlyRush"),
         v.literal("borderReinforce"),
         v.literal("enemyAttack"),
@@ -349,7 +444,7 @@ export default defineSchema({
     .index("by_gameId_and_originSystemId", ["gameId", "originSystemId"]),
 
   /**
-   * Per-game god-mode multipliers set by admins. One row per game; missing row = all defaults (1.0).
+   * Per-game god-mode/balance settings set by admins. One row per game; missing row = current defaults.
    * Applied every turn in the economy, combat, and background-trade engines.
    */
   sim_game_settings: defineTable({
@@ -379,6 +474,11 @@ export default defineSchema({
     combatDefendMult: v.number(),
     /** Collateral damage per battle round scaling (0.0–5.0, default 1.0). */
     collateralDamageMult: v.number(),
+    /**
+     * Power curve applied to local ship-emphasis share. 1.0 = linear old behavior;
+     * 1.8 = default specialization bonus; 3.0 = extreme specialization.
+     */
+    shipProdEmphasisPower: v.optional(v.number()),
 
     // ─── Balance page settings ────────────────────────────────────────────────
     /** Minimum background NPC traders active at once (0–8, default 0). */
@@ -392,13 +492,18 @@ export default defineSchema({
     /** One-time docking fee on trader arrival in credits (default 100). */
     traderDockingCost: v.optional(v.number()),
     /**
+     * For owned destinations, credits per 100 cr of unpaid trader invoice that the
+     * system local treasury may add after the empire treasury runs short (default 50).
+     */
+    localTreasuryAddsPer100Cr: v.optional(v.number()),
+    /**
      * Food stockpile threshold above which prices fall as a multiple of demand.
      * e.g. 20.0 = when stock > 20× one-turn demand the market is in oversupply (default 20.0).
      */
     foodStockpileMaxPerPop: v.optional(v.number()),
     /**
      * Food stockpile threshold below which food stress activates, as a multiple of demand.
-     * e.g. 1.5 = when stock < 1.5× one-turn demand, prices rise sharply (default 1.5).
+     * e.g. 2.0 = when stock < 2× one-turn demand, prices rise sharply (default 2.0).
      */
     foodStockpileMinPerPop: v.optional(v.number()),
     /**
@@ -408,12 +513,12 @@ export default defineSchema({
     foodStressFactor: v.optional(v.number()),
     /**
      * Defender advantage ratio (replaces DEFENDER_BASE_MULTIPLIER).
-     * 2.0 = default 2:1 advantage; range 0.5–9.0.
+     * 3.0 = default 3:1 advantage; range 0.5–9.0.
      */
     combatDefenderAdvantage: v.optional(v.number()),
     /**
      * Multiplier on the relative probability that collateral damage lands on food stockpiles.
-     * 1.0 = default (35% of collateral hits); 0 = food is immune; 3.0 = food takes most hits.
+     * 4.0 = default and food takes most hits; 0 = food is immune.
      */
     combatFoodDamageMult: v.optional(v.number()),
     /**
@@ -514,8 +619,8 @@ export default defineSchema({
     /** Docking fee paid on arrival (from Balance settings at delivery time). */
     deliveryDockingFee: v.optional(v.number()),
     /**
-     * Food: per-unit market clearing price at destination after **all** same-turn food
-     * to this system is applied (batch settlement).
+     * Food: per-unit market clearing price at destination when the cargo is sold
+     * (before delivered food updates the next visible local price).
      */
     deliveryClearingUnitPrice: v.optional(v.number()),
     /** Food: per-unit price if the buyer paid subsidy + clearing in full (invoice basis). */

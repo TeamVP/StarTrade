@@ -1,28 +1,29 @@
 import { useMemo, useState } from "react";
-import { useMutation, useQuery } from "convex/react";
+import { useQuery } from "convex/react";
 import { api } from "../../../../convex/_generated/api";
 import type { Id } from "../../../../convex/_generated/dataModel";
-import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { useGalaxyData } from "@/features/galaxy/hooks/useGalaxyData";
-import { gameAllowsPlayerOrders } from "@/features/sim/gameStatus";
 
 const COMBAT_EVENT_TYPES = new Set([
   "battle_started",
   "battle_round_resolved",
-  "battle_awaiting_retreat_decision",
-  "battle_retreat_succeeded",
+  "battle_continues",
   "collateral_damage_applied",
   "system_claimed",
   "system_conquered",
   "system_held",
 ]);
 
-export function CombatScreen() {
+export function CombatScreen(props: {
+  playerPerspective?: { empireId: Id<"emp_states">; label: string } | null;
+}) {
+  const playerPerspective = props.playerPerspective ?? null;
   const { activeGame, systems, empires } = useGalaxyData();
-  const ordersAllowed = gameAllowsPlayerOrders(activeGame?.status);
-  const issueFleetOrder = useMutation(api.flt.mutations.issueFleetOrder);
-  const [selectedPerspectiveId, setSelectedPerspectiveId] = useState<string>("all");
+  const [selectedPerspectiveId, setSelectedPerspectiveId] = useState<string>(
+    () =>
+      playerPerspective !== null ? `empire:${playerPerspective.empireId}` : "all",
+  );
   const recentEvents = useQuery(
     api.sim.queries.listRecentEvents,
     activeGame ? { gameId: activeGame._id, limit: 80 } : "skip",
@@ -71,16 +72,8 @@ export function CombatScreen() {
   const selectedPerspective =
     perspectives.find((perspective) => perspective.id === selectedPerspectiveId) ??
     perspectives[0];
-
-  async function issueRetreat(fleetId: Id<"flt_fleets">) {
-    if (!activeGame || !ordersAllowed) return;
-    await issueFleetOrder({
-      gameId: activeGame._id,
-      fleetId,
-      orderType: "retreat",
-      targetSystemId: null,
-    });
-  }
+  const messagesTitle =
+    playerPerspective !== null ? playerPerspective.label : selectedPerspective.label;
 
   return (
     <div className="space-y-4">
@@ -88,40 +81,48 @@ export function CombatScreen() {
         <h2 className="text-sm font-semibold uppercase tracking-wide text-st-muted">
           Combat
         </h2>
-        <p className="mt-2 text-sm text-st-muted">
-          Switch between empire and player perspectives to inspect their combat
-          message feed. For now every perspective receives the same shared messages.
-        </p>
+        {playerPerspective === null ? (
+          <p className="mt-2 text-sm text-st-muted">
+            Switch between empire and player perspectives to inspect their combat message feed. For
+            now every perspective receives the same shared messages.
+          </p>
+        ) : (
+          <p className="mt-2 text-sm text-st-muted">
+            Combat overview and the message stream for your empire.
+          </p>
+        )}
       </Card>
-      <Card>
-        <h3 className="text-xs font-semibold uppercase tracking-wide text-st-muted">
-          Message Perspective
-        </h3>
-        <div className="mt-3 flex flex-wrap gap-2">
-          {perspectives.map((perspective) => (
-            <button
-              key={perspective.id}
-              type="button"
-              onClick={() => setSelectedPerspectiveId(perspective.id)}
-              className={
-                perspective.id === selectedPerspective.id
-                  ? "rounded-lg border border-st-accent bg-st-accent px-3 py-2 text-left text-sm font-medium text-slate-950"
-                  : "rounded-lg border border-st-border bg-st-bg px-3 py-2 text-left text-sm text-st-fg hover:border-st-accent"
-              }
-            >
-              <span className="block">{perspective.label}</span>
-              <span className="block text-xs opacity-75">{perspective.kind}</span>
-            </button>
-          ))}
-        </div>
-      </Card>
+      {playerPerspective === null ? (
+        <Card>
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-st-muted">
+            Message Perspective
+          </h3>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {perspectives.map((perspective) => (
+              <button
+                key={perspective.id}
+                type="button"
+                onClick={() => setSelectedPerspectiveId(perspective.id)}
+                className={
+                  perspective.id === selectedPerspective.id
+                    ? "rounded-lg border border-st-accent bg-st-accent px-3 py-2 text-left text-sm font-medium text-slate-950"
+                    : "rounded-lg border border-st-border bg-st-bg px-3 py-2 text-left text-sm text-st-fg hover:border-st-accent"
+                }
+              >
+                <span className="block">{perspective.label}</span>
+                <span className="block text-xs opacity-75">{perspective.kind}</span>
+              </button>
+            ))}
+          </div>
+        </Card>
+      ) : null}
       <Card>
         <h3 className="text-xs font-semibold uppercase tracking-wide text-st-muted">
           Active Battles
         </h3>
         {activeBattles.length === 0 ? (
           <p className="mt-3 text-sm text-st-muted">
-            No active battles are waiting for a turn decision.
+            No active battles are currently unresolved.
           </p>
         ) : (
           <ul className="mt-3 space-y-3 text-sm">
@@ -146,17 +147,6 @@ export function CombatScreen() {
                         {battle.defenderShips} ships
                       </p>
                     </div>
-                    <Button
-                      type="button"
-                      disabled={
-                        !ordersAllowed || battle.attackerShips <= 0
-                      }
-                      onClick={() => {
-                        void issueRetreat(battle.attackerFleetId);
-                      }}
-                    >
-                      Retreat attackers
-                    </Button>
                   </div>
                 </li>
               );
@@ -167,11 +157,13 @@ export function CombatScreen() {
 
       <Card className="min-h-[200px]">
         <h3 className="text-xs font-semibold uppercase tracking-wide text-st-muted">
-          Messages For {selectedPerspective.label}
+          Messages For {messagesTitle}
         </h3>
-        <p className="mt-1 text-xs text-st-muted">
-          Current rule: all perspectives see this same shared combat feed.
-        </p>
+        {playerPerspective === null ? (
+          <p className="mt-1 text-xs text-st-muted">
+            Current rule: all perspectives see this same shared combat feed.
+          </p>
+        ) : null}
         {combatEvents.length === 0 ? (
           <p className="mt-3 text-sm text-st-muted">
             No combat events yet. Send a fleet to a hostile star and step turns through

@@ -39,12 +39,14 @@ const settingsValidator = v.object({
   combatAttackMult: v.number(),
   combatDefendMult: v.number(),
   collateralDamageMult: v.number(),
+  shipProdEmphasisPower: v.number(),
   // Balance page fields
   traderMinActive: v.number(),
   traderMaxActive: v.number(),
   traderShipHirePerTurn: v.number(),
   traderHireChancePct: v.number(),
   traderDockingCost: v.number(),
+  localTreasuryAddsPer100Cr: v.number(),
   foodStockpileMaxPerPop: v.number(),
   foodStockpileMinPerPop: v.number(),
   foodStressFactor: v.number(),
@@ -94,11 +96,13 @@ export const updateGameSettings = mutation({
       combatAttackMult: clamp(s.combatAttackMult, 0.1, 8),
       combatDefendMult: clamp(s.combatDefendMult, 0.1, 8),
       collateralDamageMult: clamp(s.collateralDamageMult, 0, 10),
+      shipProdEmphasisPower: clamp(s.shipProdEmphasisPower, 1, 3),
       traderMinActive: clamp(Math.round(s.traderMinActive), 0, 32),
       traderMaxActive: clamp(Math.round(s.traderMaxActive), 0, 64),
       traderShipHirePerTurn: clamp(s.traderShipHirePerTurn, 0, 10_000),
       traderHireChancePct: clamp(Math.round(s.traderHireChancePct), 0, 100),
       traderDockingCost: clamp(s.traderDockingCost, 0, 5_000),
+      localTreasuryAddsPer100Cr: clamp(Math.round(s.localTreasuryAddsPer100Cr), 0, 100),
       foodStockpileMaxPerPop: clamp(s.foodStockpileMaxPerPop, 1, 50),
       foodStockpileMinPerPop: clamp(s.foodStockpileMinPerPop, 0, 5),
       foodStressFactor: clamp(s.foodStressFactor, 0.1, 10),
@@ -217,7 +221,7 @@ export const killGame = mutation({
     if ((await ctx.db.get("sim_games", args.gameId)) === null) {
       throw new Error("Game not found.");
     }
-    await ctx.db.patch(args.gameId, {
+    await ctx.db.patch("sim_games", args.gameId, {
       status: "finished",
       endedAt: Date.now(),
     });

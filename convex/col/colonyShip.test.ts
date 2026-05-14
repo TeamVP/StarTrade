@@ -76,7 +76,7 @@ describe("colony ship build & economy helpers", () => {
       system: fakeHomeworld(),
       holding: undefined,
       empireTaxRate: 0.2,
-      settings: { shipProdMult: 1 },
+      settings: { shipProdMult: 1, shipProdEmphasisPower: 1.5 },
     });
     expect(maxShips).toBeGreaterThan(0);
     const cost = computeColonyShipBuildCostShipPoints(maxShips);

@@ -172,10 +172,10 @@ function DeliverySettlementModal({
             trader.deliveryClearingUnitPrice !== undefined &&
             trader.deliveryNominalUnitPrice !== undefined ? (
               <p className="text-[11px] text-st-muted mb-2 leading-relaxed">
-                Food uses the destination&apos;s <span className="text-st-fg">market clearing</span> price after
-                your cargo is added. When several ships dock the same turn, payment is{" "}
+                Food uses the destination&apos;s <span className="text-st-fg">current market</span> price before
+                your cargo updates local stock. When several ships dock the same turn, payment is{" "}
                 <span className="text-st-fg">split fairly</span> from one treasury withdrawal.
-                Arrivals on different turns each see an updated price and treasury.
+                Later arrivals see the updated price and treasury.
               </p>
             ) : null}
             {revenue === undefined ? (
@@ -185,7 +185,7 @@ function DeliverySettlementModal({
                 <tbody className="divide-y divide-st-border/60">
                   {trader.deliveryClearingUnitPrice !== undefined ? (
                     <tr>
-                      <td className="py-1.5 text-st-muted">Clearing price / unit (at delivery)</td>
+                      <td className="py-1.5 text-st-muted">Clearing price / unit (before cargo)</td>
                       <td className="py-1.5 text-right font-mono tabular-nums text-st-fg">
                         {trader.deliveryClearingUnitPrice.toFixed(2)} cr
                       </td>

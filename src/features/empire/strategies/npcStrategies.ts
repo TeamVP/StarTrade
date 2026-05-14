@@ -8,6 +8,13 @@ export type EmpireStrategy = {
     emphasisResearch: number;
     foodSubsidyEnabled: boolean;
     foodSubsidyPerUnit: number;
+    foodShortageResponse?: {
+      enabled: boolean;
+      shiftPctPerTurn: number;
+      minShipsPct: number;
+      maxFoodPct: number;
+      recoveryTurns: number;
+    };
   };
   military: {
     aggressionLevel: "passive" | "defensive" | "balanced" | "aggressive" | "warlike";
@@ -22,6 +29,22 @@ export type EmpireStrategy = {
   fleetPosture: {
     moveDeepFleetsToBorder: boolean;
     borderReserveShipsPct: number;
+    reinforceAttackedSystems?: boolean;
+    emergencyReserveShipsPct?: number;
+  };
+  priorityStarPolicy?: {
+    enabled: boolean;
+    neutralDispatchPct: number;
+    stagingDispatchPct: number;
+    enemyDispatchPct: number;
+    approachDispatchPct: number;
+    enemyAttackAdvantageRequired?: number;
+    minDefenseAverageFleetMult: number;
+    shipProductionBoostPct: number;
+    minFoodStockpileTurns: number;
+    /** Standing orders on every owned star along the shortest owned path to the nearest owned Priority star. */
+    ownedCorridorStandingOrdersEnabled?: boolean;
+    ownedCorridorDispatchPct?: number;
   };
   borderPolicy: {
     stance: "passive" | "defensive" | "balanced" | "aggressive" | "warlike";
@@ -29,7 +52,57 @@ export type EmpireStrategy = {
   };
 };
 
+export const PRIORITY_STAR_MAX_STRATEGY: EmpireStrategy = {
+  archetype: "Priority Star Vanguard",
+  description:
+    "A showcase automation brain: marked Priority stars become the empire's top strategic objectives, driving expansion, staging, defense, attacks, emergency reinforcement, and short-term ship mobilization.",
+  economy: {
+    taxRateTarget: 0.18,
+    emphasisFood: 32,
+    emphasisShips: 48,
+    emphasisResearch: 20,
+    foodSubsidyEnabled: true,
+    foodSubsidyPerUnit: 6,
+    foodShortageResponse: {
+      enabled: true,
+      shiftPctPerTurn: 15,
+      minShipsPct: 15,
+      maxFoodPct: 80,
+      recoveryTurns: 2,
+    },
+  },
+  military: { aggressionLevel: "warlike" },
+  expansion: {
+    colonizationEnabled: true,
+    colonizationThreshold: 450,
+    earlyRush: true,
+    neutralWorldPriority: "richest",
+    reserveShipsPct: 12,
+  },
+  fleetPosture: {
+    moveDeepFleetsToBorder: true,
+    borderReserveShipsPct: 18,
+    reinforceAttackedSystems: true,
+    emergencyReserveShipsPct: 8,
+  },
+  priorityStarPolicy: {
+    enabled: true,
+    neutralDispatchPct: 95,
+    stagingDispatchPct: 92,
+    enemyDispatchPct: 90,
+    approachDispatchPct: 95,
+    enemyAttackAdvantageRequired: 0.9,
+    minDefenseAverageFleetMult: 1.25,
+    shipProductionBoostPct: 18,
+    minFoodStockpileTurns: 3,
+    ownedCorridorStandingOrdersEnabled: true,
+    ownedCorridorDispatchPct: 90,
+  },
+  borderPolicy: { stance: "warlike", attackAdvantageRequired: 1.1 },
+};
+
 export const NPC_EMPIRE_STRATEGIES: Record<string, EmpireStrategy> = {
+  "priority-star-vanguard": PRIORITY_STAR_MAX_STRATEGY,
   "maia-solenne": {
     archetype: "Diplomatic Mercantile",
     description:

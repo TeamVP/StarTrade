@@ -19,7 +19,12 @@ function fmtOptional(n: number | undefined): string {
   return fmt(n);
 }
 
-export function EconomyScreen() {
+export function EconomyScreen(props: {
+  playerEmpireId?: Id<"emp_states"> | null;
+  hideGamePicker?: boolean;
+}) {
+  const playerEmpireId = props.playerEmpireId ?? null;
+  const hideGamePicker = props.hideGamePicker === true;
   const { games, activeGame, setSelectedGameId } = useActiveGame();
   const setEmpireTaxRate = useMutation(api.eco.mutations.setEmpireTaxRate);
 
@@ -51,6 +56,10 @@ export function EconomyScreen() {
   const [taxSliderDraftPercent, setTaxSliderDraftPercent] = useState<number | null>(null);
 
   const focusEmpireId = useMemo((): Id<"emp_states"> | null => {
+    if (playerEmpireId !== null) {
+      if (empires.some((e) => e._id === playerEmpireId)) return playerEmpireId;
+      return null;
+    }
     if (empires.length === 0) return null;
     if (
       selectedEmpireId !== null &&
@@ -59,7 +68,7 @@ export function EconomyScreen() {
       return selectedEmpireId;
     }
     return empires[0]._id;
-  }, [empires, selectedEmpireId]);
+  }, [empires, selectedEmpireId, playerEmpireId]);
 
   const selectedEmpire = useMemo(
     () => (focusEmpireId === null ? null : empires.find((e) => e._id === focusEmpireId) ?? null),
@@ -128,13 +137,16 @@ export function EconomyScreen() {
     <div className="space-y-4">
       <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end sm:justify-between">
         <div>
-          <h2 className="text-lg font-semibold text-st-fg">Economy (admin)</h2>
+          <h2 className="text-lg font-semibold text-st-fg">
+            {playerEmpireId !== null ? "Economy" : "Economy (admin)"}
+          </h2>
           <p className="mt-1 max-w-xl text-sm text-st-muted">
-            Inspect treasury, stockpiles, and per-star production inputs for each empire. Only game
-            admins see live data. Population is stored and summed as people (shown compactly as k /
-            M / B); under 1,000 people after a turn abandons a colony.
+            {playerEmpireId !== null
+              ? "Treasury, stockpiles, and production for your empire."
+              : "Inspect treasury, stockpiles, and per-star production inputs for each empire. Only game admins see live data. Population is stored and summed as people (shown compactly as k / M / B); under 1,000 people after a turn abandons a colony."}
           </p>
         </div>
+        {!hideGamePicker ? (
         <label className="flex min-w-[200px] flex-col gap-1 text-xs text-st-muted">
           Game
           <select
@@ -161,6 +173,7 @@ export function EconomyScreen() {
             )}
           </select>
         </label>
+        ) : null}
       </div>
 
       {activeGame === null || games.length === 0 ? (
@@ -205,28 +218,45 @@ export function EconomyScreen() {
           </div>
 
           <Card>
-            <label className="block text-xs font-semibold uppercase tracking-wide text-st-muted">
-              Empire focus
-            </label>
-            <select
-              className="mt-2 w-full max-w-md rounded border border-st-border bg-st-bg px-3 py-2 text-sm text-st-fg"
-              value={focusEmpireId ?? ""}
-              onChange={(e) => {
-                setTaxSliderDraftPercent(null);
-                setSelectedEmpireId(
-                  e.target.value === ""
-                    ? null
-                    : (e.target.value as Id<"emp_states">),
-                );
-              }}
-            >
-              {empires.map((e) => (
-                <option key={e._id} value={e._id}>
-                  {e.name}
-                  {e.isCollapsed ? " (collapsed)" : ""}
-                </option>
-              ))}
-            </select>
+            {playerEmpireId !== null ? (
+              <p className="text-xs font-semibold uppercase tracking-wide text-st-muted">
+                Your empire
+                {selectedEmpire !== null ? (
+                  <span className="mt-1 block text-sm font-medium normal-case text-st-fg">
+                    {selectedEmpire.name}
+                  </span>
+                ) : (
+                  <span className="mt-1 block text-sm font-normal normal-case text-amber-300/90">
+                    Could not find this faction in the current economy snapshot.
+                  </span>
+                )}
+              </p>
+            ) : (
+              <>
+                <label className="block text-xs font-semibold uppercase tracking-wide text-st-muted">
+                  Empire focus
+                </label>
+                <select
+                  className="mt-2 w-full max-w-md rounded border border-st-border bg-st-bg px-3 py-2 text-sm text-st-fg"
+                  value={focusEmpireId ?? ""}
+                  onChange={(e) => {
+                    setTaxSliderDraftPercent(null);
+                    setSelectedEmpireId(
+                      e.target.value === ""
+                        ? null
+                        : (e.target.value as Id<"emp_states">),
+                    );
+                  }}
+                >
+                  {empires.map((e) => (
+                    <option key={e._id} value={e._id}>
+                      {e.name}
+                      {e.isCollapsed ? " (collapsed)" : ""}
+                    </option>
+                  ))}
+                </select>
+              </>
+            )}
 
             {selectedEmpire !== null ? (
               <>
@@ -375,11 +405,12 @@ export function EconomyScreen() {
                 <p className="mt-3 text-sm text-st-muted">No systems owned by this empire.</p>
               ) : (
                 <div className="mt-3 overflow-x-auto">
-                  <table className="w-full min-w-[520px] border-collapse text-left text-sm">
+                  <table className="w-full min-w-[620px] border-collapse text-left text-sm">
                     <thead>
                       <tr className="border-b border-st-border text-xs uppercase text-st-muted">
                         <th className="py-2 pr-2 font-medium">System</th>
                         <th className="py-2 pr-2 font-medium text-right">Pop (ppl)</th>
+                        <th className="py-2 pr-2 font-medium text-right">Treasury</th>
                         <th className="py-2 pr-2 font-medium text-right">Food</th>
                         <th className="py-2 pr-2 font-medium text-right">Wpn</th>
                         <th className="py-2 pr-2 font-medium text-right">Res</th>
@@ -400,6 +431,9 @@ export function EconomyScreen() {
                             <td className="py-2 pr-2 font-medium text-st-fg">{row.name}</td>
                             <td className="py-2 pr-2 text-right font-mono text-st-fg">
                               {formatPopulationPeopleOptional(row.population)}
+                            </td>
+                            <td className="py-2 pr-2 text-right font-mono text-st-fg">
+                              {fmtOptional(row.localTreasury)}
                             </td>
                             <td className="py-2 pr-2 text-right font-mono text-st-fg">
                               {fmtOptional(row.stockFood)}
@@ -558,7 +592,7 @@ export function EconomyScreen() {
                     </dd>
                   </div>
                   <div>
-                    <dt className="text-xs text-st-muted">Independent treasury</dt>
+                    <dt className="text-xs text-st-muted">System treasury</dt>
                     <dd className="font-mono text-st-fg">
                       {selectedSystem.localTreasury !== undefined
                         ? fmt(selectedSystem.localTreasury)

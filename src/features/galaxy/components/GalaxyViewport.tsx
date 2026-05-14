@@ -6,12 +6,14 @@ import {
   useMemo,
   useRef,
   useState,
+  type ReactNode,
 } from "react";
 import { useMutation, useQuery } from "convex/react";
-import { Expand, Info, LogOut, Minus, Plus, Repeat2, Star } from "lucide-react";
+import { Expand, Info, Minus, Plus, Repeat2, Star } from "lucide-react";
 import { api } from "../../../../convex/_generated/api";
 import type { Id } from "../../../../convex/_generated/dataModel";
 import { formatPopulationPeople } from "@/lib/populationFormat";
+import { normalizeFleetDetachmentDisplayName } from "@/lib/fleetDisplayName";
 import { Button } from "@/components/ui/button";
 import {
   COLONY_ORBIT_ANGLE_OFFSET_RAD,
@@ -70,6 +72,11 @@ import { validateColonyShipRouteDestinations } from "../../../../convex/col/rout
 
 /** Matches `POPULATION_MIN_INHABITED_PEOPLE` in Convex — worlds below this are “empty” for colonization. */
 const MIN_INHABITED_POPULATION = 1000;
+
+/** Zoom when focusing a fleet from the planet panel: geometric mean of min/max map scale (~1.2×). */
+const MAP_FLEET_FROM_PANEL_FOCUS_SCALE = clampMapScale(
+  Math.sqrt(MIN_MAP_SCALE * MAX_MAP_SCALE),
+);
 
 function finiteCombatCount(value: unknown, fallback: number): number {
   return typeof value === "number" && Number.isFinite(value)
@@ -204,38 +211,30 @@ function combatReplayDraftFromEvent(event: CombatEventRow): CombatReplayDraft | 
   };
 }
 
-/** Pick readable ink for empire-colored UI chips (galaxy map overlays). */
-function contrastingInkForHexBg(hexInput: string): "#0f172a" | "#f8fafc" {
-  const hex = hexInput.replace(/^#/, "");
-  const full =
-    hex.length === 3
-      ? hex
-          .split("")
-          .map((c) => c + c)
-          .join("")
-      : hex;
-  const n = Number.parseInt(full, 16);
-  if (!Number.isFinite(n)) return "#f8fafc";
-  const r = ((n >> 16) & 255) / 255;
-  const g = ((n >> 8) & 255) / 255;
-  const b = (n & 255) / 255;
-  const luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-  return luminance > 0.52 ? "#0f172a" : "#f8fafc";
-}
+export type GalaxyViewportProps = {
+  /** When set, map order context behaves as this empire (player home preview). */
+  playerEmpireId?: Id<"emp_states"> | null;
+  /** Rendered beside the star system panel below the map (player home layout). */
+  starPanelAside?: ReactNode;
+  /** Edge-to-edge map at 60vh with floating controls (player home). */
+  playerHomeMapLayout?: boolean;
+};
 
-/** Battle preview layout — keep in sync with `GalaxyStage` combat formation offsets. */
-const COMBAT_PREVIEW_FORMATION_WORLD_X = 26;
-const COMBAT_PREVIEW_FORMATION_WORLD_Y_ATTACKER = -11;
-
-export function GalaxyViewport() {
+export function GalaxyViewport(props: GalaxyViewportProps = {}) {
+  const {
+    playerEmpireId: playerEmpireIdProp = null,
+    starPanelAside,
+    playerHomeMapLayout = false,
+  } = props;
   const { activeGame, systems, links, empires, empireColors } = useGalaxyData();
   const galaxyMapNav = useGalaxyMapNav();
+  const activeGameId = activeGame?._id ?? null;
 
   const simAllowsPlayerOrders = gameAllowsOrders(activeGame?.status);
 
   const fleetsQuery = useQuery(
     api.flt.queries.listFleetsForGame,
-    activeGame ? { gameId: activeGame._id, limit: 200 } : "skip",
+    activeGame ? { gameId: activeGame._id, limit: 256 } : "skip",
   );
   const fleets = useMemo(() => fleetsQuery ?? [], [fleetsQuery]);
 
@@ -245,7 +244,7 @@ export function GalaxyViewport() {
       ? {
           gameId: activeGame._id,
           turnNumber: activeGame.currentTurn,
-          limit: 200,
+          limit: 256,
         }
       : "skip",
   );
@@ -316,6 +315,7 @@ export function GalaxyViewport() {
   const setGarrisonRoute = useMutation(api.flt.mutations.setGarrisonRoute);
   const setEmphasis = useMutation(api.gal.mutations.setEmphasis);
   const adjustFoodImportSubsidy = useMutation(api.gal.mutations.adjustFoodImportSubsidy);
+  const setPriorityStar = useMutation(api.gal.mutations.setPriorityStar);
   const startColonyShipBuild = useMutation(api.col.mutations.startColonyShipBuild);
   const cancelColonyShipBuild = useMutation(api.col.mutations.cancelColonyShipBuild);
   const dispatchColonyShip = useMutation(api.col.mutations.dispatchColonyShip);
@@ -329,14 +329,20 @@ export function GalaxyViewport() {
   const [localShipsPct, setLocalShipsPct] = useState<number | null>(null);
   const [emphasisCommitError, setEmphasisCommitError] = useState<string | null>(null);
   const [importSubsidyError, setImportSubsidyError] = useState<string | null>(null);
+  const [priorityMutationError, setPriorityMutationError] = useState<string | null>(null);
+  const [priorityStarOverrideState, setPriorityStarOverrideState] = useState<{
+    gameId: string | null;
+    empireId: string | null;
+    overrides: Record<string, boolean>;
+  }>({ gameId: null, empireId: null, overrides: {} });
+  const [adminPriorityEmpireId, setAdminPriorityEmpireId] =
+    useState<Id<"emp_states"> | null>(null);
   const [shipsToDispatch, setShipsToDispatch] = useState(1);
   const [repeatNextDragEnabled, setRepeatNextDragEnabled] = useState(false);
   const [routeEditorRouteId, setRouteEditorRouteId] = useState<string | null>(null);
   const [routeEditorPct, setRouteEditorPct] = useState(25);
   const [routeEditorEnabled, setRouteEditorEnabled] = useState(true);
   const [colonyMutationError, setColonyMutationError] = useState<string | null>(null);
-  const [combatRetreatError, setCombatRetreatError] = useState<string | null>(null);
-  const [retreatingFleetId, setRetreatingFleetId] = useState<string | null>(null);
 
   const [camera, setCamera] = useState<GalaxyMapCamera>(() =>
     computeFitAllSystemsCamera([]),
@@ -378,7 +384,7 @@ export function GalaxyViewport() {
     const ro = new ResizeObserver(measure);
     ro.observe(el);
     return () => ro.disconnect();
-  }, []);
+  }, [playerHomeMapLayout]);
 
   const cancelCameraTween = useCallback(() => {
     if (tweenRafRef.current !== null) {
@@ -464,7 +470,7 @@ export function GalaxyViewport() {
       .filter((fleet) => fleet.originSystemId === selectedSystem._id && fleet.status !== "enRoute")
       .map((fleet) => ({
         id: fleet._id,
-        name: fleet.name,
+        name: normalizeFleetDetachmentDisplayName(fleet.name),
         empireId: fleet.empireId,
         strength: fleet.strength,
         status: fleet.status,
@@ -487,7 +493,7 @@ export function GalaxyViewport() {
   }, [colonyShips, selectedSystem]);
 
   const selectedSystemDefenseAdvantage = useMemo(() => {
-    const baseAdvantage = gameSettingsQuery?.combatDefenderAdvantage ?? 2;
+    const baseAdvantage = gameSettingsQuery?.combatDefenderAdvantage ?? 3;
     return (
       baseAdvantage *
       (selectedSystem?.isHomeworld === true ? HOMEWORLD_DEFENSE_ADVANTAGE_MULT : 1)
@@ -532,10 +538,72 @@ export function GalaxyViewport() {
     return null;
   }, [selectedSystem, simAllowsPlayerOrders, isAdmin, myRoles, empireNames]);
 
-  const myEmpireId = useMemo(() => {
+  const myEmpireIdFromRole = useMemo(() => {
     const role = myRoles.find((r) => r.role === "empire");
     return role?.empireId ?? null;
   }, [myRoles]);
+  const myEmpireId = playerEmpireIdProp ?? myEmpireIdFromRole;
+
+  const fleetSelectionAllowed = useCallback(
+    (fleetEmpireId: string) => {
+      if (isAdmin) return true;
+      if (myEmpireId === null) return true;
+      return fleetEmpireId === myEmpireId;
+    },
+    [isAdmin, myEmpireId],
+  );
+
+  /** Player empire-only colony UI (production, food/fleet intel tabs). Admins with no empire seat still see full detail. */
+  const showColonyOperationalIntel = useMemo(() => {
+    if (selectedSystem === null) return true;
+    if (myEmpireId === null) return true;
+    return selectedSystem.ownerEmpireId === myEmpireId;
+  }, [selectedSystem, myEmpireId]);
+
+  const priorityEmpireOptions = useMemo(
+    () => empires.filter((empire) => !empire.isCollapsed),
+    [empires],
+  );
+  const activeAdminPriorityEmpireId =
+    adminPriorityEmpireId !== null &&
+    priorityEmpireOptions.some((empire) => empire._id === adminPriorityEmpireId)
+      ? adminPriorityEmpireId
+      : (priorityEmpireOptions[0]?._id ?? null);
+  const priorityEmpireId =
+    myEmpireId ??
+    (playerEmpireIdProp === null && isAdmin && activeGameId !== null
+      ? activeAdminPriorityEmpireId
+      : null);
+
+  const garrisonRouteEmpireFilter: Id<"emp_states"> | null =
+    playerEmpireIdProp ?? (isAdmin ? null : myEmpireIdFromRole);
+  const priorityStarsQuery = useQuery(
+    api.gal.queries.listMyPriorityStars,
+    activeGame !== null && priorityEmpireId !== null
+      ? { gameId: activeGame._id, empireId: priorityEmpireId }
+      : "skip",
+  );
+  const priorityStars = useMemo(() => priorityStarsQuery ?? [], [priorityStarsQuery]);
+  const serverPriorityStarIds = useMemo(
+    () => new Set(priorityStars.map((priorityStar) => priorityStar.systemId as string)),
+    [priorityStars],
+  );
+  const priorityStarIds = useMemo(() => {
+    const merged = new Set(serverPriorityStarIds);
+    const overrides =
+      priorityStarOverrideState.gameId === activeGameId &&
+      priorityStarOverrideState.empireId === priorityEmpireId
+        ? priorityStarOverrideState.overrides
+        : {};
+    for (const [systemId, enabled] of Object.entries(overrides)) {
+      if (enabled) {
+        merged.add(systemId);
+      } else {
+        merged.delete(systemId);
+      }
+    }
+    return merged;
+  }, [serverPriorityStarIds, priorityStarOverrideState, activeGameId, priorityEmpireId]);
 
   const systemOwnerById = useMemo(
     () => Object.fromEntries(systems.map((s) => [s._id, s.ownerEmpireId])),
@@ -575,6 +643,21 @@ export function GalaxyViewport() {
 
   const canUseColonyShips =
     simAllowsPlayerOrders && (isAdmin || myEmpireId !== null);
+  const canMarkPriorityStars = simAllowsPlayerOrders && priorityEmpireId !== null;
+  const priorityStarDisabledReason = useMemo(() => {
+    if (!simAllowsPlayerOrders) {
+      return "Priority stars can be changed while the game is running or paused.";
+    }
+    if (priorityEmpireId !== null) return null;
+    if (isAdmin) return "Choose an empire before marking Priority stars.";
+    if (myRoles.some((r) => r.role === "trader")) {
+      return "Trader accounts cannot mark empire Priority stars.";
+    }
+    if (myRoles.some((r) => r.role === "observer")) {
+      return "Observers cannot mark empire Priority stars.";
+    }
+    return "Join this game with an empire seat to mark Priority stars.";
+  }, [simAllowsPlayerOrders, priorityEmpireId, isAdmin, myRoles]);
 
   const myIdleColonyShipsHere = useMemo(() => {
     if (selectedSystem === null || myEmpireId === null) return [];
@@ -665,6 +748,7 @@ export function GalaxyViewport() {
     setLocalShipsPct(null);
     setEmphasisCommitError(null);
     setImportSubsidyError(null);
+    setPriorityMutationError(null);
     setSelectedColonyShipId(null);
     setColonyMutationError(null);
   }, []);
@@ -676,12 +760,6 @@ export function GalaxyViewport() {
   const dismissTraderPanel = useCallback(() => {
     setSelectedTraderId(null);
   }, []);
-
-  const handleStageBackgroundTap = useCallback(() => {
-    dismissStarPanel();
-    dismissRouteEditor();
-    dismissTraderPanel();
-  }, [dismissStarPanel, dismissRouteEditor, dismissTraderPanel]);
 
   const handleTraderSelect = useCallback((traderId: string | null) => {
     setSelectedTraderId(traderId);
@@ -705,6 +783,12 @@ export function GalaxyViewport() {
 
   const handleSelectedFleetChange = useCallback(
     (fleetId: string | null) => {
+      if (fleetId !== null) {
+        const fleet = fleets.find((f) => f._id === fleetId);
+        if (fleet !== undefined && !fleetSelectionAllowed(fleet.empireId)) {
+          return;
+        }
+      }
       const isSameFleet = fleetId !== null && fleetId === selectedFleetId;
       setSelectedFleetId(fleetId);
       setSelectedTraderId(null);
@@ -721,8 +805,28 @@ export function GalaxyViewport() {
         setShipsToDispatch(Math.min(mid, fleet.strength));
       }
     },
-    [fleets, selectedFleetId],
+    [fleets, selectedFleetId, fleetSelectionAllowed],
   );
+
+  useEffect(() => {
+    if (selectedFleetId === null) return;
+    const fleet = fleets.find((f) => f._id === selectedFleetId);
+    if (fleet === undefined || !fleetSelectionAllowed(fleet.empireId)) {
+      setSelectedFleetId(null);
+    }
+  }, [fleets, selectedFleetId, fleetSelectionAllowed]);
+
+  const handleStageBackgroundTap = useCallback(() => {
+    dismissStarPanel();
+    handleSelectedFleetChange(null);
+    dismissRouteEditor();
+    dismissTraderPanel();
+  }, [
+    dismissStarPanel,
+    dismissRouteEditor,
+    dismissTraderPanel,
+    handleSelectedFleetChange,
+  ]);
 
   const handleRouteMidpointTap = useCallback(
     (routeId: string) => {
@@ -751,10 +855,11 @@ export function GalaxyViewport() {
             system.ownerEmpireId !== null
               ? (empireColors[system.ownerEmpireId] ?? "#64748b")
               : "#64748b",
+          isPriority: priorityStarIds.has(system._id),
         },
       ]),
     );
-  }, [systems, empireColors]);
+  }, [systems, empireColors, priorityStarIds]);
 
   const stageNodes = useMemo<GalaxyNode[]>(() => Object.values(nodeMap), [nodeMap]);
 
@@ -782,6 +887,7 @@ export function GalaxyViewport() {
       setSelectedSystemId(systemId);
       setEmphasisCommitError(null);
       setImportSubsidyError(null);
+      setPriorityMutationError(null);
       setSelectedFleetId(null);
       setSelectedTraderId(null);
       setSelectedColonyShipId(null);
@@ -910,6 +1016,7 @@ export function GalaxyViewport() {
         const angle = (i / n) * Math.PI * 2 - Math.PI / 2;
         markers.push({
           fleetId: fleet._id,
+          empireId: fleet.empireId,
           originSystemId: systemId,
           x: node.x + Math.cos(angle) * FLEET_ORBIT_RADIUS,
           y: node.y + Math.sin(angle) * FLEET_ORBIT_RADIUS,
@@ -919,6 +1026,27 @@ export function GalaxyViewport() {
     }
     return markers;
   }, [simAllowsPlayerOrders, fleets, nodeMap, empireColors]);
+
+  const handleStarPanelFleetSelect = useCallback(
+    (fleetId: string) => {
+      handleSelectedFleetChange(fleetId);
+      const marker = fleetMarkers.find((m) => m.fleetId === fleetId);
+      const fleet = fleets.find((f) => f._id === fleetId);
+      const focus =
+        marker !== undefined
+          ? { x: marker.x, y: marker.y }
+          : fleet !== undefined
+            ? nodeMap[fleet.originSystemId]
+            : undefined;
+      if (focus === undefined) return;
+      startCameraTweenTo({
+        focusX: focus.x,
+        focusY: focus.y,
+        scale: MAP_FLEET_FROM_PANEL_FOCUS_SCALE,
+      });
+    },
+    [fleetMarkers, fleets, nodeMap, handleSelectedFleetChange, startCameraTweenTo],
+  );
 
   const pendingSegments = useMemo<PendingSegmentModel[]>(() => {
     if (!simAllowsPlayerOrders) return [];
@@ -932,6 +1060,8 @@ export function GalaxyViewport() {
       return [
         {
           key: order.orderId,
+          originSystemId: start.originSystemId,
+          targetSystemId: order.targetSystemId,
           x1: start.x,
           y1: start.y,
           x2: end.x,
@@ -944,7 +1074,9 @@ export function GalaxyViewport() {
   const routeSegments = useMemo((): RouteSegmentModel[] => {
     if (!simAllowsPlayerOrders) return [];
     return garrisonRoutes.flatMap((route) => {
-      if (!isAdmin && myEmpireId !== route.empireId) return [];
+      if (garrisonRouteEmpireFilter !== null && route.empireId !== garrisonRouteEmpireFilter) {
+        return [];
+      }
       const from = nodeMap[route.originSystemId];
       const to = nodeMap[route.destinationSystemId];
       if (from === undefined || to === undefined) return [];
@@ -959,10 +1091,11 @@ export function GalaxyViewport() {
           y2: to.y,
           dispatchPct: route.dispatchPct,
           enabled: route.enabled,
+          managedByStrategy: route.managedByStrategy === true,
         },
       ];
     });
-  }, [simAllowsPlayerOrders, garrisonRoutes, nodeMap, isAdmin, myEmpireId]);
+  }, [simAllowsPlayerOrders, garrisonRoutes, nodeMap, garrisonRouteEmpireFilter]);
 
   const traderShips = useMemo((): TraderShipModel[] => {
     return activeTraders.map((t) => ({
@@ -1070,9 +1203,6 @@ export function GalaxyViewport() {
         defenderShipsAtStart,
         attackerMotherships: finiteCombatCount(battle.attackerMotherships, 0),
         defenderMotherships: finiteCombatCount(battle.defenderMotherships, 0),
-        canRetreat:
-          simAllowsPlayerOrders &&
-          (isAdmin || (myEmpireId !== null && battle.attackerEmpireId === myEmpireId)),
         phase: battle.phase,
         roundNumber: battle.roundNumber,
         latestRound:
@@ -1105,9 +1235,6 @@ export function GalaxyViewport() {
     activeGame?.currentTurn,
     empireColors,
     fleetById,
-    isAdmin,
-    myEmpireId,
-    simAllowsPlayerOrders,
   ]);
 
   const combatReplayMarkers = useMemo<CombatMarkerModel[]>(() => {
@@ -1164,7 +1291,6 @@ export function GalaxyViewport() {
         defenderShipsAtStart: draft.defenderShipsAtStart,
         attackerMotherships: draft.attackerMotherships,
         defenderMotherships: draft.defenderMotherships,
-        canRetreat: false,
         phase: "awaitingAttackerDecision",
         roundNumber: latestRound?.roundNumber ?? 0,
         latestRound,
@@ -1176,51 +1302,6 @@ export function GalaxyViewport() {
     () => [...combatMarkers, ...combatReplayMarkers],
     [combatMarkers, combatReplayMarkers],
   );
-
-  const combatRetreatButtons = useMemo(() => {
-    return combatMarkers.flatMap((marker) => {
-      if (
-        selectedSystemId === null ||
-        marker.systemId !== selectedSystemId ||
-        !marker.canRetreat ||
-        marker.phase === "retreating"
-      )
-        return [];
-      const node = nodeMap[marker.systemId];
-      if (node === undefined) return [];
-      const left =
-        (node.x -
-          COMBAT_PREVIEW_FORMATION_WORLD_X -
-          camera.focusX) *
-          camera.scale +
-        viewSize.width / 2;
-      const top =
-        (node.y +
-          COMBAT_PREVIEW_FORMATION_WORLD_Y_ATTACKER -
-          camera.focusY) *
-          camera.scale +
-        viewSize.height / 2;
-      const margin = 96;
-      if (
-        left < -margin ||
-        left > viewSize.width + margin ||
-        top < -margin ||
-        top > viewSize.height + margin
-      ) {
-        return [];
-      }
-      return [
-        {
-          battleId: marker.battleId,
-          fleetId: marker.attackerFleetId,
-          left,
-          top,
-          shipCount: marker.attackerShips,
-          empireBgHex: marker.attackerColorHex,
-        },
-      ];
-    });
-  }, [camera, combatMarkers, nodeMap, selectedSystemId, viewSize]);
 
   const colonyShipMarkers = useMemo<ColonyShipMarkerModel[]>(() => {
     if (!simAllowsPlayerOrders) return [];
@@ -1355,51 +1436,27 @@ export function GalaxyViewport() {
       if (!activeGame || !simAllowsPlayerOrders) return;
       const fleet = fleets.find((f) => f._id === payload.fleetId);
       const strength = fleet?.strength ?? payload.shipCount;
+      const originSystem = systems.find((s) => s._id === payload.originSystemId);
+      const canEstablishRecurring =
+        payload.establishRecurring &&
+        originSystem?.ownerEmpireId !== null &&
+        originSystem?.ownerEmpireId !== undefined;
+      const standingRouteDispatchPct = canEstablishRecurring
+        ? Math.max(
+            1,
+            Math.min(100, Math.round((payload.shipCount / Math.max(1, strength)) * 100)),
+          )
+        : undefined;
       await issueFleetOrder({
         gameId: activeGame._id,
         fleetId: payload.fleetId as Id<"flt_fleets">,
         orderType: "move",
         targetSystemId: payload.targetSystemId as Id<"gal_systems">,
         ...(strength > payload.shipCount ? { shipCount: payload.shipCount } : {}),
+        ...(standingRouteDispatchPct !== undefined ? { standingRouteDispatchPct } : {}),
       });
-      if (payload.establishRecurring) {
-        const dispatchPct = Math.max(
-          1,
-          Math.min(100, Math.round((payload.shipCount / Math.max(1, strength)) * 100)),
-        );
-        await setGarrisonRoute({
-          gameId: activeGame._id,
-          originSystemId: payload.originSystemId as Id<"gal_systems">,
-          destinationSystemId: payload.targetSystemId as Id<"gal_systems">,
-          dispatchPct,
-          enabled: true,
-        });
-      }
     },
-    [activeGame, simAllowsPlayerOrders, issueFleetOrder, fleets, setGarrisonRoute],
-  );
-
-  const handleCombatRetreat = useCallback(
-    async (fleetId: string) => {
-      if (!activeGame || !simAllowsPlayerOrders) return;
-      setCombatRetreatError(null);
-      setRetreatingFleetId(fleetId);
-      try {
-        await issueFleetOrder({
-          gameId: activeGame._id,
-          fleetId: fleetId as Id<"flt_fleets">,
-          orderType: "retreat",
-          targetSystemId: null,
-        });
-      } catch (e) {
-        setCombatRetreatError(
-          e instanceof Error ? e.message : "Could not issue retreat order.",
-        );
-      } finally {
-        setRetreatingFleetId((current) => (current === fleetId ? null : current));
-      }
-    },
-    [activeGame, simAllowsPlayerOrders, issueFleetOrder],
+    [activeGame, simAllowsPlayerOrders, issueFleetOrder, fleets, systems],
   );
 
   const editingRoute = useMemo(
@@ -1451,213 +1508,417 @@ export function GalaxyViewport() {
 
   const showTraderPanel = activeGame !== null && selectedTrader !== undefined;
 
-  return (
-    <section className="relative overflow-hidden rounded-xl border border-st-border bg-st-panel p-2">
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-2 px-2">
-        <h2 className="text-sm font-semibold uppercase tracking-wide text-st-muted">
-          Galaxy Map
-        </h2>
-        <div className="flex flex-wrap items-center justify-end gap-2">
-          {activeGame ? (
-            <div className="flex items-center gap-1">
-              <Button
-                variant="secondary"
-                className="size-8 shrink-0 p-0"
-                title="Zoom out"
-                aria-label="Zoom out"
-                type="button"
-                onClick={() => zoomFromCenter(1 / MAP_BUTTON_ZOOM_FACTOR)}
-              >
-                <Minus className="size-4" aria-hidden />
-              </Button>
-              <Button
-                variant="secondary"
-                className="size-8 shrink-0 p-0"
-                title="Zoom in"
-                aria-label="Zoom in"
-                type="button"
-                onClick={() => zoomFromCenter(MAP_BUTTON_ZOOM_FACTOR)}
-              >
-                <Plus className="size-4" aria-hidden />
-              </Button>
-              <Button
-                variant="secondary"
-                className="size-8 shrink-0 p-0"
-                title="Fit entire galaxy"
-                aria-label="Fit entire galaxy"
-                type="button"
-                onClick={resetMapView}
-              >
-                <Expand className="size-4" aria-hidden />
-              </Button>
+  const fleetPanelInner =
+    showFleetPanel && selectedFleet !== undefined ? (
+      <>
+        <div className="flex items-start justify-between gap-2">
+          <div>
+            <div className="font-medium text-st-fg">
+              {normalizeFleetDetachmentDisplayName(selectedFleet.name)}
             </div>
-          ) : null}
-          <span className="text-xs text-st-muted">
-            {activeGame ? `${stageNodes.length} systems` : "Create + seed a game"}
-          </span>
-        </div>
-      </div>
-      <div
-        ref={mapContainerRef}
-        className="relative w-full overflow-hidden rounded-lg"
-        style={{ aspectRatio: `${GALAXY_STAGE_WIDTH} / ${GALAXY_STAGE_HEIGHT}` }}
-      >
-        <GalaxyStage
-          viewWidth={viewSize.width}
-          viewHeight={viewSize.height}
-          camera={camera}
-          onCameraChange={handleCameraChange}
-          nodes={stageNodes}
-          links={stageLinks}
-          galaxyLinks={galaxyLinkRows}
-          fleetMarkers={fleetMarkers}
-          colonyShipMarkers={colonyShipMarkers}
-          pendingSegments={pendingSegments}
-          routeSegments={routeSegments}
-          enRouteGhosts={enRouteGhosts}
-          traderShips={traderShips}
-          combatMarkers={visibleCombatMarkers}
-          turnTimeline={turnTimeline}
-          selectedFleetId={selectedFleetId}
-          onSelectedFleetChange={handleSelectedFleetChange}
-          selectedTraderId={selectedTraderId}
-          onSelectedTraderChange={handleTraderSelect}
-          selectedSystemId={selectedSystemId}
-          selectedColonyShipId={selectedColonyShipId}
-          onSelectedColonyShipChange={handleSelectedColonyShipChange}
-          shipsToDispatch={cappedShipsToDispatch}
-          repeatNextDragEnabled={repeatNextDragEnabled}
-          foodAlerts={foodAlerts}
-          starvationAlerts={starvationAlerts}
-          canIssueOrders={simAllowsPlayerOrders}
-          onFleetMoveCommit={simAllowsPlayerOrders ? onFleetMoveCommit : undefined}
-          onRouteMidpointTap={
-            simAllowsPlayerOrders && routeSegments.length > 0
-              ? handleRouteMidpointTap
-              : undefined
-          }
-          onStarPointerTap={activeGame ? handleStarTap : undefined}
-          onStarDoubleTap={activeGame ? handleStarTap : undefined}
-          onStageBackgroundTap={activeGame ? handleStageBackgroundTap : undefined}
-          onColonyShipRouteCommit={
-            simAllowsPlayerOrders && activeGame ? handleColonyShipRouteCommit : undefined
-          }
-          validateColonyShipRoute={validateColonyShipRouteForMap}
-        />
-        {combatRetreatButtons.map((button) => {
-          const disabled = retreatingFleetId === button.fleetId;
-          const ink = contrastingInkForHexBg(button.empireBgHex);
-          const dim =
-            ink === "#f8fafc" ? "rgba(255,255,255,0.35)" : "rgba(15,23,42,0.35)";
-          return (
-            <button
-              key={button.battleId}
-              type="button"
-              disabled={disabled}
-              title={
-                disabled
-                  ? "Retreating…"
-                  : `Retreat attacking fleet (${button.shipCount} ships)`
-              }
-              aria-label={
-                disabled
-                  ? "Retreating attacking fleet from battle"
-                  : "Retreat attacking fleet from battle"
-              }
-              className="absolute z-10 flex size-7 shrink-0 items-center justify-center rounded-md shadow-sm hover:brightness-110 disabled:cursor-wait disabled:opacity-60"
-              style={{
-                left: button.left,
-                top: button.top,
-                transform: "translate(-50%, 0)",
-                padding: 3,
-                backgroundColor: button.empireBgHex,
-                color: ink,
-                border: `1px solid ${dim}`,
-                boxSizing: "border-box",
-              }}
-              onClick={(event) => {
-                event.stopPropagation();
-                void handleCombatRetreat(button.fleetId);
-              }}
-            >
-              <LogOut className="size-3.5 shrink-0 stroke-[2.25]" aria-hidden />
-            </button>
-          );
-        })}
-        {combatRetreatError !== null ? (
-          <div className="absolute bottom-2 left-2 right-2 z-10 rounded-md border border-red-500/60 bg-red-950/90 px-3 py-2 text-xs text-red-100">
-            {combatRetreatError}
+            <div className="mt-0.5 text-xs text-st-muted">
+              {selectedFleet.strength}{" "}
+              {selectedFleet.strength === 1 ? "ship" : "ships"} at system
+            </div>
           </div>
+          <button
+            type="button"
+            className="shrink-0 text-xs text-st-muted underline hover:text-st-fg"
+            onClick={() => handleSelectedFleetChange(null)}
+          >
+            Clear
+          </button>
+        </div>
+        <label className="mt-3 block text-xs text-st-muted">
+          Ships to send on drag-drop move
+          <div className="mt-1 flex items-center gap-2">
+            <input
+              type="range"
+              min={0}
+              max={selectedFleet.strength}
+              value={cappedShipsToDispatch}
+              onChange={(e) => setShipsToDispatch(Number(e.target.value))}
+              className="min-w-0 flex-1 accent-cyan-400"
+            />
+            <button
+              type="button"
+              title={
+                repeatNextDragEnabled
+                  ? "Recurring route on — drop sets automatic sends each turn"
+                  : "Turn on to save this hop as a recurring route when you drop"
+              }
+              aria-label="Toggle recurring route on drag-drop"
+              aria-pressed={repeatNextDragEnabled}
+              disabled={cappedShipsToDispatch < 1}
+              onClick={() => setRepeatNextDragEnabled((v) => !v)}
+              className={`flex size-9 shrink-0 items-center justify-center rounded-md border transition-colors ${
+                repeatNextDragEnabled
+                  ? "border-violet-400 bg-violet-500/20 text-violet-200"
+                  : "border-st-border bg-st-panel text-st-muted hover:border-st-accent hover:text-st-fg"
+              } disabled:cursor-not-allowed disabled:opacity-40`}
+            >
+              <Repeat2 className="size-4" aria-hidden />
+            </button>
+          </div>
+          <div className="mt-1 font-mono text-xs text-st-fg">
+            {cappedShipsToDispatch} of {selectedFleet.strength}
+            {repeatNextDragEnabled && cappedShipsToDispatch >= 1 ? (
+              <span className="ml-2 text-violet-300">
+                (
+                {Math.max(
+                  1,
+                  Math.min(
+                    100,
+                    Math.round(
+                      (cappedShipsToDispatch / Math.max(1, selectedFleet.strength)) * 100,
+                    ),
+                  ),
+                )}
+                % recurring)
+              </span>
+            ) : null}
+          </div>
+        </label>
+        {repeatNextDragEnabled && cappedShipsToDispatch >= 1 ? (
+          <p className="mt-2 text-xs text-violet-300/90">
+            Drop on a linked star to issue this move and save that hop as a{" "}
+            <strong className="text-violet-200">standing route</strong> (
+            {Math.max(
+              1,
+              Math.min(
+                100,
+                Math.round(
+                  (cappedShipsToDispatch / Math.max(1, selectedFleet.strength)) * 100,
+                ),
+              ),
+            )}
+            % of idle garrison each turn). Tap a dashed line to edit (violet = yours, grey-violet =
+            automation).
+          </p>
         ) : null}
+        {cappedShipsToDispatch < 1 ? (
+          <p className="mt-2 text-xs text-amber-400/90">
+            Set at least 1 ship to drag this fleet to a linked star.
+          </p>
+        ) : null}
+      </>
+    ) : null;
+
+  function renderSelectedStarSystemPanelOnly(): ReactNode {
+    if (selectedSystem === null) return null;
+    return (
+        <StarSystemPanel
+          system={selectedSystem}
+          empireNames={empireNames}
+          selectedNeighbors={selectedNeighbors}
+          showColonyOperationalIntel={showColonyOperationalIntel}
+          fleetSelectionAllowed={fleetSelectionAllowed}
+          canEdit={canEditEmphasis}
+          emphasisHint={emphasisSliderHint}
+          emphasisSaveError={emphasisCommitError}
+          importSubsidyError={importSubsidyError}
+          priorityMutationError={priorityMutationError}
+          isPriorityStar={priorityStarIds.has(selectedSystem._id)}
+          canMarkPriorityStar={canMarkPriorityStars}
+          priorityDisabledReason={priorityStarDisabledReason}
+          priorityEmpireId={priorityEmpireId}
+          priorityEmpireOptions={priorityEmpireOptions}
+          canChoosePriorityEmpire={
+            isAdmin && myEmpireIdFromRole === null && playerEmpireIdProp === null
+          }
+          onPriorityEmpireChange={(empireId) => {
+            setAdminPriorityEmpireId(empireId);
+            setPriorityMutationError(null);
+          }}
+          localShipsPct={localShipsPct}
+          onLocalShipsPctChange={setLocalShipsPct}
+          onShipsPctCommit={async (pct) => {
+            if (!activeGame || !canEditEmphasis) return;
+            setEmphasisCommitError(null);
+            try {
+              await setEmphasis({
+                gameId: activeGame._id,
+                systemId: selectedSystem._id,
+                emphasisShips: pct,
+              });
+            } catch (e) {
+              setEmphasisCommitError(
+                e instanceof Error ? e.message : "Could not save production mix.",
+              );
+            }
+          }}
+          onImportSubsidyDelta={async (delta) => {
+            if (!activeGame || !canEditEmphasis) return;
+            setImportSubsidyError(null);
+            try {
+              await adjustFoodImportSubsidy({
+                gameId: activeGame._id,
+                systemId: selectedSystem._id,
+                delta,
+              });
+            } catch (e) {
+              setImportSubsidyError(
+                e instanceof Error ? e.message : "Could not update import offer.",
+              );
+            }
+          }}
+          onPriorityStarToggle={async (enabled) => {
+            if (!activeGame || !canMarkPriorityStars || priorityEmpireId === null) return;
+            const systemId = selectedSystem._id;
+            setPriorityStarOverrideState((current) => {
+              const overrides =
+                current.gameId === activeGame._id && current.empireId === priorityEmpireId
+                  ? current.overrides
+                  : {};
+              return {
+                gameId: activeGame._id,
+                empireId: priorityEmpireId,
+                overrides: { ...overrides, [systemId]: enabled },
+              };
+            });
+            setPriorityMutationError(null);
+            try {
+              await setPriorityStar({
+                gameId: activeGame._id,
+                systemId,
+                empireId: priorityEmpireId,
+                enabled,
+              });
+            } catch (e) {
+              setPriorityStarOverrideState((current) => {
+                const overrides =
+                  current.gameId === activeGame._id && current.empireId === priorityEmpireId
+                    ? current.overrides
+                    : {};
+                return {
+                  gameId: activeGame._id,
+                  empireId: priorityEmpireId,
+                  overrides: { ...overrides, [systemId]: !enabled },
+                };
+              });
+              setPriorityMutationError(
+                e instanceof Error ? e.message : "Could not update Priority star.",
+              );
+            }
+          }}
+          onNeighborNavigate={handleStarTap}
+          onClose={dismissStarPanel}
+          foodStockpileMinPerPop={gameSettingsQuery?.foodStockpileMinPerPop ?? 2.0}
+          foodStockpileMaxPerPop={gameSettingsQuery?.foodStockpileMaxPerPop ?? 20.0}
+          foodStressFactor={gameSettingsQuery?.foodStressFactor ?? 1}
+          dockingFee={gameSettingsQuery?.traderDockingCost ?? DEFAULT_TRADER_DOCKING_COST}
+          fleetSize={selectedSystemFleetSize}
+          fleetsAtSystem={selectedSystemFleets}
+          colonyShipsAtSystem={selectedSystemColonyShips}
+          defenseAdvantage={selectedSystemDefenseAdvantage}
+          recentCombat={selectedSystemRecentCombat}
+          canUseColonyShips={canUseColonyShips}
+          canColonizeAtStar={canColonizeHere}
+          colonizeShipId={idleColonyShipIdAtSelection}
+          idleColonyShipIdForNeighborDispatch={idleColonyShipIdAtSelection}
+          colonyMutationError={colonyMutationError}
+          gameIdForColony={activeGame._id}
+          onStartColonyBuild={handleStarPanelStartColonyBuild}
+          onCancelColonyBuild={handleStarPanelCancelColonyBuild}
+          onDispatchColonyFromStarPanel={handleStarPanelDispatchColony}
+        onColonizeFromStarPanel={handleStarPanelColonize}
+        onFleetCardTap={handleStarPanelFleetSelect}
+      />
+    );
+  }
+
+  function renderStarSystemPanelArea() {
+    const star = renderSelectedStarSystemPanelOnly();
+    return star !== null ? star : <PlanetInfoEmptyPanel />;
+  }
+
+  const lowerPanels =
+    activeGame !== null
+      ? playerHomeMapLayout && starPanelAside != null
+        ? null
+        : starPanelAside != null
+          ? (
+              <div className="grid gap-4 lg:grid-cols-[1fr_360px] lg:items-start">
+                <div>{renderStarSystemPanelArea()}</div>
+                {starPanelAside}
+              </div>
+            )
+          : (
+              renderStarSystemPanelArea()
+            )
+      : null;
+
+  const mapControlBtnClass = playerHomeMapLayout
+    ? "size-8 shrink-0 border-st-border/80 bg-st-bg/95 p-0 shadow-md ring-1 ring-st-border/50 backdrop-blur-sm"
+    : "size-8 shrink-0 p-0";
+
+  const mapZoomControlButtons =
+    activeGame !== null ? (
+      <div className="flex items-center gap-1">
+        <Button
+          variant="secondary"
+          className={mapControlBtnClass}
+          title="Zoom out"
+          aria-label="Zoom out"
+          type="button"
+          onClick={() => zoomFromCenter(1 / MAP_BUTTON_ZOOM_FACTOR)}
+        >
+          <Minus className="size-4" aria-hidden />
+        </Button>
+        <Button
+          variant="secondary"
+          className={mapControlBtnClass}
+          title="Zoom in"
+          aria-label="Zoom in"
+          type="button"
+          onClick={() => zoomFromCenter(MAP_BUTTON_ZOOM_FACTOR)}
+        >
+          <Plus className="size-4" aria-hidden />
+        </Button>
+        <Button
+          variant="secondary"
+          className={mapControlBtnClass}
+          title="Fit entire galaxy"
+          aria-label="Fit entire galaxy"
+          type="button"
+          onClick={resetMapView}
+        >
+          <Expand className="size-4" aria-hidden />
+        </Button>
       </div>
-      {activeGame ? (
-        selectedSystem !== null ? (
-          <StarSystemPanel
-            system={selectedSystem}
-            empireNames={empireNames}
-            selectedNeighbors={selectedNeighbors}
-            canEdit={canEditEmphasis}
-            emphasisHint={emphasisSliderHint}
-            emphasisSaveError={emphasisCommitError}
-            importSubsidyError={importSubsidyError}
-            localShipsPct={localShipsPct}
-            onLocalShipsPctChange={setLocalShipsPct}
-            onShipsPctCommit={async (pct) => {
-              if (!activeGame || !canEditEmphasis) return;
-              setEmphasisCommitError(null);
-              try {
-                await setEmphasis({
-                  gameId: activeGame._id,
-                  systemId: selectedSystem._id,
-                  emphasisShips: pct,
-                });
-              } catch (e) {
-                setEmphasisCommitError(
-                  e instanceof Error ? e.message : "Could not save production mix.",
-                );
+    ) : null;
+
+  const galaxyStageEl = (
+    <GalaxyStage
+      viewWidth={viewSize.width}
+      viewHeight={viewSize.height}
+      camera={camera}
+      onCameraChange={handleCameraChange}
+      nodes={stageNodes}
+      links={stageLinks}
+      galaxyLinks={galaxyLinkRows}
+      fleetMarkers={fleetMarkers}
+      colonyShipMarkers={colonyShipMarkers}
+      pendingSegments={pendingSegments}
+      routeSegments={routeSegments}
+      enRouteGhosts={enRouteGhosts}
+      traderShips={traderShips}
+      combatMarkers={visibleCombatMarkers}
+      turnTimeline={turnTimeline}
+      selectedFleetId={selectedFleetId}
+      onSelectedFleetChange={handleSelectedFleetChange}
+      selectedTraderId={selectedTraderId}
+      onSelectedTraderChange={handleTraderSelect}
+      selectedSystemId={selectedSystemId}
+      selectedColonyShipId={selectedColonyShipId}
+      onSelectedColonyShipChange={handleSelectedColonyShipChange}
+      shipsToDispatch={cappedShipsToDispatch}
+      repeatNextDragEnabled={repeatNextDragEnabled}
+      foodAlerts={foodAlerts}
+      starvationAlerts={starvationAlerts}
+      canIssueOrders={simAllowsPlayerOrders}
+      fleetSelectionAllowed={fleetSelectionAllowed}
+      onFleetMoveCommit={simAllowsPlayerOrders ? onFleetMoveCommit : undefined}
+      onRouteMidpointTap={
+        simAllowsPlayerOrders && routeSegments.length > 0
+          ? handleRouteMidpointTap
+          : undefined
+      }
+      onStarPointerTap={activeGame ? handleStarTap : undefined}
+      onStarDoubleTap={activeGame ? handleStarTap : undefined}
+      onStageBackgroundTap={activeGame ? handleStageBackgroundTap : undefined}
+      onColonyShipRouteCommit={
+        simAllowsPlayerOrders && activeGame ? handleColonyShipRouteCommit : undefined
+      }
+      validateColonyShipRoute={validateColonyShipRouteForMap}
+    />
+  );
+
+  return (
+    <section
+      className={
+        playerHomeMapLayout
+          ? "relative flex min-h-0 min-w-0 flex-1 flex-col"
+          : "relative overflow-hidden rounded-xl border border-st-border bg-st-panel p-2"
+      }
+    >
+      {playerHomeMapLayout ? (
+        <div className="relative left-1/2 flex min-h-0 w-screen max-w-[100vw] flex-1 -translate-x-1/2 flex-col border-b border-st-border bg-st-panel">
+          <div
+            className={
+              starPanelAside != null
+                ? "flex min-h-0 min-w-0 flex-1"
+                : "relative min-h-0 flex-1 overflow-hidden"
+            }
+          >
+            <div
+              ref={mapContainerRef}
+              className={
+                starPanelAside != null
+                  ? "relative min-h-0 min-w-0 flex-1 overflow-hidden"
+                  : "relative h-full min-h-0 w-full overflow-hidden"
               }
-            }}
-            onImportSubsidyDelta={async (delta) => {
-              if (!activeGame || !canEditEmphasis) return;
-              setImportSubsidyError(null);
-              try {
-                await adjustFoodImportSubsidy({
-                  gameId: activeGame._id,
-                  systemId: selectedSystem._id,
-                  delta,
-                });
-              } catch (e) {
-                setImportSubsidyError(
-                  e instanceof Error ? e.message : "Could not update import offer.",
-                );
-              }
-            }}
-            onNeighborNavigate={handleStarTap}
-            onClose={dismissStarPanel}
-            foodStockpileMinPerPop={gameSettingsQuery?.foodStockpileMinPerPop ?? 1.5}
-            foodStockpileMaxPerPop={gameSettingsQuery?.foodStockpileMaxPerPop ?? 20.0}
-            foodStressFactor={gameSettingsQuery?.foodStressFactor ?? 1}
-            dockingFee={gameSettingsQuery?.traderDockingCost ?? DEFAULT_TRADER_DOCKING_COST}
-            fleetSize={selectedSystemFleetSize}
-            fleetsAtSystem={selectedSystemFleets}
-            colonyShipsAtSystem={selectedSystemColonyShips}
-            defenseAdvantage={selectedSystemDefenseAdvantage}
-            recentCombat={selectedSystemRecentCombat}
-            canUseColonyShips={canUseColonyShips}
-            canColonizeAtStar={canColonizeHere}
-            colonizeShipId={idleColonyShipIdAtSelection}
-            idleColonyShipIdForNeighborDispatch={idleColonyShipIdAtSelection}
-            colonyMutationError={colonyMutationError}
-            gameIdForColony={activeGame._id}
-            onStartColonyBuild={handleStarPanelStartColonyBuild}
-            onCancelColonyBuild={handleStarPanelCancelColonyBuild}
-            onDispatchColonyFromStarPanel={handleStarPanelDispatchColony}
-            onColonizeFromStarPanel={handleStarPanelColonize}
-          />
-        ) : (
-          <PlanetInfoEmptyPanel />
-        )
-      ) : null}
+            >
+              {galaxyStageEl}
+              <div className="pointer-events-none absolute inset-0 z-[6]">
+                {mapZoomControlButtons !== null ? (
+                  <div className="pointer-events-auto absolute right-3 top-3">
+                    {mapZoomControlButtons}
+                  </div>
+                ) : null}
+                <div className="absolute bottom-3 right-3 rounded-md bg-st-bg/90 px-2.5 py-1 text-xs text-st-muted shadow-md ring-1 ring-st-border/70 backdrop-blur-sm">
+                  {activeGame ? `${stageNodes.length} stars` : "Create + seed a game"}
+                </div>
+              </div>
+            </div>
+            {starPanelAside != null ? (
+              <aside className="flex w-[360px] shrink-0 flex-col border-l border-st-border bg-st-panel">
+                <div className="flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain p-2">
+                  {fleetPanelInner !== null ? (
+                    <div className="pointer-events-auto rounded-lg border border-st-border bg-st-bg/95 p-3 text-sm shadow-sm">
+                      {fleetPanelInner}
+                    </div>
+                  ) : (
+                    (() => {
+                      const starOnly = renderSelectedStarSystemPanelOnly();
+                      if (starOnly !== null) {
+                        return <div className="min-w-0">{starOnly}</div>;
+                      }
+                      return starPanelAside;
+                    })()
+                  )}
+                </div>
+              </aside>
+            ) : null}
+          </div>
+        </div>
+      ) : (
+        <>
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2 px-2">
+            <h2 className="text-sm font-semibold uppercase tracking-wide text-st-muted">
+              Galaxy Map
+            </h2>
+            <div className="flex flex-wrap items-center justify-end gap-2">
+              {mapZoomControlButtons}
+              <span className="text-xs text-st-muted">
+                {activeGame ? `${stageNodes.length} systems` : "Create + seed a game"}
+              </span>
+            </div>
+          </div>
+          <div
+            ref={mapContainerRef}
+            className="relative w-full overflow-hidden rounded-lg"
+            style={{ aspectRatio: `${GALAXY_STAGE_WIDTH} / ${GALAXY_STAGE_HEIGHT}` }}
+          >
+            {galaxyStageEl}
+          </div>
+        </>
+      )}
+      {playerHomeMapLayout && lowerPanels !== null ? (
+        <div className="mx-auto mt-4 max-w-7xl px-4 sm:px-6">{lowerPanels}</div>
+      ) : (
+        lowerPanels
+      )}
       {showTraderPanel && selectedTrader !== undefined && activeGame ? (
         <div className="pointer-events-auto absolute bottom-3 right-3 z-10 max-w-[min(100%-1.5rem,300px)] rounded-lg border border-amber-500/35 bg-st-bg/95 px-3 py-2 text-sm shadow-lg backdrop-blur-sm">
           <div className="flex items-start justify-between gap-2">
@@ -1710,95 +1971,9 @@ export function GalaxyViewport() {
           </div>
         </div>
       ) : null}
-      {showFleetPanel ? (
+      {fleetPanelInner !== null && !playerHomeMapLayout ? (
         <div className="pointer-events-auto absolute bottom-3 left-3 z-10 max-w-[min(100%-1.5rem,280px)] rounded-lg border border-st-border bg-st-bg/95 px-3 py-2 text-sm shadow-lg backdrop-blur-sm">
-          <div className="flex items-start justify-between gap-2">
-            <div>
-              <div className="font-medium text-st-fg">{selectedFleet.name}</div>
-              <div className="mt-0.5 text-xs text-st-muted">
-                {selectedFleet.strength}{" "}
-                {selectedFleet.strength === 1 ? "ship" : "ships"} at system
-              </div>
-            </div>
-            <button
-              type="button"
-              className="shrink-0 text-xs text-st-muted underline hover:text-st-fg"
-              onClick={() => handleSelectedFleetChange(null)}
-            >
-              Clear
-            </button>
-          </div>
-          <label className="mt-3 block text-xs text-st-muted">
-            Ships to send on drag-drop move
-            <div className="mt-1 flex items-center gap-2">
-              <input
-                type="range"
-                min={0}
-                max={selectedFleet.strength}
-                value={cappedShipsToDispatch}
-                onChange={(e) => setShipsToDispatch(Number(e.target.value))}
-                className="min-w-0 flex-1 accent-cyan-400"
-              />
-              <button
-                type="button"
-                title={
-                  repeatNextDragEnabled
-                    ? "Recurring route on — drop sets automatic sends each turn"
-                    : "Turn on to save this hop as a recurring route when you drop"
-                }
-                aria-label="Toggle recurring route on drag-drop"
-                aria-pressed={repeatNextDragEnabled}
-                disabled={cappedShipsToDispatch < 1}
-                onClick={() => setRepeatNextDragEnabled((v) => !v)}
-                className={`flex size-9 shrink-0 items-center justify-center rounded-md border transition-colors ${
-                  repeatNextDragEnabled
-                    ? "border-violet-400 bg-violet-500/20 text-violet-200"
-                    : "border-st-border bg-st-panel text-st-muted hover:border-st-accent hover:text-st-fg"
-                } disabled:cursor-not-allowed disabled:opacity-40`}
-              >
-                <Repeat2 className="size-4" aria-hidden />
-              </button>
-            </div>
-            <div className="mt-1 font-mono text-xs text-st-fg">
-              {cappedShipsToDispatch} of {selectedFleet.strength}
-              {repeatNextDragEnabled && cappedShipsToDispatch >= 1 ? (
-                <span className="ml-2 text-violet-300">
-                  (
-                  {Math.max(
-                    1,
-                    Math.min(
-                      100,
-                      Math.round(
-                        (cappedShipsToDispatch / Math.max(1, selectedFleet.strength)) * 100,
-                      ),
-                    ),
-                  )}
-                  % recurring)
-                </span>
-              ) : null}
-            </div>
-          </label>
-          {repeatNextDragEnabled && cappedShipsToDispatch >= 1 ? (
-            <p className="mt-2 text-xs text-violet-300/90">
-              Drop on a linked star to issue this move and save that hop as a{" "}
-              <strong className="text-violet-200">standing route</strong> (
-              {Math.max(
-                1,
-                Math.min(
-                  100,
-                  Math.round(
-                    (cappedShipsToDispatch / Math.max(1, selectedFleet.strength)) * 100,
-                  ),
-                ),
-              )}
-              % of idle garrison each turn). Tap the violet dashed line to edit.
-            </p>
-          ) : null}
-          {cappedShipsToDispatch < 1 ? (
-            <p className="mt-2 text-xs text-amber-400/90">
-              Set at least 1 ship to drag this fleet to a linked star.
-            </p>
-          ) : null}
+          {fleetPanelInner}
         </div>
       ) : null}
       {showColonyShipPanel && selectedColonyShip !== undefined && activeGame ? (
@@ -2137,8 +2312,21 @@ function formatWhole(n: number): string {
   return Math.round(n).toLocaleString();
 }
 
-function formatFoodUnits(n: number): string {
-  return `${formatWhole(n)} food`;
+/** Compact food stockpile labels (e.g. 58k food, 12 mill food). */
+function formatFoodStockpileCompact(n: number): string {
+  const x = Math.round(Number.isFinite(n) ? n : 0);
+  if (x <= 0) return "0 food";
+  if (x < 1000) return `${x.toLocaleString("en-US")} food`;
+  if (x < 1_000_000) return `${Math.round(x / 1000)}k food`;
+  if (x < 1_000_000_000) {
+    const m = x / 1_000_000;
+    const simplified =
+      m >= 10 || Math.abs(m - Math.round(m)) < 0.05
+        ? Math.round(m).toString()
+        : (Math.round(m * 10) / 10).toFixed(1).replace(/\.0$/, "");
+    return `${simplified} mill food`;
+  }
+  return `${Math.round(x / 1_000_000_000)} bill food`;
 }
 
 function PlanetInfoRow({
@@ -2176,14 +2364,25 @@ function StarSystemPanel({
   system,
   empireNames,
   selectedNeighbors,
+  showColonyOperationalIntel,
+  fleetSelectionAllowed,
   canEdit,
   emphasisHint,
   emphasisSaveError,
   importSubsidyError,
+  priorityMutationError,
+  isPriorityStar,
+  canMarkPriorityStar,
+  priorityDisabledReason,
+  priorityEmpireId,
+  priorityEmpireOptions,
+  canChoosePriorityEmpire,
+  onPriorityEmpireChange,
   localShipsPct,
   onLocalShipsPctChange,
   onShipsPctCommit,
   onImportSubsidyDelta,
+  onPriorityStarToggle,
   onNeighborNavigate,
   onClose,
   foodStockpileMinPerPop,
@@ -2205,18 +2404,30 @@ function StarSystemPanel({
   onCancelColonyBuild,
   onDispatchColonyFromStarPanel,
   onColonizeFromStarPanel,
+  onFleetCardTap,
 }: {
   system: SystemDoc;
   empireNames: Record<string, string>;
   selectedNeighbors: { id: string; name: string }[];
+  showColonyOperationalIntel: boolean;
+  fleetSelectionAllowed: (fleetEmpireId: string) => boolean;
   canEdit: boolean;
   emphasisHint: string | null;
   emphasisSaveError: string | null;
   importSubsidyError: string | null;
+  priorityMutationError: string | null;
+  isPriorityStar: boolean;
+  canMarkPriorityStar: boolean;
+  priorityDisabledReason: string | null;
+  priorityEmpireId: Id<"emp_states"> | null;
+  priorityEmpireOptions: Array<{ _id: Id<"emp_states">; name: string }>;
+  canChoosePriorityEmpire: boolean;
+  onPriorityEmpireChange: (empireId: Id<"emp_states">) => void;
   localShipsPct: number | null;
   onLocalShipsPctChange: (v: number) => void;
   onShipsPctCommit: (v: number) => Promise<void>;
   onImportSubsidyDelta: (delta: number) => Promise<void>;
+  onPriorityStarToggle: (enabled: boolean) => Promise<void>;
   onNeighborNavigate: (systemId: string) => void;
   onClose: () => void;
   foodStockpileMinPerPop: number;
@@ -2238,10 +2449,18 @@ function StarSystemPanel({
   onCancelColonyBuild?: () => Promise<void>;
   onDispatchColonyFromStarPanel?: (toSystemId: string) => Promise<void>;
   onColonizeFromStarPanel?: () => Promise<void>;
+  onFleetCardTap?: (fleetId: string) => void;
 }) {
   const [importBonusInfoOpen, setImportBonusInfoOpen] = useState(false);
   const [homeworldInfoOpen, setHomeworldInfoOpen] = useState(false);
   const [colonyBusy, setColonyBusy] = useState(false);
+  const [planetPanelTab, setPlanetPanelTab] = useState<
+    "food" | "fleet" | "battle" | "routes"
+  >("food");
+
+  useEffect(() => {
+    setPlanetPanelTab(showColonyOperationalIntel ? "food" : "routes");
+  }, [system._id, showColonyOperationalIntel]);
   const runColonyAction = useCallback(async (fn: () => Promise<void>) => {
     setColonyBusy(true);
     try {
@@ -2450,8 +2669,65 @@ function StarSystemPanel({
                 <Star className="size-4 fill-current" aria-hidden />
               </button>
             ) : null}
+            {isPriorityStar ? (
+              <span className="rounded-full border border-cyan-400/50 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-cyan-200">
+                Priority
+              </span>
+            ) : null}
           </div>
           <div className="mt-0.5 font-mono text-xs text-st-muted">{system.systemKey}</div>
+          <div className="mt-2">
+            {canChoosePriorityEmpire ? (
+              <label className="mb-1.5 block text-[10px] font-medium uppercase tracking-wide text-st-muted">
+                Priority for
+                <select
+                  className="mt-1 block w-full rounded border border-st-border bg-st-bg px-2 py-1 text-xs normal-case tracking-normal text-st-fg"
+                  value={priorityEmpireId ?? ""}
+                  onChange={(event) => {
+                    const empireId = event.target.value as Id<"emp_states">;
+                    if (empireId !== "") onPriorityEmpireChange(empireId);
+                  }}
+                >
+                  {priorityEmpireOptions.map((empire) => (
+                    <option key={empire._id} value={empire._id}>
+                      {empire.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : null}
+            <Button
+              type="button"
+              variant="secondary"
+              aria-pressed={isPriorityStar}
+              className={`inline-flex h-7 items-center gap-1.5 px-2 text-[11px] ${
+                isPriorityStar
+                  ? "border-cyan-400/70 bg-cyan-950/40 text-cyan-100 hover:border-cyan-300"
+                  : ""
+              }`}
+              disabled={!canMarkPriorityStar}
+              onClick={() => void onPriorityStarToggle(!isPriorityStar)}
+              title={
+                canMarkPriorityStar
+                  ? "Mark this star as a strategic Priority star for the selected empire"
+                  : (priorityDisabledReason ?? "Priority stars are unavailable right now")
+              }
+            >
+              <Star
+                className={isPriorityStar ? "size-3 fill-current" : "size-3"}
+                aria-hidden
+              />
+              {isPriorityStar ? "Unmark Priority star" : "Mark Priority star"}
+            </Button>
+            {priorityMutationError !== null ? (
+              <p className="mt-1 text-[10px] text-red-400">{priorityMutationError}</p>
+            ) : null}
+            {!canMarkPriorityStar && priorityDisabledReason !== null ? (
+              <p className="mt-1 text-[10px] leading-snug text-amber-300/90">
+                {priorityDisabledReason}
+              </p>
+            ) : null}
+          </div>
         </div>
         <button
           type="button"
@@ -2462,10 +2738,28 @@ function StarSystemPanel({
         </button>
       </div>
 
-      <dl className="mt-3 flex flex-col space-y-2 text-xs">
+      <dl className="mt-3 grid gap-x-5 gap-y-2 text-xs sm:grid-cols-2 xl:grid-cols-3">
+        <PlanetInfoRow
+          label="Owner"
+          value={
+            system.ownerEmpireId === null
+              ? "Independent"
+              : (empireNames[system.ownerEmpireId] ?? "Unknown")
+          }
+        />
+        <PlanetInfoRow
+          label="Resource richness"
+          value={`${Math.round(system.resourceRichness * 100)}%`}
+        />
+        <PlanetInfoRow
+          label="Population"
+          value={pop > 0 ? formatPopulationPeople(pop) : "0"}
+        />
+      </dl>
 
-        {/* Ship production effort slider */}
-        {pop > 0 && (
+      {showColonyOperationalIntel && pop > 0 ? (
+        <dl className="mt-3 flex flex-col space-y-2 text-xs">
+          {/* Ship production effort slider */}
           <div className="rounded border border-st-border/60 bg-st-panel/50 px-2 py-1.5">
             <div className="mb-1 flex items-center justify-between gap-1">
               <span className="text-st-muted">Ship production effort</span>
@@ -2519,410 +2813,298 @@ function StarSystemPanel({
               <p className="mt-1 text-[10px] text-st-muted">{emphasisHint}</p>
             ) : null}
           </div>
-        )}
+        </dl>
+      ) : null}
 
-        {/* Food trade pricing (attracts importers) */}
-        {pop > 0 && (
-          <div className="rounded border border-st-border/60 bg-st-panel/50 px-2 py-1.5">
-            <div className="text-[11px] font-medium text-st-muted">Food imports &amp; traders</div>
-            <div className="mt-1 flex justify-between gap-2 text-xs">
-              <span className="text-st-muted">Market food price</span>
-              <span className="font-mono text-st-fg">
-                {marketFoodCr !== undefined
-                  ? `${marketFoodCr.toFixed(1)} cr/u`
-                  : `— (≈${FOOD_PRICE_DEFAULT_CR} baseline until priced)`}
-              </span>
-            </div>
-            <div className="mt-1 flex flex-wrap items-center justify-between gap-2 text-xs">
-              <div className="flex items-center gap-1">
-                <span className="text-st-muted">Import bonus</span>
-                <button
-                  type="button"
-                  className="inline-flex rounded p-0.5 text-st-muted hover:bg-st-bg hover:text-st-fg"
-                  title="How import bonus is paid"
-                  aria-label="Import bonus information"
-                  onClick={() => setImportBonusInfoOpen(true)}
-                >
-                  <Info className="size-3.5" aria-hidden />
-                </button>
-              </div>
-              <div className="flex items-center gap-1">
-                <Button
-                  type="button"
-                  variant="secondary"
-                  className="size-7 shrink-0 p-0"
-                  title="Lower bonus paid to food importers"
-                  disabled={!canEdit || importSubsidy <= 0}
-                  onClick={() => void onImportSubsidyDelta(-1)}
-                >
-                  <Minus className="size-3.5" aria-hidden />
-                </Button>
-                <span className="min-w-[2.5rem] text-center font-mono text-st-fg">{importSubsidy} cr/u</span>
-                <Button
-                  type="button"
-                  variant="secondary"
-                  className="size-7 shrink-0 p-0"
-                  title="Raise bonus so traders earn more delivering here"
-                  disabled={!canEdit || importSubsidy >= MAX_IMPORT_SUBSIDY_DISPLAY}
-                  onClick={() => void onImportSubsidyDelta(1)}
-                >
-                  <Plus className="size-3.5" aria-hidden />
-                </Button>
-              </div>
-            </div>
-            <div className="mt-0.5 flex justify-between gap-2 text-xs">
-              <span className="text-st-muted">Traders&apos; offered sell price</span>
-              <span className="font-mono text-amber-200/90">{traderOfferCr.toFixed(1)} cr/u</span>
-            </div>
-            {importSubsidyError !== null ? (
-              <p className="mt-1 text-[10px] text-red-400">{importSubsidyError}</p>
-            ) : null}
-          </div>
-        )}
-
-        {/* Food status */}
-        {pop > 0 && (
-          <div className="rounded border border-st-border/60 bg-st-panel/50 px-2 py-1.5">
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-st-muted">Food stock</span>
-              <span
-                className={`text-right font-medium ${
-                  stockBand === "below" ? "text-red-400" : "text-emerald-400"
-                }`}
-                title={stockStatusTitle}
-              >
-                {stockBand === "below"
-                  ? "Below Minimum"
-                  : stockBand === "oversupply"
-                    ? "Oversupply"
-                    : "Acceptable"}
-              </span>
-            </div>
-            <div className="mt-0.5 flex items-center justify-between gap-2">
-              <span className="text-st-muted">Food surplus</span>
-              <span className={`font-mono font-semibold ${foodStatusColor}`}>{foodStatusLabel}</span>
-            </div>
-            <div
-              className="mt-1 flex items-center justify-between gap-2 text-xs"
-              title="Production index vs need index. The second number is always 5 — your colony’s food need this turn on that scale. The first tracks local output; the value in parentheses is surplus (+) or shortfall (−)."
+      <div
+        className="mt-3 flex flex-wrap gap-0.5 border-b border-st-border/70"
+        role="tablist"
+        aria-label="Planet detail sections"
+      >
+        {(
+          [
+            ["food", "Food"],
+            ["fleet", "Fleet"],
+            ["battle", "Battle"],
+            ["routes", "Routes"],
+          ] as const
+        ).map(([tabId, label]) => {
+          const foodFleetLocked =
+            !showColonyOperationalIntel && (tabId === "food" || tabId === "fleet");
+          const selected = planetPanelTab === tabId;
+          return (
+            <button
+              key={tabId}
+              type="button"
+              role="tab"
+              id={`planet-tab-${tabId}`}
+              aria-selected={selected}
+              aria-disabled={foodFleetLocked}
+              title={
+                foodFleetLocked ? "This information is not available to other empires" : undefined
+              }
+              className={
+                foodFleetLocked
+                  ? "-mb-px cursor-not-allowed rounded-t border-b-2 border-transparent px-2.5 py-1.5 text-[11px] font-medium text-st-muted opacity-45"
+                  : selected
+                    ? "-mb-px rounded-t border-b-2 border-cyan-400 bg-st-panel/40 px-2.5 py-1.5 text-[11px] font-semibold text-st-fg"
+                    : "-mb-px rounded-t border-b-2 border-transparent px-2.5 py-1.5 text-[11px] font-medium text-st-muted hover:text-st-fg"
+              }
+              onClick={() => {
+                if (!foodFleetLocked) setPlanetPanelTab(tabId);
+              }}
             >
-              <span className="text-st-muted">Prod / demand</span>
-              <span className="font-mono text-st-fg">
-                {foodScoreFmt(foodScores.prod)} / {foodScoreFmt(foodScores.demand)}
-                <span className={foodScores.net >= 0 ? "text-emerald-400" : "text-red-400"}>
-                  {" "}
-                  ({foodScores.net >= 0 ? "+" : ""}
-                  {foodScoreFmt(foodScores.net)})
-                </span>
-              </span>
-            </div>
-          </div>
-        )}
+              {label}
+            </button>
+          );
+        })}
+      </div>
 
-        {showHomeworldColonyUi || showColonizeInStarPanel || showIdleColonyNeighborAwayFromHomeworld ? (
-          <div className="space-y-2">
-            {showHomeworldColonyUi ? (
-              <div className="rounded border border-teal-500/35 bg-teal-950/25 px-2 py-2">
-                <div className="text-[11px] font-medium text-teal-200/90">Colony ship project</div>
-                <p className="mt-0.5 text-[10px] leading-snug text-st-muted">
-                  Diverts <span className="font-mono text-st-fg/90">ship production</span> from garrison
-                  ships. Target cost is about{" "}
-                  <span className="font-mono text-st-fg/90">{COLONY_SHIP_BUILD_TURNS} turns</span> of output
-                  at max ship effort on this homeworld. Dispatch costs{" "}
-                  <span className="font-mono text-st-fg/90">
-                    {COLONY_SHIP_CARGO_DISPLAY.toLocaleString()}
-                  </span>{" "}
-                  people from this world.
-                </p>
-                {idleColonyDispatchAtHomeworld ? (
-                  <p className="mt-1 text-[10px] leading-snug text-teal-100/80">
-                    Drag from the colony ship on the map to a linked star — same as fleets (teal dashed
-                    preview). Further hops: dispatch again whenever the ship is idle at a colony.
-                  </p>
-                ) : null}
-                {idleColonyDispatchAtHomeworld ? (
-                  <div className="mt-2 space-y-1.5">
-                    <p className="text-[11px] text-teal-100/90">Colony ship ready — dispatch to a neighbor.</p>
-                    <p className="text-[10px] text-st-muted">
-                      Costs {COLONY_SHIP_CARGO_DISPLAY.toLocaleString()} people from this homeworld.
-                    </p>
-                    {selectedNeighbors.length === 0 ? (
-                      <p className="text-[10px] text-st-muted">No hyperspace links from this system.</p>
-                    ) : (
-                      <ul className="flex flex-col gap-1">
-                        {selectedNeighbors.map((n) => (
-                          <li key={n.id}>
-                            <Button
-                              type="button"
-                              variant="secondary"
-                              className="h-8 w-full justify-start text-xs"
-                              disabled={colonyBusy}
-                              onClick={() =>
-                                void runColonyAction(() => onDispatchColonyFromStarPanel(n.id))
-                              }
-                            >
-                              Dispatch to {n.name}
-                            </Button>
-                          </li>
-                        ))}
-                      </ul>
-                    )}
-                  </div>
-                ) : colonyBuildInProgress && onCancelColonyBuild ? (
-                  <div className="mt-2 space-y-1">
-                    <div className="flex justify-between text-[11px] text-st-muted">
-                      <span>Build progress</span>
+      <div
+        className="mt-3 text-xs"
+        role="tabpanel"
+        aria-labelledby={`planet-tab-${planetPanelTab}`}
+      >
+        {planetPanelTab === "food" && showColonyOperationalIntel ? (
+          <>
+            <dl className="flex flex-col space-y-2 text-xs">
+              {pop > 0 ? (
+                <>
+                  <div className="rounded border border-st-border/60 bg-st-panel/50 px-2 py-1.5">
+                    <div className="text-[11px] font-medium text-st-muted">Food imports &amp; traders</div>
+                    <div className="mt-1 flex justify-between gap-2 text-xs">
+                      <span className="text-st-muted">Market food price</span>
                       <span className="font-mono text-st-fg">
-                        {buildProgress} / {buildCost} ship pts
+                        {marketFoodCr !== undefined
+                          ? `${marketFoodCr.toFixed(1)} cr/u`
+                          : `— (≈${FOOD_PRICE_DEFAULT_CR} baseline until priced)`}
                       </span>
                     </div>
-                    <div className="h-1.5 overflow-hidden rounded-full bg-st-border/80">
-                      <div
-                        className="h-full bg-teal-400/80 transition-[width]"
-                        style={{
-                          width: `${buildCost > 0 ? Math.min(100, (100 * buildProgress) / buildCost) : 0}%`,
-                        }}
-                      />
+                    <div className="mt-1 flex flex-wrap items-center justify-between gap-2 text-xs">
+                      <div className="flex items-center gap-1">
+                        <span className="text-st-muted">Import bonus</span>
+                        <button
+                          type="button"
+                          className="inline-flex rounded p-0.5 text-st-muted hover:bg-st-bg hover:text-st-fg"
+                          title="How import bonus is paid"
+                          aria-label="Import bonus information"
+                          onClick={() => setImportBonusInfoOpen(true)}
+                        >
+                          <Info className="size-3.5" aria-hidden />
+                        </button>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          className="size-7 shrink-0 p-0"
+                          title="Lower bonus paid to food importers"
+                          disabled={!canEdit || importSubsidy <= 0}
+                          onClick={() => void onImportSubsidyDelta(-1)}
+                        >
+                          <Minus className="size-3.5" aria-hidden />
+                        </Button>
+                        <span className="min-w-[2.5rem] text-center font-mono text-st-fg">
+                          {importSubsidy} cr/u
+                        </span>
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          className="size-7 shrink-0 p-0"
+                          title="Raise bonus so traders earn more delivering here"
+                          disabled={!canEdit || importSubsidy >= MAX_IMPORT_SUBSIDY_DISPLAY}
+                          onClick={() => void onImportSubsidyDelta(1)}
+                        >
+                          <Plus className="size-3.5" aria-hidden />
+                        </Button>
+                      </div>
                     </div>
-                    <Button
-                      type="button"
-                      variant="secondary"
-                      className="mt-1 h-8 w-full text-xs"
-                      disabled={colonyBusy}
-                      onClick={() => void runColonyAction(onCancelColonyBuild)}
-                    >
-                      Pause / cancel build
-                    </Button>
+                    <div className="mt-0.5 flex justify-between gap-2 text-xs">
+                      <span className="text-st-muted">Traders&apos; offered sell price</span>
+                      <span className="font-mono text-amber-200/90">{traderOfferCr.toFixed(1)} cr/u</span>
+                    </div>
+                    {importSubsidyError !== null ? (
+                      <p className="mt-1 text-[10px] text-red-400">{importSubsidyError}</p>
+                    ) : null}
                   </div>
-                ) : onStartColonyBuild ? (
-                  <Button
-                    type="button"
-                    className="mt-2 h-8 w-full text-xs"
-                    disabled={colonyBusy}
-                    onClick={() => void runColonyAction(onStartColonyBuild)}
-                  >
-                    Start colony ship build
-                  </Button>
-                ) : null}
-              </div>
-            ) : null}
-            {showIdleColonyNeighborAwayFromHomeworld ? (
-              <div className="rounded border border-teal-500/35 bg-teal-950/20 px-2 py-2">
-                <div className="text-[11px] font-medium text-teal-200/90">Idle colony ship</div>
-                <p className="mt-0.5 text-[10px] leading-snug text-teal-100/80">
-                  Drag from the colony ship on the map to a linked star — same as fleets. Chain voyages by
-                  issuing another drag whenever the ship is idle at a colony.
-                </p>
-                <p className="mt-1 text-[10px] text-st-muted">
-                  Cargo already aboard — no population is deducted from this colony.
-                </p>
-                <div className="mt-2 space-y-1.5">
-                  <p className="text-[11px] text-teal-100/90">Dispatch to a neighbor</p>
-                  {selectedNeighbors.length === 0 ? (
-                    <p className="text-[10px] text-st-muted">No hyperspace links from this system.</p>
-                  ) : (
-                    <ul className="flex flex-col gap-1">
-                      {selectedNeighbors.map((n) => (
-                        <li key={n.id}>
-                          <Button
-                            type="button"
-                            variant="secondary"
-                            className="h-8 w-full justify-start text-xs"
-                            disabled={colonyBusy}
-                            onClick={() =>
-                              void runColonyAction(() => onDispatchColonyFromStarPanel(n.id))
-                            }
-                          >
-                            Dispatch to {n.name}
-                          </Button>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </div>
-              </div>
-            ) : null}
-            {showColonizeInStarPanel ? (
-              <div className="rounded border border-emerald-500/35 bg-emerald-950/20 px-2 py-2">
-                <div className="text-[11px] font-medium text-emerald-200/90">Recolonization</div>
-                <p className="mt-0.5 text-[10px] leading-snug text-st-muted">
-                  Found a colony with {COLONY_SHIP_CARGO_DISPLAY.toLocaleString()} people, starter food
-                  stockpile, and <span className="font-mono text-st-fg/90">+{COLONY_NEW_WORLD_FOOD_BONUS_PER_TURN}</span>{" "}
-                  bonus food production per turn. The colony ship is consumed.
-                </p>
-                <Button
-                  type="button"
-                  className="mt-2 h-8 w-full text-xs"
-                  disabled={colonyBusy}
-                  onClick={() => void runColonyAction(onColonizeFromStarPanel)}
-                >
-                  Colonize this system
-                </Button>
-              </div>
-            ) : null}
-            {colonyMutationError != null &&
-            (showHomeworldColonyUi ||
-              showColonizeInStarPanel ||
-              showIdleColonyNeighborAwayFromHomeworld) ? (
-              <p className="text-[10px] text-red-400">{colonyMutationError}</p>
-            ) : null}
-          </div>
+
+                  <div className="rounded border border-st-border/60 bg-st-panel/50 px-2 py-1.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-st-muted">Food stock</span>
+                      <span
+                        className={`text-right font-medium ${
+                          stockBand === "below" ? "text-red-400" : "text-emerald-400"
+                        }`}
+                        title={stockStatusTitle}
+                      >
+                        {stockBand === "below"
+                          ? "Below Minimum"
+                          : stockBand === "oversupply"
+                            ? "Oversupply"
+                            : "Acceptable"}
+                      </span>
+                    </div>
+                    <div className="mt-0.5 flex items-center justify-between gap-2">
+                      <span className="text-st-muted">Food surplus</span>
+                      <span className={`font-mono font-semibold ${foodStatusColor}`}>
+                        {foodStatusLabel}
+                      </span>
+                    </div>
+                    <div
+                      className="mt-1 flex items-center justify-between gap-2 text-xs"
+                      title="Production index vs need index. The second number is always 5 — your colony’s food need this turn on that scale. The first tracks local output; the value in parentheses is surplus (+) or shortfall (−)."
+                    >
+                      <span className="text-st-muted">Prod / demand</span>
+                      <span className="font-mono text-st-fg">
+                        {foodScoreFmt(foodScores.prod)} / {foodScoreFmt(foodScores.demand)}
+                        <span className={foodScores.net >= 0 ? "text-emerald-400" : "text-red-400"}>
+                          {" "}
+                          ({foodScores.net >= 0 ? "+" : ""}
+                          {foodScoreFmt(foodScores.net)})
+                        </span>
+                      </span>
+                    </div>
+                  </div>
+                </>
+              ) : (
+                <p className="text-st-muted">No population — no local food economy.</p>
+              )}
+            </dl>
+            <dl className="mt-3 grid gap-x-5 gap-y-2 text-xs sm:grid-cols-2 xl:grid-cols-3">
+              <PlanetInfoRow
+                label="Food stockpile"
+                value={formatFoodStockpileCompact(stockFood)}
+                valueClassName={
+                  hasFoodEconomy && stockFood < stockMinUnits
+                    ? "text-red-400"
+                    : hasFoodEconomy && stockFood > stockMaxUnits
+                      ? "text-emerald-400"
+                      : "text-st-fg"
+                }
+              />
+              <PlanetInfoRow
+                label="Stockpile minimum"
+                value={hasFoodEconomy ? formatFoodStockpileCompact(stockMinUnits) : "N/A"}
+                valueClassName={
+                  hasFoodEconomy && stockFood > stockMinUnits ? "text-emerald-400" : "text-st-fg"
+                }
+              />
+              <PlanetInfoRow
+                label="Stockpile maximum"
+                value={hasFoodEconomy ? formatFoodStockpileCompact(stockMaxUnits) : "N/A"}
+                valueClassName={
+                  hasFoodEconomy && stockFood > stockMaxUnits ? "text-emerald-400" : "text-st-fg"
+                }
+              />
+              <PlanetInfoRow label="Food stress" value={foodStressLabel} />
+              <PlanetInfoRow
+                label="Market food price"
+                value={
+                  marketFoodCr !== undefined
+                    ? `${marketFoodCr.toFixed(1)} cr/u`
+                    : `~${FOOD_PRICE_DEFAULT_CR} cr/u`
+                }
+              />
+              <PlanetInfoRow label="Import bonus" value={`${importSubsidy.toFixed(1)} cr/u`} />
+              <PlanetInfoRow
+                label="Price offered for food cargo"
+                value={`${traderOfferCr.toFixed(1)} cr/u`}
+              />
+              <PlanetInfoRow label="Docking fee" value={`${formatWhole(dockingFee)} cr`} />
+            </dl>
+          </>
         ) : null}
 
-      </dl>
+        {planetPanelTab === "fleet" && showColonyOperationalIntel ? (
+          <>
+            <dl className="grid gap-x-5 gap-y-2 text-xs sm:grid-cols-2 xl:grid-cols-3">
+              <PlanetInfoRow
+                label="Fleet size"
+                value={`${formatWhole(fleetSize)} ${fleetSize === 1 ? "ship" : "ships"}`}
+              />
+              <PlanetInfoRow
+                label="Defense advantage"
+                value={`x${defenseAdvantage.toFixed(2)}${system.isHomeworld ? " homeworld" : ""}`}
+              />
+              <PlanetInfoRow
+                label="Ship production effort"
+                value={hasFoodEconomy ? `${Math.round(sliderShips)}%` : "N/A"}
+              />
+            </dl>
+            <div className="mt-3 space-y-3">
+              <div>
+                <h4 className="text-st-muted">Fleets at planet</h4>
+                {fleetsAtSystem.length === 0 ? (
+                  <p className="mt-1 text-st-muted">None</p>
+                ) : (
+                  <ul className="mt-1 space-y-1">
+                    {fleetsAtSystem.map((fleet) => {
+                      const maySelectFleet =
+                        onFleetCardTap !== undefined && fleetSelectionAllowed(fleet.empireId);
+                      return (
+                      <li key={fleet.id}>
+                        <button
+                          type="button"
+                          className="w-full rounded border border-st-border/50 bg-st-panel/40 px-2 py-1 text-left transition-colors hover:border-cyan-500/45 hover:bg-st-panel/65 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-cyan-500 disabled:pointer-events-none disabled:opacity-50"
+                          disabled={!maySelectFleet}
+                          onClick={() => onFleetCardTap?.(fleet.id)}
+                          title={
+                            !maySelectFleet
+                              ? "You can only select fleets from your own empire"
+                              : "Show on map and select this fleet"
+                          }
+                        >
+                          <div className="flex justify-between gap-2">
+                            <span className="truncate text-st-fg">{fleet.name}</span>
+                            <span className="shrink-0 font-mono text-st-fg">
+                              {formatWhole(fleet.strength)}
+                            </span>
+                          </div>
+                          <div className="mt-0.5 flex justify-between gap-2 text-[10px] text-st-muted">
+                            <span className="truncate">
+                              {empireNames[fleet.empireId] ?? "Unknown empire"}
+                            </span>
+                            <span className="capitalize">{fleet.status}</span>
+                          </div>
+                        </button>
+                      </li>
+                      );
+                    })}
+                  </ul>
+                )}
+              </div>
 
-      <dl className="mt-3 grid gap-x-5 gap-y-2 text-xs sm:grid-cols-2 xl:grid-cols-3">
-        <PlanetInfoRow
-          label="Owner"
-          value={
-            system.ownerEmpireId === null
-              ? "Independent"
-              : (empireNames[system.ownerEmpireId] ?? "Unknown")
-          }
-        />
-        <PlanetInfoRow
-          label="Resource richness"
-          value={`${Math.round(system.resourceRichness * 100)}%`}
-        />
-        <PlanetInfoRow
-          label="Population"
-          value={pop > 0 ? formatPopulationPeople(pop) : "0"}
-        />
-        <PlanetInfoRow
-          label="Fleet size"
-          value={`${formatWhole(fleetSize)} ${fleetSize === 1 ? "ship" : "ships"}`}
-        />
-        <PlanetInfoRow
-          label="Defense advantage"
-          value={`x${defenseAdvantage.toFixed(2)}${system.isHomeworld ? " homeworld" : ""}`}
-        />
-        <PlanetInfoRow
-          label="Ship production effort"
-          value={hasFoodEconomy ? `${Math.round(sliderShips)}%` : "N/A"}
-        />
-        <PlanetInfoRow
-          label="Food stockpile"
-          value={formatFoodUnits(stockFood)}
-          valueClassName={
-            hasFoodEconomy && stockFood < stockMinUnits
-              ? "text-red-400"
-              : hasFoodEconomy && stockFood > stockMaxUnits
-                ? "text-emerald-400"
-                : "text-st-fg"
-          }
-        />
-        <PlanetInfoRow
-          label="Stockpile minimum"
-          value={hasFoodEconomy ? formatFoodUnits(stockMinUnits) : "N/A"}
-          valueClassName={
-            hasFoodEconomy && stockFood > stockMinUnits ? "text-emerald-400" : "text-st-fg"
-          }
-        />
-        <PlanetInfoRow
-          label="Stockpile maximum"
-          value={hasFoodEconomy ? formatFoodUnits(stockMaxUnits) : "N/A"}
-          valueClassName={
-            hasFoodEconomy && stockFood > stockMaxUnits ? "text-emerald-400" : "text-st-fg"
-          }
-        />
-        <PlanetInfoRow label="Food stress" value={foodStressLabel} />
-        <PlanetInfoRow
-          label="Market food price"
-          value={
-            marketFoodCr !== undefined
-              ? `${marketFoodCr.toFixed(1)} cr/u`
-              : `~${FOOD_PRICE_DEFAULT_CR} cr/u`
-          }
-        />
-        <PlanetInfoRow label="Import bonus" value={`${importSubsidy.toFixed(1)} cr/u`} />
-        <PlanetInfoRow
-          label="Price offered for food cargo"
-          value={`${traderOfferCr.toFixed(1)} cr/u`}
-        />
-        <PlanetInfoRow label="Docking fee" value={`${formatWhole(dockingFee)} cr`} />
-      </dl>
-
-      <div className="mt-3 grid gap-4 text-xs md:grid-cols-2">
-        <section>
-          <h4 className="text-st-muted">Hyperspace links</h4>
-          <div className="mt-1 text-st-fg">
-            {selectedNeighbors.length === 0 ? (
-              <span className="text-st-muted">None</span>
-            ) : (
-              <ul className="list-inside list-disc space-y-0.5">
-                {selectedNeighbors.map((n) => (
-                  <li key={n.id}>
-                    <button
-                      type="button"
-                      className="text-left text-cyan-300/90 underline decoration-cyan-500/40 underline-offset-2 hover:text-cyan-200"
-                      onClick={() => onNeighborNavigate(n.id)}
-                    >
-                      {n.name}
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-        </section>
-
-        <section className="space-y-3">
-          <div>
-            <h4 className="text-st-muted">Fleets at planet</h4>
-            {fleetsAtSystem.length === 0 ? (
-              <p className="mt-1 text-st-muted">None</p>
-            ) : (
-              <ul className="mt-1 space-y-1">
-                {fleetsAtSystem.map((fleet) => (
-                  <li
-                    key={fleet.id}
-                    className="rounded border border-st-border/50 bg-st-panel/40 px-2 py-1"
-                  >
-                    <div className="flex justify-between gap-2">
-                      <span className="truncate text-st-fg">{fleet.name}</span>
-                      <span className="shrink-0 font-mono text-st-fg">
-                        {formatWhole(fleet.strength)}
-                      </span>
-                    </div>
-                    <div className="mt-0.5 flex justify-between gap-2 text-[10px] text-st-muted">
-                      <span className="truncate">
-                        {empireNames[fleet.empireId] ?? "Unknown empire"}
-                      </span>
-                      <span className="capitalize">{fleet.status}</span>
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-
-          {colonyShipsAtSystem.length > 0 ? (
-            <div>
-              <h4 className="text-st-muted">Colony ships at planet</h4>
-              <ul className="mt-1 space-y-1">
-                {colonyShipsAtSystem.map((ship) => (
-                  <li
-                    key={ship.id}
-                    className="rounded border border-teal-500/25 bg-teal-950/10 px-2 py-1"
-                  >
-                    <div className="flex justify-between gap-2">
-                      <span className="truncate text-st-fg">{ship.name}</span>
-                      <span className="shrink-0 capitalize text-teal-200/90">{ship.status}</span>
-                    </div>
-                    <div className="mt-0.5 flex justify-between gap-2 text-[10px] text-st-muted">
-                      <span className="truncate">
-                        {empireNames[ship.empireId] ?? "Unknown empire"}
-                      </span>
-                      <span>
-                        Damage {formatWhole(ship.mothershipDefenseDamage ?? 0)}
-                      </span>
-                    </div>
-                  </li>
-                ))}
-              </ul>
+              {colonyShipsAtSystem.length > 0 ? (
+                <div>
+                  <h4 className="text-st-muted">Colony ships at planet</h4>
+                  <ul className="mt-1 space-y-1">
+                    {colonyShipsAtSystem.map((ship) => (
+                      <li
+                        key={ship.id}
+                        className="rounded border border-teal-500/25 bg-teal-950/10 px-2 py-1"
+                      >
+                        <div className="flex justify-between gap-2">
+                          <span className="truncate text-st-fg">{ship.name}</span>
+                          <span className="shrink-0 capitalize text-teal-200/90">{ship.status}</span>
+                        </div>
+                        <div className="mt-0.5 flex justify-between gap-2 text-[10px] text-st-muted">
+                          <span className="truncate">
+                            {empireNames[ship.empireId] ?? "Unknown empire"}
+                          </span>
+                          <span>
+                            Damage {formatWhole(ship.mothershipDefenseDamage ?? 0)}
+                          </span>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
             </div>
-          ) : null}
+          </>
+        ) : null}
 
+        {planetPanelTab === "battle" ? (
           <div>
             <h4 className="text-st-muted">Last battle</h4>
             {recentCombat === undefined ? (
@@ -2959,8 +3141,180 @@ function StarSystemPanel({
               </div>
             )}
           </div>
-        </section>
+        ) : null}
+
+        {planetPanelTab === "routes" ? (
+          <section>
+            <h4 className="text-st-muted">Hyperspace links</h4>
+            <div className="mt-1 text-st-fg">
+              {selectedNeighbors.length === 0 ? (
+                <span className="text-st-muted">None</span>
+              ) : (
+                <ul className="list-inside list-disc space-y-0.5">
+                  {selectedNeighbors.map((n) => (
+                    <li key={n.id}>
+                      <button
+                        type="button"
+                        className="text-left text-cyan-300/90 underline decoration-cyan-500/40 underline-offset-2 hover:text-cyan-200"
+                        onClick={() => onNeighborNavigate(n.id)}
+                      >
+                        {n.name}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </section>
+        ) : null}
       </div>
+
+      {showHomeworldColonyUi || showColonizeInStarPanel || showIdleColonyNeighborAwayFromHomeworld ? (
+        <div className="mt-3 space-y-2">
+          {showHomeworldColonyUi ? (
+            <div className="rounded border border-teal-500/35 bg-teal-950/25 px-2 py-2">
+              <div className="text-[11px] font-medium text-teal-200/90">Colony ship project</div>
+              <p className="mt-0.5 text-[10px] leading-snug text-st-muted">
+                Diverts <span className="font-mono text-st-fg/90">ship production</span> from garrison ships.
+                Target cost is about{" "}
+                <span className="font-mono text-st-fg/90">{COLONY_SHIP_BUILD_TURNS} turns</span> of output at
+                max ship effort on this homeworld. Dispatch costs{" "}
+                <span className="font-mono text-st-fg/90">
+                  {COLONY_SHIP_CARGO_DISPLAY.toLocaleString()}
+                </span>{" "}
+                people from this world.
+              </p>
+              {idleColonyDispatchAtHomeworld ? (
+                <p className="mt-1 text-[10px] leading-snug text-teal-100/80">
+                  Drag from the colony ship on the map to a linked star — same as fleets (teal dashed preview).
+                  Further hops: dispatch again whenever the ship is idle at a colony.
+                </p>
+              ) : null}
+              {idleColonyDispatchAtHomeworld ? (
+                <div className="mt-2 space-y-1.5">
+                  <p className="text-[11px] text-teal-100/90">Colony ship ready — dispatch to a neighbor.</p>
+                  <p className="text-[10px] text-st-muted">
+                    Costs {COLONY_SHIP_CARGO_DISPLAY.toLocaleString()} people from this homeworld.
+                  </p>
+                  {selectedNeighbors.length === 0 ? (
+                    <p className="text-[10px] text-st-muted">No hyperspace links from this system.</p>
+                  ) : (
+                    <ul className="flex flex-col gap-1">
+                      {selectedNeighbors.map((n) => (
+                        <li key={n.id}>
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            className="h-8 w-full justify-start text-xs"
+                            disabled={colonyBusy}
+                            onClick={() =>
+                              void runColonyAction(() => onDispatchColonyFromStarPanel!(n.id))
+                            }
+                          >
+                            Dispatch to {n.name}
+                          </Button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              ) : colonyBuildInProgress && onCancelColonyBuild ? (
+                <div className="mt-2 space-y-1">
+                  <div className="flex justify-between text-[11px] text-st-muted">
+                    <span>Build progress</span>
+                    <span className="font-mono text-st-fg">
+                      {buildProgress} / {buildCost} ship pts
+                    </span>
+                  </div>
+                  <div className="h-1.5 overflow-hidden rounded-full bg-st-border/80">
+                    <div
+                      className="h-full bg-teal-400/80 transition-[width]"
+                      style={{
+                        width: `${buildCost > 0 ? Math.min(100, (100 * buildProgress) / buildCost) : 0}%`,
+                      }}
+                    />
+                  </div>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    className="mt-1 h-8 w-full text-xs"
+                    disabled={colonyBusy}
+                    onClick={() => void runColonyAction(onCancelColonyBuild)}
+                  >
+                    Pause / cancel build
+                  </Button>
+                </div>
+              ) : onStartColonyBuild ? (
+                <Button
+                  type="button"
+                  className="mt-2 h-8 w-full text-xs"
+                  disabled={colonyBusy}
+                  onClick={() => void runColonyAction(onStartColonyBuild)}
+                >
+                  Start colony ship build
+                </Button>
+              ) : null}
+            </div>
+          ) : null}
+          {showIdleColonyNeighborAwayFromHomeworld ? (
+            <div className="rounded border border-teal-500/35 bg-teal-950/20 px-2 py-2">
+              <div className="text-[11px] font-medium text-teal-200/90">Idle colony ship</div>
+              <p className="mt-0.5 text-[10px] leading-snug text-teal-100/80">
+                Drag from the colony ship on the map to a linked star — same as fleets. Chain voyages by
+                issuing another drag whenever the ship is idle at a colony.
+              </p>
+              <p className="mt-1 text-[10px] text-st-muted">
+                Cargo already aboard — no population is deducted from this colony.
+              </p>
+              <div className="mt-2 space-y-1.5">
+                <p className="text-[11px] text-teal-100/90">Dispatch to a neighbor</p>
+                {selectedNeighbors.length === 0 ? (
+                  <p className="text-[10px] text-st-muted">No hyperspace links from this system.</p>
+                ) : (
+                  <ul className="flex flex-col gap-1">
+                    {selectedNeighbors.map((n) => (
+                      <li key={n.id}>
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          className="h-8 w-full justify-start text-xs"
+                          disabled={colonyBusy}
+                          onClick={() => void runColonyAction(() => onDispatchColonyFromStarPanel!(n.id))}
+                        >
+                          Dispatch to {n.name}
+                        </Button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            </div>
+          ) : null}
+          {showColonizeInStarPanel ? (
+            <div className="rounded border border-emerald-500/35 bg-emerald-950/20 px-2 py-2">
+              <div className="text-[11px] font-medium text-emerald-200/90">Recolonization</div>
+              <p className="mt-0.5 text-[10px] leading-snug text-st-muted">
+                Found a colony with {COLONY_SHIP_CARGO_DISPLAY.toLocaleString()} people, starter food
+                stockpile, and{" "}
+                <span className="font-mono text-st-fg/90">+{COLONY_NEW_WORLD_FOOD_BONUS_PER_TURN}</span> bonus
+                food production per turn. The colony ship is consumed.
+              </p>
+              <Button
+                type="button"
+                className="mt-2 h-8 w-full text-xs"
+                disabled={colonyBusy}
+                onClick={() => void runColonyAction(onColonizeFromStarPanel!)}
+              >
+                Colonize this system
+              </Button>
+            </div>
+          ) : null}
+          {colonyMutationError != null &&
+          (showHomeworldColonyUi || showColonizeInStarPanel || showIdleColonyNeighborAwayFromHomeworld) ? (
+            <p className="text-[10px] text-red-400">{colonyMutationError}</p>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   );
 }

@@ -56,6 +56,8 @@ export const SHORTAGE_PROD_MULT = 0.85;
 export const COLLAPSE_INSOLVENCY_TURNS = 2;
 export const PAUSE_BUDGET_CAP_SECONDS = 20;
 export const PAUSE_BUDGET_REFRESH_MS = 300_000;
+/** Local treasury assigned to every star system when a game is seeded. */
+export const STAR_SYSTEM_STARTING_TREASURY = 10_000;
 
 export const COMMODITY_PRICE_DEFAULTS = {
   food: { basePrice: 10, elasticity: 0.8, minMult: 0.5, maxMult: 3 },

@@ -36,6 +36,7 @@ export const listPendingMoveOrdersForTurn = query({
       shipCount: number;
     }> = [];
     for (const order of orders) {
+      if (order.movementAppliedAt !== undefined) continue;
       if (order.orderType !== "move" || order.targetSystemId === null) continue;
       const fleet: Doc<"flt_fleets"> | null = await ctx.db.get(
         "flt_fleets",

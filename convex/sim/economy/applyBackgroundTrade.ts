@@ -16,9 +16,11 @@
  *  - Buying at origin reduces its stockFood → price rises (oversupply normalises).
  *    Purchases come only from food **above** the stockpile ceiling (demand × foodStockpileMaxPerPop);
  *    cargo is min(full hold, that oversupply), so runs can be smaller than BG_TRADER_CARGO_SIZE.
- *  - Delivering to dest increases its stockFood → price falls (shortage normalised).
- *  - Sale proceeds are debited from the destination payer: owning empire’s treasury, or the system’s
- *    `localTreasury` when unowned (import subsidy + market clearing payment for food).
+ *  - Delivering to dest sells at the current local price, then increases stockFood
+ *    so the next market price falls if the shortage is normalised.
+ *  - Sale proceeds are debited from the destination payer: owning empire’s treasury first, then a
+ *    balance-controlled share of the remaining invoice from `localTreasury`. Unowned systems use
+ *    only local treasury.
  */
 
 import type { Doc, Id } from "../../_generated/dataModel";
@@ -28,6 +30,7 @@ import { v } from "convex/values";
 import type { GameSettings } from "./gameSettings";
 import { loadGameSettings } from "./gameSettings";
 import { computeSystemFoodPrice, foodOversupplyUnits } from "./foodPricing";
+import { computeFoodDeliverySettlementPrices } from "./foodTradeSettlement";
 import { travelTurnsFromLinkCost } from "../fleetDispatch";
 import {
   BG_TRADER_CARGO_SIZE,
@@ -60,6 +63,7 @@ type DeliverTraderSettings = Pick<
   | "foodStressFactor"
   | "foodBasePrice"
   | "traderDockingCost"
+  | "localTreasuryAddsPer100Cr"
   | "traderMaxActive"
 >;
 
@@ -78,6 +82,21 @@ function splitProportionalInt(total: number, weights: readonly number[]): number
   }
   out.push(total - allocated);
   return out;
+}
+
+function localTreasuryShortfallTopUp(params: {
+  shortfall: number;
+  localAvailable: number;
+  ownerEmpireId: Id<"emp_states"> | null;
+  settings: Pick<GameSettings, "localTreasuryAddsPer100Cr">;
+}): number {
+  const shortfall = Math.max(0, params.shortfall);
+  const localAvailable = Math.max(0, params.localAvailable);
+  if (shortfall <= 0 || localAvailable <= 0) return 0;
+  if (params.ownerEmpireId === null) return Math.min(shortfall, localAvailable);
+
+  const addsPer100 = Math.max(0, Math.min(100, params.settings.localTreasuryAddsPer100Cr));
+  return Math.min(localAvailable, (shortfall * addsPer100) / 100);
 }
 
 async function applyTraderBoycottsIfUnderpaid(
@@ -117,7 +136,7 @@ async function applyTraderBoycottsIfUnderpaid(
 
 /**
  * Settles all food cargo arriving this turn to the same destination in one batch:
- * one clearing price on post-delivery stock, one treasury withdrawal, then **pro‑rated**
+ * one current-market clearing price, one treasury withdrawal, then **pro‑rated**
  * credits to each captain. Avoids the first ship taking the entire empire treasury while
  * later ships to the same system are paid almost nothing.
  */
@@ -133,7 +152,7 @@ async function settleFoodDeliveriesGroup(
     return a._id < b._id ? -1 : a._id > b._id ? 1 : 0;
   });
 
-  const destId = sorted[0]!.destinationSystemId;
+  const destId = sorted[0].destinationSystemId;
   const dest0 = await ctx.db.get("gal_systems", destId);
   if (dest0 === null) {
     for (const t of sorted) {
@@ -144,61 +163,108 @@ async function settleFoodDeliveriesGroup(
   let dest = dest0;
 
   const totalCargo = sorted.reduce((s, t) => s + t.cargoUnits, 0);
-  const newStock = Math.max(0, (dest.stockFood ?? 0) + totalCargo);
+  const stockFoodBefore = Math.max(0, dest.stockFood ?? 0);
+  const newStock = stockFoodBefore + totalCargo;
   const foodDemand = estimateFoodDemand(dest);
-  const clearingPrice = computeSystemFoodPrice({
-    stockFood: newStock,
-    foodDemand,
-    settings: params.settings,
-  });
-
   const subsidyPerUnit = Math.max(0, dest.foodImportSubsidyPerUnit ?? 0);
-  const desiredSubsidyTotal = totalCargo * subsidyPerUnit;
-  const clearingPaymentInt = Math.round(totalCargo * clearingPrice);
-  const nominalTotal = clearingPaymentInt + Math.round(desiredSubsidyTotal);
-  const nominalUnit = clearingPrice + subsidyPerUnit;
+  const dockingRevenue = sorted.length * params.settings.traderDockingCost;
+  const settlementPrices = computeFoodDeliverySettlementPrices({
+    stockFoodBefore,
+    cargoUnits: totalCargo,
+    foodDemand,
+    subsidyPerUnit,
+    settings: params.settings,
+    marketUnitPriceBeforeDelivery: dest0.foodPrice,
+  });
+  const clearingPrice = settlementPrices.settlementUnitPrice;
+  const postDeliveryPrice = settlementPrices.postDeliveryUnitPrice;
+  const desiredSubsidyTotal = settlementPrices.desiredSubsidyTotal;
+  const clearingPaymentInt = settlementPrices.clearingPaymentCredits;
+  const nominalTotal = settlementPrices.nominalPaymentCredits;
+  const nominalUnit = settlementPrices.nominalUnitPrice;
 
   const cargos = sorted.map((t) => t.cargoUnits);
   const invoiceShares = splitProportionalInt(nominalTotal, cargos);
 
   let paidSubsidyTotal = 0;
   let marketPaid = 0;
+  let localPaidTotal = 0;
+  let localAvailable = Math.max(0, Math.floor(dest.localTreasury ?? 0));
   let underpaidOwnedEmpire = false;
   let underpaidUnownedSystem = false;
 
-  if (desiredSubsidyTotal > 0 && dest.ownerEmpireId !== null) {
-    const empire = await ctx.db.get("emp_states", dest.ownerEmpireId);
-    if (empire !== null) {
-      paidSubsidyTotal = Math.min(desiredSubsidyTotal, Math.max(0, empire.treasury));
-      if (paidSubsidyTotal > 0) {
-        await ctx.db.patch("emp_states", empire._id, {
-          treasury: empire.treasury - paidSubsidyTotal,
-        });
+  if (desiredSubsidyTotal > 0) {
+    let subsidyRemaining = desiredSubsidyTotal;
+    if (dest.ownerEmpireId !== null) {
+      const empire = await ctx.db.get("emp_states", dest.ownerEmpireId);
+      if (empire !== null) {
+        const empirePaid = Math.min(subsidyRemaining, Math.max(0, empire.treasury));
+        paidSubsidyTotal += empirePaid;
+        subsidyRemaining -= empirePaid;
+        if (empirePaid > 0) {
+          await ctx.db.patch("emp_states", empire._id, {
+            treasury: empire.treasury - empirePaid,
+          });
+        }
       }
     }
-  } else if (desiredSubsidyTotal > 0) {
-    const local = dest.localTreasury ?? 0;
-    paidSubsidyTotal = Math.min(desiredSubsidyTotal, Math.max(0, local));
+
+    if (subsidyRemaining > 0) {
+      const localPaid = localTreasuryShortfallTopUp({
+        shortfall: subsidyRemaining,
+        localAvailable,
+        ownerEmpireId: dest.ownerEmpireId,
+        settings: params.settings,
+      });
+      paidSubsidyTotal += localPaid;
+      localPaidTotal += localPaid;
+      localAvailable -= localPaid;
+    }
+
+    if (paidSubsidyTotal + 1e-6 < desiredSubsidyTotal) {
+      if (dest.ownerEmpireId !== null) underpaidOwnedEmpire = true;
+      else underpaidUnownedSystem = true;
+    }
   }
 
   if (dest.ownerEmpireId !== null && clearingPaymentInt > 0) {
     const empireAfterSub = await ctx.db.get("emp_states", dest.ownerEmpireId);
+    let marketRemaining = clearingPaymentInt;
     if (empireAfterSub !== null) {
-      marketPaid = Math.min(
-        clearingPaymentInt,
+      const empirePaid = Math.min(
+        marketRemaining,
         Math.max(0, Math.floor(empireAfterSub.treasury)),
       );
-      if (marketPaid > 0) {
+      marketPaid += empirePaid;
+      marketRemaining -= empirePaid;
+      if (empirePaid > 0) {
         await ctx.db.patch("emp_states", empireAfterSub._id, {
-          treasury: empireAfterSub.treasury - marketPaid,
+          treasury: empireAfterSub.treasury - empirePaid,
         });
       }
     }
+    if (marketRemaining > 0) {
+      const localPaid = localTreasuryShortfallTopUp({
+        shortfall: marketRemaining,
+        localAvailable,
+        ownerEmpireId: dest.ownerEmpireId,
+        settings: params.settings,
+      });
+      marketPaid += localPaid;
+      localPaidTotal += localPaid;
+      localAvailable -= localPaid;
+    }
     if (marketPaid < clearingPaymentInt) underpaidOwnedEmpire = true;
   } else if (dest.ownerEmpireId === null && clearingPaymentInt > 0) {
-    const local0 = dest.localTreasury ?? 0;
-    const afterSubsidy = local0 - paidSubsidyTotal;
-    marketPaid = Math.min(clearingPaymentInt, Math.max(0, Math.floor(afterSubsidy)));
+    const localPaid = localTreasuryShortfallTopUp({
+      shortfall: clearingPaymentInt,
+      localAvailable,
+      ownerEmpireId: dest.ownerEmpireId,
+      settings: params.settings,
+    });
+    marketPaid += localPaid;
+    localPaidTotal += localPaid;
+    localAvailable -= localPaid;
     if (marketPaid < clearingPaymentInt) underpaidUnownedSystem = true;
   }
 
@@ -210,18 +276,24 @@ async function settleFoodDeliveriesGroup(
 
   await ctx.db.patch("gal_systems", dest._id, {
     stockFood: newStock,
-    foodPrice: clearingPrice,
-    ...(dest.ownerEmpireId === null
+    foodPrice: postDeliveryPrice,
+    ...(localPaidTotal > 0 || dockingRevenue > 0
       ? {
-          localTreasury: Math.max(
-            0,
-            (dest.localTreasury ?? 0) - paidSubsidyTotal - marketPaid,
-          ),
+          localTreasury:
+            Math.max(0, (dest.localTreasury ?? 0) - localPaidTotal) + dockingRevenue,
         }
       : {}),
   });
 
-  dest = { ...dest, stockFood: newStock, foodPrice: clearingPrice };
+  dest = {
+    ...dest,
+    stockFood: newStock,
+    foodPrice: postDeliveryPrice,
+    localTreasury:
+      localPaidTotal > 0 || dockingRevenue > 0
+        ? Math.max(0, (dest.localTreasury ?? 0) - localPaidTotal) + dockingRevenue
+        : dest.localTreasury,
+  };
 
   await applyTraderBoycottsIfUnderpaid(ctx, {
     turnNumber: params.turnNumber,
@@ -232,7 +304,7 @@ async function settleFoodDeliveriesGroup(
 
   const batchShortfall = Math.max(0, nominalTotal - totalCredits);
   for (let i = 0; i < sorted.length; i++) {
-    const trader = sorted[i]!;
+    const trader = sorted[i];
     const creditsFromBuyer = revenueShares[i] ?? 0;
     const invoiceCredits = invoiceShares[i] ?? 0;
     const travelCost =
@@ -289,6 +361,7 @@ async function settleFoodDeliveriesGroup(
         boughtAtPrice: trader.boughtAtPrice,
         soldAtPrice,
         clearingPrice,
+        postDeliveryFoodPrice: postDeliveryPrice,
         nominalUnitPrice: nominalUnit,
         foodBatchSize: sorted.length,
         travelCost,
@@ -331,6 +404,8 @@ async function deliverNonFoodTrader(
     const revenueInt = Math.round(trader.cargoUnits * soldAtPrice);
     if (dest.ownerEmpireId !== null) {
       const empire = await ctx.db.get("emp_states", dest.ownerEmpireId);
+      const local0 = dest.localTreasury ?? 0;
+      let localPaid = 0;
       if (empire !== null) {
         creditsFromBuyer = Math.min(revenueInt, Math.max(0, Math.floor(empire.treasury)));
         if (creditsFromBuyer > 0) {
@@ -339,16 +414,29 @@ async function deliverNonFoodTrader(
           });
         }
       }
+      localPaid = localTreasuryShortfallTopUp({
+        shortfall: revenueInt - creditsFromBuyer,
+        localAvailable: local0,
+        ownerEmpireId: dest.ownerEmpireId,
+        settings: params.settings,
+      });
+      creditsFromBuyer += localPaid;
       if (creditsFromBuyer < revenueInt) underpaidOwnedEmpire = true;
       await ctx.db.patch("gal_systems", dest._id, {
         stockWeapons: newWeapons,
+        localTreasury: Math.max(0, local0 - localPaid) + docking,
       });
     } else {
       const local0 = dest.localTreasury ?? 0;
-      creditsFromBuyer = Math.min(revenueInt, Math.max(0, Math.floor(local0)));
+      creditsFromBuyer = localTreasuryShortfallTopUp({
+        shortfall: revenueInt,
+        localAvailable: local0,
+        ownerEmpireId: dest.ownerEmpireId,
+        settings: params.settings,
+      });
       await ctx.db.patch("gal_systems", dest._id, {
         stockWeapons: newWeapons,
-        localTreasury: Math.max(0, local0 - creditsFromBuyer),
+        localTreasury: Math.max(0, local0 - creditsFromBuyer) + docking,
       });
       if (creditsFromBuyer < revenueInt) underpaidUnownedSystem = true;
     }
@@ -414,6 +502,8 @@ async function deliverNonFoodTrader(
     const revenueInt = Math.round(trader.cargoUnits * soldAtPrice);
     if (dest.ownerEmpireId !== null) {
       const empire = await ctx.db.get("emp_states", dest.ownerEmpireId);
+      const local0 = dest.localTreasury ?? 0;
+      let localPaid = 0;
       if (empire !== null) {
         creditsFromBuyer = Math.min(revenueInt, Math.max(0, Math.floor(empire.treasury)));
         if (creditsFromBuyer > 0) {
@@ -422,15 +512,28 @@ async function deliverNonFoodTrader(
           });
         }
       }
+      localPaid = localTreasuryShortfallTopUp({
+        shortfall: revenueInt - creditsFromBuyer,
+        localAvailable: local0,
+        ownerEmpireId: dest.ownerEmpireId,
+        settings: params.settings,
+      });
+      creditsFromBuyer += localPaid;
       if (creditsFromBuyer < revenueInt) underpaidOwnedEmpire = true;
+      await ctx.db.patch("gal_systems", dest._id, {
+        localTreasury: Math.max(0, local0 - localPaid) + docking,
+      });
     } else {
       const local0 = dest.localTreasury ?? 0;
-      creditsFromBuyer = Math.min(revenueInt, Math.max(0, Math.floor(local0)));
-      if (creditsFromBuyer > 0) {
-        await ctx.db.patch("gal_systems", dest._id, {
-          localTreasury: Math.max(0, local0 - creditsFromBuyer),
-        });
-      }
+      creditsFromBuyer = localTreasuryShortfallTopUp({
+        shortfall: revenueInt,
+        localAvailable: local0,
+        ownerEmpireId: dest.ownerEmpireId,
+        settings: params.settings,
+      });
+      await ctx.db.patch("gal_systems", dest._id, {
+        localTreasury: Math.max(0, local0 - creditsFromBuyer) + docking,
+      });
       if (creditsFromBuyer < revenueInt) underpaidUnownedSystem = true;
     }
 
@@ -618,9 +721,12 @@ async function spawnNewTraders(
     .withIndex("by_gameId_and_status", (q) =>
       q.eq("gameId", params.gameId).eq("status", "enRoute"),
     )
-    .take(maxActive + 1);
+    .take(128);
 
-  if (activeTraders.length >= maxActive) return;
+  /** Voyages still in transit after this turn's arrivals complete (ETA > now). */
+  const voyagesBlockingCapacity = activeTraders.filter((t) => t.etaTurn > params.turnNumber);
+
+  if (voyagesBlockingCapacity.length >= maxActive) return;
   // When below minimum, allow extra spawns per turn to catch up faster.
   const isBelowMin = activeTraders.length < minActive;
   // Keep this phase under Convex's 1s mutation limit. One dispatch per turn still
@@ -629,7 +735,7 @@ async function spawnNewTraders(
     1,
     isBelowMin ? BG_TRADER_MAX_NEW_PER_TURN * 2 : BG_TRADER_MAX_NEW_PER_TURN,
   );
-  let slotsLeft = maxActive - activeTraders.length;
+  let slotsLeft = maxActive - voyagesBlockingCapacity.length;
   let newThisTurn = 0;
 
   const allSystems = await ctx.db
@@ -831,34 +937,25 @@ async function spawnNewTraders(
       foodDemand: originDemand,
       settings: params.settings,
     });
+    // Origin systems raise local money by selling oversupply to passing traders.
+    const purchaseCredits = Math.round(cargoUnits * originPriceAtBuy);
 
     await ctx.db.patch("gal_systems", origin._id, {
       stockFood: newOriginStock,
       foodPrice: newOriginPrice,
+      ...(purchaseCredits > 0
+        ? { localTreasury: Math.max(0, (origin.localTreasury ?? 0) + purchaseCredits) }
+        : {}),
     });
-
-    // Unaligned worlds raise money by selling oversupply to passing traders.
-    // Owned worlds do the same through their empire treasury.
-    const purchaseCredits = Math.round(cargoUnits * originPriceAtBuy);
-    if (purchaseCredits > 0) {
-      if (origin.ownerEmpireId !== null) {
-        const empire = await ctx.db.get("emp_states", origin.ownerEmpireId);
-        if (empire !== null) {
-          await ctx.db.patch("emp_states", empire._id, {
-            treasury: empire.treasury + purchaseCredits,
-          });
-        }
-      } else {
-        await ctx.db.patch("gal_systems", origin._id, {
-          localTreasury: Math.max(0, (origin.localTreasury ?? 0) + purchaseCredits),
-        });
-      }
-    }
 
     systemById.set(origin._id, {
       ...origin,
       stockFood: newOriginStock,
       foodPrice: newOriginPrice,
+      localTreasury:
+        purchaseCredits > 0
+          ? Math.max(0, (origin.localTreasury ?? 0) + purchaseCredits)
+          : origin.localTreasury,
     });
 
     const etaTurn = params.turnNumber + best.travelTurns;
@@ -916,6 +1013,11 @@ async function spawnNewTraders(
  * Main entry point — called once per turn after applyTurnEconomy has run
  * (so per-system foodPrice values are already up to date).
  *
+ * Spawn runs **before** delivery so route selection sees economy scarcity (`foodPrice` /
+ * stock before inbound traders unload). Deliver-first inverted prices for distressed worlds:
+ * they received cargo earlier in the same phase and briefly looked cheaper than stable worlds,
+ * steering NPCs toward worse destinations.
+ *
  * @param traderShipCostMult God-mode multiplier for ship-hire costs.
  *   Values > 1 make trading less profitable (fewer traders spawn);
  *   values < 1 make trading cheaper (more traders spawn).
@@ -925,8 +1027,8 @@ export async function applyBackgroundTrade(
   params: { gameId: Id<"sim_games">; turnNumber: number; traderShipCostMult?: number },
 ): Promise<void> {
   await setupBackgroundTradeNpcs(ctx, params);
-  await deliverBackgroundTrade(ctx, params);
   await spawnBackgroundTrade(ctx, params);
+  await deliverBackgroundTrade(ctx, params);
 }
 
 export async function setupBackgroundTradeNpcs(

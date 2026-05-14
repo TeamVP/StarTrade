@@ -1,6 +1,6 @@
 /**
- * Canonical default god-mode multipliers and the loader that reads per-game overrides.
- * All multipliers default to 1.0 (no effect) when no settings row exists for a game.
+ * Canonical default god-mode/balance settings and the loader that reads per-game overrides.
+ * Missing rows fall back to the current balance defaults.
  */
 
 import type { Id } from "../../_generated/dataModel";
@@ -25,6 +25,8 @@ export type GameSettings = {
   combatAttackMult: number;
   combatDefendMult: number;
   collateralDamageMult: number;
+  /** Nonlinear power curve for ship-emphasis share (default 1.8). */
+  shipProdEmphasisPower: number;
   // ─── Balance page settings ─────────────────────────────────────────────────
   traderMinActive: number;
   traderMaxActive: number;
@@ -32,17 +34,19 @@ export type GameSettings = {
   /** Percent chance (0-100) that an NPC hires a ship after seeing a viable job. */
   traderHireChancePct: number;
   traderDockingCost: number;
+  /** Credits per 100 cr empire shortfall that an owned system may pay from local treasury. */
+  localTreasuryAddsPer100Cr: number;
   /** Multiple of one-turn demand above which market is in oversupply (default 20.0). */
   foodStockpileMaxPerPop: number;
-  /** Multiple of one-turn demand below which food stress pricing activates (default 1.5). */
+  /** Multiple of one-turn demand below which food stress pricing activates (default 2.0). */
   foodStockpileMinPerPop: number;
   /** Multiplier on price growth rate when below minimum stockpile (default 1.0). */
   foodStressFactor: number;
-  /** Defender advantage ratio replacing DEFENDER_BASE_MULTIPLIER (default 2.0). */
+  /** Defender advantage ratio replacing DEFENDER_BASE_MULTIPLIER (default 3.0). */
   combatDefenderAdvantage: number;
   /** Base food price per unit at equilibrium in whole credits (default 6). */
   foodBasePrice: number;
-  /** Multiplier on the probability that collateral damage lands on food stockpiles (default 1.0). */
+  /** Multiplier on the probability that collateral damage lands on food stockpiles (default 4.0). */
   combatFoodDamageMult: number;
   /** When true, min/max NPC trader limits are tuned by the sim from delivery economics. */
   traderLimitsAutomated: boolean;
@@ -60,17 +64,19 @@ export const DEFAULT_GAME_SETTINGS: GameSettings = {
   combatAttackMult: 1,
   combatDefendMult: 1,
   collateralDamageMult: 1,
+  shipProdEmphasisPower: 1.8,
   traderMinActive: 0,
   traderMaxActive: BG_TRADER_AUTOMATED_INITIAL_MAX_ACTIVE,
   traderShipHirePerTurn: BG_TRADER_SHIP_HIRE_PER_TURN,
   traderHireChancePct: BG_TRADER_HIRE_CHANCE_PCT,
   traderDockingCost: BG_TRADER_DOCKING_COST,
+  localTreasuryAddsPer100Cr: 50,
   foodStockpileMaxPerPop: 20.0,
-  foodStockpileMinPerPop: 1.5,
+  foodStockpileMinPerPop: 2.0,
   foodStressFactor: 1.0,
-  combatDefenderAdvantage: 2.0,
+  combatDefenderAdvantage: 3.0,
   foodBasePrice: 6,
-  combatFoodDamageMult: 1.0,
+  combatFoodDamageMult: 4.0,
   traderLimitsAutomated: true,
 };
 
@@ -98,6 +104,8 @@ export async function loadGameSettings(
     combatAttackMult: row.combatAttackMult,
     combatDefendMult: row.combatDefendMult,
     collateralDamageMult: row.collateralDamageMult,
+    shipProdEmphasisPower:
+      row.shipProdEmphasisPower ?? DEFAULT_GAME_SETTINGS.shipProdEmphasisPower,
     traderMinActive: row.traderMinActive ?? DEFAULT_GAME_SETTINGS.traderMinActive,
     traderMaxActive: row.traderMaxActive ?? DEFAULT_GAME_SETTINGS.traderMaxActive,
     traderShipHirePerTurn:
@@ -105,6 +113,8 @@ export async function loadGameSettings(
     traderHireChancePct:
       row.traderHireChancePct ?? DEFAULT_GAME_SETTINGS.traderHireChancePct,
     traderDockingCost: row.traderDockingCost ?? DEFAULT_GAME_SETTINGS.traderDockingCost,
+    localTreasuryAddsPer100Cr:
+      row.localTreasuryAddsPer100Cr ?? DEFAULT_GAME_SETTINGS.localTreasuryAddsPer100Cr,
     foodStockpileMaxPerPop:
       row.foodStockpileMaxPerPop ?? DEFAULT_GAME_SETTINGS.foodStockpileMaxPerPop,
     foodStockpileMinPerPop:

@@ -6,16 +6,17 @@
  *   globally shortest edges required for connectivity. MST edges are always
  *   added regardless of distance or degree.
  *
- * Step 2 — k-Nearest neighbor additions (distance-capped, degree-capped):
- *   For each star, attempt to link up to `kNearest` closest neighbours that
- *   aren't already connected. Skipped when either endpoint is already at
- *   `maxDegree` or when the edge length exceeds `maxAddLaneDistance`.
- *   This creates the ~90% "local routes" feel without long visual crossings.
+ * Step 2 — either:
+ *   (A) k-Nearest neighbor additions (distance-capped, degree-capped): for each
+ *       star, link up to `kNearest` closest neighbours that aren't already connected.
+ *   (B) Greedy shortest-edge fill when `maxTotalEdges` is set: after the MST, add
+ *       the shortest remaining edges until the graph reaches that count (respecting
+ *       `maxDegree` on non-MST additions).
  */
 export function buildProximityLanes(
   systems: { key: string; x: number; y: number }[],
   opts: {
-    /** Extra local connections per star beyond the MST (default 3). */
+    /** Extra local connections per star beyond the MST (default 3). Ignored when `maxTotalEdges` is set. */
     kNearest?: number;
     /**
      * Maximum edge length for non-MST k-nearest additions.
@@ -26,14 +27,22 @@ export function buildProximityLanes(
     /**
      * Maximum number of lanes touching any single star (default 5).
      * MST edges are always kept even if this limit would be breached;
-     * the cap only applies to k-nearest additions.
+     * the cap only applies to k-nearest additions and to greedy extras when
+     * `maxTotalEdges` is set.
      */
     maxDegree?: number;
+    /**
+     * When set, after the MST the graph adds the shortest remaining edges (that
+     * respect `maxDegree`) until this total undirected edge count is reached or
+     * no more edges fit. Produces a sparse, distance-biased network. Must be ≥ n−1.
+     */
+    maxTotalEdges?: number;
   } = {},
 ): { fromKey: string; toKey: string }[] {
   const kNearest = opts.kNearest ?? 3;
   const maxAddDist = opts.maxAddLaneDistance ?? Infinity;
   const maxDegree = opts.maxDegree ?? 5;
+  const maxTotalEdges = opts.maxTotalEdges;
 
   const n = systems.length;
 
@@ -91,6 +100,21 @@ export function buildProximityLanes(
     if (union(edge.a, edge.b)) {
       addEdge(edge.a, edge.b);
     }
+  }
+
+  if (maxTotalEdges !== undefined) {
+    let budget = maxTotalEdges - lanes.length;
+    if (budget > 0) {
+      for (const edge of allEdges) {
+        if (budget <= 0) break;
+        const pairKey = edge.a < edge.b ? `${edge.a}__${edge.b}` : `${edge.b}__${edge.a}`;
+        if (seen.has(pairKey)) continue;
+        if (degree[edge.a]! >= maxDegree || degree[edge.b]! >= maxDegree) continue;
+        addEdge(edge.a, edge.b);
+        budget--;
+      }
+    }
+    return lanes;
   }
 
   // ── Step 2: k-nearest additions (filtered by distance + degree) ────────

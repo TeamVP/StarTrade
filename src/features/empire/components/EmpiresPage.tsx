@@ -1,14 +1,16 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "../../../../convex/_generated/api";
-import type { Doc } from "../../../../convex/_generated/dataModel";
+import type { Doc, Id } from "../../../../convex/_generated/dataModel";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { useActiveGame } from "@/features/galaxy/hooks/useActiveGame";
 import {
   formatStrategyJson,
   NPC_EMPIRE_STRATEGIES,
+  PRIORITY_STAR_MAX_STRATEGY,
 } from "@/features/empire/strategies/npcStrategies";
+import { IMPROVED_HUMAN_AUTOPILOT_PRIORITY_STRATEGY } from "@/features/empire/strategies/humanStrategies";
 
 function formatStrategyText(strategyJson: string | undefined): string {
   if (strategyJson === undefined) return "";
@@ -88,6 +90,18 @@ function EmpireEditor({ empire }: { empire: Doc<"emp_states"> }) {
     if (defaultStrategy === undefined) return;
     setStrategyText(formatStrategyJson(defaultStrategy));
     setStatus("Loaded default strategy. Save to persist it.");
+    setError(null);
+  }
+
+  function loadPriorityExampleStrategy() {
+    setStrategyText(formatStrategyJson(PRIORITY_STAR_MAX_STRATEGY));
+    setStatus("Loaded Priority star showcase strategy. Save to persist it.");
+    setError(null);
+  }
+
+  function loadImprovedHumanAutopilotStrategy() {
+    setStrategyText(formatStrategyJson(IMPROVED_HUMAN_AUTOPILOT_PRIORITY_STRATEGY));
+    setStatus("Loaded improved human autopilot strategy. Save to persist it.");
     setError(null);
   }
 
@@ -182,6 +196,16 @@ function EmpireEditor({ empire }: { empire: Doc<"emp_states"> }) {
                   Load Default
                 </Button>
               ) : null}
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={loadImprovedHumanAutopilotStrategy}
+              >
+                Load Human Autopilot
+              </Button>
+              <Button type="button" variant="secondary" onClick={loadPriorityExampleStrategy}>
+                Load Priority Example
+              </Button>
             </div>
           </div>
         </details>
@@ -193,26 +217,39 @@ function EmpireEditor({ empire }: { empire: Doc<"emp_states"> }) {
   );
 }
 
-export function EmpiresPage() {
+export function EmpiresPage(props: {
+  /** When supplied (player home), list at most this empire (`null` = not present in this game). */
+  onlyEmpireId?: Id<"emp_states"> | null;
+  hideGamePicker?: boolean;
+}) {
+  const hideGamePicker = props.hideGamePicker === true;
+  const playerEmpireFilter = "onlyEmpireId" in props;
+  const onlyEmpireId = playerEmpireFilter ? props.onlyEmpireId ?? null : undefined;
   const { activeGame, games, setSelectedGameId } = useActiveGame();
-  const empires =
-    useQuery(
-      api.emp.queries.listEmpires,
-      activeGame ? { gameId: activeGame._id, limit: 64 } : "skip",
-    ) ?? [];
-
+  const empiresAllRaw = useQuery(
+    api.emp.queries.listEmpires,
+    activeGame ? { gameId: activeGame._id, limit: 64 } : "skip",
+  );
+  const empiresAll = useMemo(() => empiresAllRaw ?? [], [empiresAllRaw]);
+  const empires = useMemo(() => {
+    if (!playerEmpireFilter) return empiresAll;
+    if (onlyEmpireId === null) return [];
+    return empiresAll.filter((e) => e._id === onlyEmpireId);
+  }, [empiresAll, onlyEmpireId, playerEmpireFilter]);
   return (
     <div className="mx-auto max-w-5xl space-y-6 px-4 py-6">
       <div className="space-y-1">
-        <h1 className="text-xl font-semibold text-st-fg">Empires</h1>
+        <h1 className="text-xl font-semibold text-st-fg">
+          {playerEmpireFilter ? "Your empire" : "Empires"}
+        </h1>
         <p className="text-sm text-st-muted">
-          Manage empire identity, colors, and automation brains for human and NPC players. Empire
-          colors you set here are saved to your account and applied when you create or seed a new
-          map for Aurora, Iron, and each roster NPC persona.
+          {playerEmpireFilter
+            ? "Your faction profile and automation brain for this game."
+            : "Manage empire identity, colors, and automation brains for human and NPC players. Empire colors you set here are saved to your account and applied when you create or seed a new map for Aurora, Iron, and each roster NPC persona."}
         </p>
       </div>
 
-      {games.length > 1 ? (
+      {!hideGamePicker && games.length > 1 ? (
         <div className="flex flex-wrap gap-2">
           {games.map((game) => {
             const isActive = activeGame?._id === game._id;
@@ -256,7 +293,11 @@ export function EmpiresPage() {
               empires.map((empire) => <EmpireEditor key={empire._id} empire={empire} />)
             ) : (
               <Card>
-                <p className="text-sm text-st-muted">No empires have been seeded yet.</p>
+                <p className="text-sm text-st-muted">
+                  {playerEmpireFilter && onlyEmpireId === null && empiresAll.length > 0
+                    ? "Your assigned empire is not part of this game. Select a matching seeded game from the main app."
+                    : "No empires have been seeded yet."}
+                </p>
               </Card>
             )}
           </div>

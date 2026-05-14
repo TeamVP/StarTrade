@@ -107,6 +107,8 @@ export const getTurnTimelineForGame = query({
       turnState: turnRow?.state ?? null,
       resolutionPhase: turnRow?.resolutionPhase ?? null,
       simCronTurnsDisabled: game.simCronTurnsDisabled === true,
+      turnPausedUntilMs: game.turnPausedUntilMs,
+      nextTurnAutoResolveDelayRatio: game.nextTurnAutoResolveDelayRatio,
     };
   },
 });

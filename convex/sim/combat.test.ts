@@ -2,7 +2,6 @@ import { describe, expect, test } from "vitest";
 import {
   resolveFullCombatRound,
   resolveOpeningStrike,
-  resolveRetreatStrike,
   resolveTwoEmpireBattle,
 } from "./combat";
 
@@ -25,19 +24,6 @@ describe("resolveTwoEmpireBattle", () => {
     expect(result.attackerLosses).toBeGreaterThan(0);
     expect(result.defenderLosses).toBe(0);
     expect(result.defenderShipsAfter).toBe(50);
-  });
-
-  test("retreat strike can destroy escaping attackers", () => {
-    const result = resolveRetreatStrike({
-      attackerShips: 1,
-      defenderShips: 100,
-      isDefenderHomeworld: false,
-      roundNumber: 2,
-    });
-
-    expect(result.phase).toBe("retreat");
-    expect(result.attackerShipsAfter).toBe(0);
-    expect(result.defenderShipsAfter).toBe(100);
   });
 
   test("full rounds damage both sides and can apply collateral", () => {

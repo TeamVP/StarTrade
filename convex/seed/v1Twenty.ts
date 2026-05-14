@@ -32,7 +32,7 @@ export function makeLinkMetrics(
 export const V1_TWENTY_SYSTEMS: V1TwentySeedSystem[] = [
   {
     key: "luminara-deep",
-    name: "Luminara Deep (Aurora Throne)",
+    name: "Luminara Deep",
     x: 90,
     y: 200,
     resourceRichness: 0.82,

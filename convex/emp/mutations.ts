@@ -1,6 +1,47 @@
 import { mutation } from "../_generated/server";
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
+import type { Id } from "../_generated/dataModel";
+import type { MutationCtx } from "../_generated/server";
+import { gameAllowsPlayerActions } from "../sim/helpers";
+import type { StrategicSliderKey, StrategicSliderOverrides } from "../sim/economy/strategicSliders";
+
+const STRATEGIC_LEVEL = v.union(
+  v.literal("lowest"),
+  v.literal("low"),
+  v.literal("medium"),
+  v.literal("high"),
+  v.literal("highest"),
+);
+
+const SLIDER_KEY = v.union(
+  v.literal("militaryAggression"),
+  v.literal("expansion"),
+  v.literal("defensivePosture"),
+  v.literal("priorityOperations"),
+  v.literal("economicMobilization"),
+);
+
+async function assertEmpireSeatForGame(
+  ctx: MutationCtx,
+  params: { gameId: Id<"sim_games">; userId: Id<"users"> },
+): Promise<Id<"emp_states">> {
+  const binding = await ctx.db
+    .query("usr_game_roles")
+    .withIndex("by_gameId_and_userId", (q) =>
+      q.eq("gameId", params.gameId).eq("userId", params.userId),
+    )
+    .unique();
+  if (
+    binding === null ||
+    !binding.isActive ||
+    binding.role !== "empire" ||
+    binding.empireId === null
+  ) {
+    throw new Error("You need an active empire seat in this game.");
+  }
+  return binding.empireId;
+}
 
 const HEX_COLOR_RE = /^#[0-9a-fA-F]{6}$/;
 
@@ -118,5 +159,52 @@ export const updateEmpireMeta = mutation({
 
     await ctx.db.patch("emp_states", args.empireId, patch);
     return args.empireId;
+  },
+});
+
+/**
+ * Set or clear one strategic slider override for the caller's empire.
+ * Pass `level: null` to revert that axis to the default implied by strategy JSON.
+ */
+export const patchStrategicSlider = mutation({
+  args: {
+    gameId: v.id("sim_games"),
+    key: SLIDER_KEY,
+    level: v.union(STRATEGIC_LEVEL, v.null()),
+  },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (userId === null) throw new Error("Not authenticated");
+
+    const game = await ctx.db.get("sim_games", args.gameId);
+    if (game === null) throw new Error("Game not found.");
+    if (!gameAllowsPlayerActions(game.status)) {
+      throw new Error(
+        "Strategic sliders can only be changed while the game is running or paused.",
+      );
+    }
+
+    const empireId = await assertEmpireSeatForGame(ctx, {
+      gameId: args.gameId,
+      userId,
+    });
+    const empire = await ctx.db.get("emp_states", empireId);
+    if (empire === null || empire.gameId !== args.gameId) {
+      throw new Error("Empire not found.");
+    }
+
+    const key = args.key as StrategicSliderKey;
+    const prev: StrategicSliderOverrides = { ...(empire.strategicSliderOverrides ?? {}) };
+    if (args.level === null) {
+      delete prev[key];
+    } else {
+      prev[key] = args.level;
+    }
+    const keys = Object.keys(prev) as Array<keyof StrategicSliderOverrides>;
+    await ctx.db.patch("emp_states", empireId, {
+      strategicSliderOverrides: keys.length > 0 ? prev : undefined,
+    });
+    return null;
   },
 });

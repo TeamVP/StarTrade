@@ -1,7 +1,7 @@
 import { Application, extend, useApplication, useTick } from "@pixi/react";
 import type { FederatedPointerEvent } from "pixi.js";
 import { Circle, Container, Graphics, Point } from "pixi.js";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   FLEET_ORBIT_RADIUS,
   MAP_PAN_DRAG_THRESHOLD_PX,
@@ -11,6 +11,7 @@ import {
 } from "@/features/galaxy/constants";
 import {
   clampMapScale,
+  easeOutCubic,
   type GalaxyMapCamera,
   screenToWorld,
   zoomCameraTowardScreenPoint,
@@ -21,6 +22,9 @@ import {
 } from "@/features/galaxy/utils/linkAdjacency";
 
 extend({ Graphics, Container });
+
+const STAR_VISUAL_DRAG_MAX_DISTANCE = STAR_HIT_RADIUS * 2;
+const STAR_VISUAL_RETURN_MS = 2500;
 
 /** Fraction 0–1 along the origin→destination chord for in-flight ships (fleets, traders). */
 // eslint-disable-next-line react-refresh/only-export-components -- shared by GalaxyViewport + types
@@ -59,6 +63,7 @@ export type GalaxyNode = {
   x: number;
   y: number;
   ownerColor: string;
+  isPriority?: boolean;
 };
 
 /** Food shortage alert: severity 0–1 drives pulse speed (1 = critical, <1 turn of food). */
@@ -71,8 +76,15 @@ export type GalaxyLink = {
   toId: string;
 };
 
+type StarVisualOffset = {
+  systemId: string;
+  dx: number;
+  dy: number;
+};
+
 export type FleetMarkerModel = {
   fleetId: string;
+  empireId: string;
   originSystemId: string;
   x: number;
   y: number;
@@ -96,6 +108,8 @@ export type ColonyShipRouteCommitPayload = {
 
 export type PendingSegmentModel = {
   key: string;
+  originSystemId?: string;
+  targetSystemId?: string;
   x1: number;
   y1: number;
   x2: number;
@@ -113,6 +127,8 @@ export type RouteSegmentModel = {
   y2: number;
   dispatchPct: number;
   enabled: boolean;
+  /** Strategy-maintained routes use a muted line; manual standing orders stay vivid violet. */
+  managedByStrategy?: boolean;
 };
 
 export type FleetMoveCommitPayload = {
@@ -161,8 +177,7 @@ export type CombatMarkerModel = {
   defenderShipsAtStart: number;
   attackerMotherships: number;
   defenderMotherships: number;
-  canRetreat: boolean;
-  phase: "opening" | "awaitingAttackerDecision" | "retreating" | "resolved";
+  phase: "opening" | "awaitingAttackerDecision" | "resolved";
   roundNumber: number;
   latestRound: CombatRoundReplayModel | null;
 };
@@ -225,6 +240,11 @@ export type GalaxyStageProps = {
   /** When true, a successful drag-drop also establishes a recurring route (viewport handles save). */
   repeatNextDragEnabled: boolean;
   canIssueOrders: boolean;
+  /**
+   * When set, only fleets whose `empireId` passes this check can be selected or dragged.
+   * Omitted = all fleets selectable (e.g. tests). Viewport passes player empire + admin bypass.
+   */
+  fleetSelectionAllowed?: (fleetEmpireId: string) => boolean;
   onFleetMoveCommit?: (payload: FleetMoveCommitPayload) => Promise<void>;
   onRouteMidpointTap?: (routeId: string) => void;
   onStarPointerTap?: (systemId: string) => void;
@@ -292,6 +312,7 @@ function GalaxyStageInner({
   shipsToDispatch,
   repeatNextDragEnabled,
   canIssueOrders,
+  fleetSelectionAllowed,
   onFleetMoveCommit,
   onRouteMidpointTap,
   onStarPointerTap,
@@ -338,6 +359,16 @@ function GalaxyStageInner({
   const dragRecurringRef = useRef(false);
 
   const [dragColonyShipId, setDragColonyShipId] = useState<string | null>(null);
+
+  const [starVisualOffset, setStarVisualOffsetState] = useState<StarVisualOffset | null>(null);
+  const starVisualOffsetRef = useRef<StarVisualOffset | null>(null);
+  const starReturnRafRef = useRef<number | null>(null);
+  const starDragSuppressTapRef = useRef<{ systemId: string; until: number } | null>(null);
+
+  const setStarVisualOffset = useCallback((next: StarVisualOffset | null) => {
+    starVisualOffsetRef.current = next;
+    setStarVisualOffsetState(next);
+  }, []);
 
   const colonyDragPropsRef = useRef({
     nodes: [] as GalaxyNode[],
@@ -421,6 +452,135 @@ function GalaxyStageInner({
     [clientToScreenPixels, viewW, viewH],
   );
 
+  const cancelStarReturnAnimation = useCallback(() => {
+    if (starReturnRafRef.current !== null) {
+      cancelAnimationFrame(starReturnRafRef.current);
+      starReturnRafRef.current = null;
+    }
+  }, []);
+
+  const startStarReturnAnimation = useCallback(
+    (systemId: string, startDx: number, startDy: number) => {
+      cancelStarReturnAnimation();
+      const startAt = performance.now();
+
+      const step = (now: number) => {
+        const t = Math.min(1, (now - startAt) / STAR_VISUAL_RETURN_MS);
+        const remaining = 1 - easeOutCubic(t);
+        setStarVisualOffset({
+          systemId,
+          dx: startDx * remaining,
+          dy: startDy * remaining,
+        });
+
+        if (t < 1) {
+          starReturnRafRef.current = requestAnimationFrame(step);
+        } else {
+          starReturnRafRef.current = null;
+          setStarVisualOffset(null);
+        }
+      };
+
+      starReturnRafRef.current = requestAnimationFrame(step);
+    },
+    [cancelStarReturnAnimation, setStarVisualOffset],
+  );
+
+  const handleStarPointerDown = useCallback(
+    (node: GalaxyNode, event: FederatedPointerEvent) => {
+      if (event.pointerType === "mouse" && event.button !== 0) return;
+      event.stopPropagation();
+      cancelStarReturnAnimation();
+
+      const startWorld = clientToWorld(event.clientX, event.clientY);
+      const existingOffset =
+        starVisualOffsetRef.current?.systemId === node.id
+          ? starVisualOffsetRef.current
+          : null;
+      const startDx = existingOffset?.dx ?? 0;
+      const startDy = existingOffset?.dy ?? 0;
+      const pointerId = event.pointerId;
+      const startClientX = event.clientX;
+      const startClientY = event.clientY;
+      let movedPastTapThreshold = false;
+
+      const onMove = (ev: PointerEvent) => {
+        if (ev.pointerId !== pointerId) return;
+        const dragDist = Math.hypot(ev.clientX - startClientX, ev.clientY - startClientY);
+        if (dragDist >= MAP_PAN_DRAG_THRESHOLD_PX) {
+          movedPastTapThreshold = true;
+        }
+
+        const world = clientToWorld(ev.clientX, ev.clientY);
+        const unclampedDx = startDx + world.x - startWorld.x;
+        const unclampedDy = startDy + world.y - startWorld.y;
+        const len = Math.hypot(unclampedDx, unclampedDy);
+        const scale =
+          len > STAR_VISUAL_DRAG_MAX_DISTANCE && len > 0
+            ? STAR_VISUAL_DRAG_MAX_DISTANCE / len
+            : 1;
+        setStarVisualOffset({
+          systemId: node.id,
+          dx: unclampedDx * scale,
+          dy: unclampedDy * scale,
+        });
+      };
+
+      const onUp = (ev: PointerEvent) => {
+        if (ev.pointerId !== pointerId) return;
+        window.removeEventListener("pointermove", onMove);
+        window.removeEventListener("pointerup", onUp);
+        window.removeEventListener("pointercancel", onUp);
+
+        if (movedPastTapThreshold) {
+          starDragSuppressTapRef.current = {
+            systemId: node.id,
+            until: performance.now() + 300,
+          };
+        }
+
+        const latest = starVisualOffsetRef.current;
+        if (latest?.systemId === node.id && Math.hypot(latest.dx, latest.dy) > 0.1) {
+          startStarReturnAnimation(node.id, latest.dx, latest.dy);
+        } else {
+          setStarVisualOffset(null);
+        }
+      };
+
+      window.addEventListener("pointermove", onMove);
+      window.addEventListener("pointerup", onUp);
+      window.addEventListener("pointercancel", onUp);
+    },
+    [cancelStarReturnAnimation, clientToWorld, setStarVisualOffset, startStarReturnAnimation],
+  );
+
+  const handleStarPointerTap = useCallback(
+    (node: GalaxyNode, event: FederatedPointerEvent) => {
+      const suppressed = starDragSuppressTapRef.current;
+      if (
+        suppressed !== null &&
+        suppressed.systemId === node.id &&
+        performance.now() <= suppressed.until
+      ) {
+        starDragSuppressTapRef.current = null;
+        event.stopPropagation();
+        return;
+      }
+
+      if (onStarPointerTap === undefined && onStarDoubleTap === undefined) return;
+      event.stopPropagation();
+      const detail = (event.nativeEvent as PointerEvent | MouseEvent).detail ?? 0;
+      if (detail >= 2 && onStarDoubleTap !== undefined) {
+        onStarDoubleTap(node.id);
+        return;
+      }
+      if (onStarPointerTap !== undefined) {
+        onStarPointerTap(node.id);
+      }
+    },
+    [onStarDoubleTap, onStarPointerTap],
+  );
+
   useEffect(() => {
     if (!isInitialised) return;
     const application = appRef.current;
@@ -450,10 +610,11 @@ function GalaxyStageInner({
 
   useEffect(() => {
     return () => {
+      cancelStarReturnAnimation();
       panCleanupRef.current?.();
       panCleanupRef.current = null;
     };
-  }, []);
+  }, [cancelStarReturnAnimation]);
 
   const handleBackgroundPointerDown = useCallback(
     (event: FederatedPointerEvent) => {
@@ -664,9 +825,19 @@ function GalaxyStageInner({
     ],
   );
 
+  const fleetSelectable = useCallback(
+    (fleet: FleetMarkerModel) =>
+      fleetSelectionAllowed === undefined || fleetSelectionAllowed(fleet.empireId),
+    [fleetSelectionAllowed],
+  );
+
   const handleFleetPointerDown = useCallback(
     (fleet: FleetMarkerModel, event: FederatedPointerEvent) => {
       if (!canIssueOrders) return;
+      if (!fleetSelectable(fleet)) {
+        event.stopPropagation();
+        return;
+      }
       event.stopPropagation();
       onSelectedFleetChange(fleet.fleetId);
       const n = Math.max(0, Math.floor(shipsToDispatch));
@@ -681,19 +852,59 @@ function GalaxyStageInner({
       const w = screenToWorld(event.global.x, event.global.y, cam, viewW, viewH);
       setDragCursorPos({ x: w.x, y: w.y });
     },
-    [viewW, viewH, canIssueOrders, onSelectedFleetChange, shipsToDispatch, repeatNextDragEnabled],
+    [
+      viewW,
+      viewH,
+      canIssueOrders,
+      fleetSelectable,
+      onSelectedFleetChange,
+      shipsToDispatch,
+      repeatNextDragEnabled,
+    ],
   );
 
+  const visualNodes = useMemo(
+    () => nodes.map((node) => nodeWithStarVisualOffset(node, starVisualOffset)),
+    [nodes, starVisualOffset],
+  );
+  const visualFleetMarkers = useMemo(
+    () =>
+      fleetMarkers.map((fleet) => ({
+        ...fleet,
+        ...pointWithStarVisualOffset(
+          fleet.x,
+          fleet.y,
+          fleet.originSystemId,
+          starVisualOffset,
+        ),
+      })),
+    [fleetMarkers, starVisualOffset],
+  );
+  const visualColonyShipMarkers = useMemo(
+    () =>
+      colonyShipMarkers.map((ship) => ({
+        ...ship,
+        ...pointWithStarVisualOffset(
+          ship.x,
+          ship.y,
+          ship.originSystemId,
+          starVisualOffset,
+        ),
+      })),
+    [colonyShipMarkers, starVisualOffset],
+  );
   const dragPreviewFleet =
-    dragFleetId === null ? null : fleetMarkers.find((m) => m.fleetId === dragFleetId);
+    dragFleetId === null ? null : visualFleetMarkers.find((m) => m.fleetId === dragFleetId);
   const dragPreviewColony =
     dragColonyShipId === null
       ? null
-      : colonyShipMarkers.find((m) => m.colonyShipId === dragColonyShipId);
+      : visualColonyShipMarkers.find((m) => m.colonyShipId === dragColonyShipId);
 
   const readyCursor = canIssueOrders && shipsToDispatch >= 1;
   const selectedSystemNode =
-    selectedSystemId === null ? undefined : nodes.find((node) => node.id === selectedSystemId);
+    selectedSystemId === null
+      ? undefined
+      : visualNodes.find((node) => node.id === selectedSystemId);
 
   if (!isInitialised) {
     return null;
@@ -715,17 +926,17 @@ function GalaxyStageInner({
       >
         <pixiGraphics
           eventMode="none"
-          draw={(graphics) => drawHyperlanes(graphics, nodes, links)}
+          draw={(graphics) => drawHyperlanes(graphics, visualNodes, links)}
         />
         <pixiGraphics
           eventMode="none"
-          draw={(graphics) => drawRouteSegments(graphics, routeSegments)}
+          draw={(graphics) => drawRouteSegments(graphics, routeSegments, starVisualOffset)}
         />
         <pixiGraphics
           eventMode="none"
-          draw={(graphics) => drawPendingSegments(graphics, pendingSegments)}
+          draw={(graphics) => drawPendingSegments(graphics, pendingSegments, starVisualOffset)}
         />
-        {nodes.map((node) => (
+        {visualNodes.map((node) => (
           <pixiGraphics
             key={`${node.id}:${node.ownerColor}`}
             eventMode="static"
@@ -734,42 +945,36 @@ function GalaxyStageInner({
                 ? "pointer"
                 : "default"
             }
-            onPointerTap={(event: FederatedPointerEvent) => {
-              if (onStarPointerTap === undefined && onStarDoubleTap === undefined) return;
-              event.stopPropagation();
-              const detail = (event.nativeEvent as PointerEvent | MouseEvent).detail ?? 0;
-              if (detail >= 2 && onStarDoubleTap !== undefined) {
-                onStarDoubleTap(node.id);
-                return;
-              }
-              if (onStarPointerTap !== undefined) {
-                onStarPointerTap(node.id);
-              }
-            }}
+            onPointerDown={(event: FederatedPointerEvent) => handleStarPointerDown(node, event)}
+            onPointerTap={(event: FederatedPointerEvent) => handleStarPointerTap(node, event)}
             draw={(graphics) => drawStar(graphics, node)}
           />
         ))}
         <SelectedStarHighlightGraphics node={selectedSystemNode} />
+        <pixiGraphics
+          eventMode="none"
+          draw={(graphics) => drawPriorityStarBookmarks(graphics, visualNodes)}
+        />
         <StarAlertGraphics
           foodAlerts={foodAlerts}
           starvationAlerts={starvationAlerts}
-          nodes={nodes}
+          nodes={visualNodes}
         />
         <CombatAnimationGraphics
           combatMarkers={combatMarkers}
-          nodes={nodes}
+          nodes={visualNodes}
           turnTimeline={turnTimeline}
         />
         <EnRouteGhostGraphics
           ghosts={enRouteGhosts}
-          nodes={nodes}
+          nodes={visualNodes}
           turnTimeline={turnTimeline}
         />
         {traderShips.map((trader) => (
           <TraderShipMarker
             key={trader.traderId}
             trader={trader}
-            nodes={nodes}
+            nodes={visualNodes}
             turnTimeline={turnTimeline}
             selected={selectedTraderId === trader.traderId}
             onTap={() => {
@@ -777,11 +982,19 @@ function GalaxyStageInner({
             }}
           />
         ))}
-        {fleetMarkers.map((fleet) => (
+        {visualFleetMarkers.map((fleet) => (
           <pixiGraphics
             key={`${fleet.fleetId}:${fleet.colorHex}`}
             eventMode={canIssueOrders ? "static" : "auto"}
-            cursor={readyCursor ? "grab" : canIssueOrders ? "pointer" : "default"}
+            cursor={
+              !fleetSelectable(fleet)
+                ? "default"
+                : readyCursor
+                  ? "grab"
+                  : canIssueOrders
+                    ? "pointer"
+                    : "default"
+            }
             onPointerDown={(event: FederatedPointerEvent) =>
               handleFleetPointerDown(fleet, event)
             }
@@ -789,13 +1002,13 @@ function GalaxyStageInner({
               drawFleetShip(
                 graphics,
                 fleet,
-                nodes.find((node) => node.id === fleet.originSystemId),
+                visualNodes.find((node) => node.id === fleet.originSystemId),
                 selectedFleetId === fleet.fleetId,
               )
             }
           />
         ))}
-        {colonyShipMarkers.map((ship) => (
+        {visualColonyShipMarkers.map((ship) => (
           <pixiGraphics
             key={`${ship.colonyShipId}:${ship.colorHex}`}
             eventMode={canIssueOrders ? "static" : "auto"}
@@ -813,7 +1026,7 @@ function GalaxyStageInner({
               drawColonyShip(
                 graphics,
                 ship,
-                nodes.find((node) => node.id === ship.originSystemId),
+                visualNodes.find((node) => node.id === ship.originSystemId),
                 selectedColonyShipId === ship.colonyShipId,
               )
             }
@@ -840,6 +1053,30 @@ function GalaxyStageInner({
                     gap: 8,
                   },
                 );
+                const dropSystemId = hitTestSystem(
+                  visualNodes,
+                  dragCursorPos.x,
+                  dragCursorPos.y,
+                );
+                const shipCount = dragShipCountRef.current;
+                if (
+                  onFleetMoveCommit !== undefined &&
+                  shipCount >= 1 &&
+                  dropSystemId !== null &&
+                  dropSystemId !== dragPreviewFleet.originSystemId &&
+                  systemsShareLink(galaxyLinks, dragPreviewFleet.originSystemId, dropSystemId)
+                ) {
+                  const destNode = visualNodes.find((n) => n.id === dropSystemId);
+                  if (destNode !== undefined) {
+                    drawDashedCircle(graphics, destNode.x, destNode.y, 29, {
+                      width: 4.5,
+                      color: 0xfbbf24,
+                      alpha: 0.95,
+                      dash: 14,
+                      gap: 10,
+                    });
+                  }
+                }
               }}
             />
           )}
@@ -868,8 +1105,20 @@ function GalaxyStageInner({
             />
           )}
         {routeSegments.map((seg) => {
-          const mx = (seg.x1 + seg.x2) / 2;
-          const my = (seg.y1 + seg.y2) / 2;
+          const p1 = pointWithStarVisualOffset(
+            seg.x1,
+            seg.y1,
+            seg.originSystemId,
+            starVisualOffset,
+          );
+          const p2 = pointWithStarVisualOffset(
+            seg.x2,
+            seg.y2,
+            seg.destSystemId,
+            starVisualOffset,
+          );
+          const mx = (p1.x + p2.x) / 2;
+          const my = (p1.y + p2.y) / 2;
           return (
             <pixiGraphics
               key={`route-hit-${seg.routeId}`}
@@ -883,13 +1132,22 @@ function GalaxyStageInner({
               draw={(graphics) => {
                 graphics.clear();
                 graphics.circle(mx, my, 22).fill({ color: 0xffffff, alpha: 0.0001 });
-                graphics
-                  .circle(mx, my, 5)
-                  .stroke({ width: 2, color: seg.enabled ? 0xc084fc : 0x64748b, alpha: 0.9 });
+                const { color, alpha } = garrisonRouteStrokeAppearance(seg);
+                graphics.circle(mx, my, 5).stroke({ width: 2, color, alpha: alpha * 0.95 });
               }}
             />
           );
         })}
+        {visualNodes.map((node) => (
+          <pixiGraphics
+            key={`star-hit-${node.id}`}
+            eventMode="static"
+            cursor="grab"
+            onPointerDown={(event: FederatedPointerEvent) => handleStarPointerDown(node, event)}
+            onPointerTap={(event: FederatedPointerEvent) => handleStarPointerTap(node, event)}
+            draw={(graphics) => drawStarHitTarget(graphics, node)}
+          />
+        ))}
       </pixiContainer>
     </>
   );
@@ -1214,23 +1472,6 @@ function drawCombatAtStar(
       color: 0xffffff,
       alpha: 0.65 * (1 - burst * 0.4),
     });
-  }
-
-  if (marker.phase === "retreating") {
-    drawDashedPolyline(
-      graphics,
-      attackerLead.x,
-      attackerLead.y,
-      attackerLead.x - 22,
-      attackerLead.y,
-      {
-        width: 1.4,
-        color: attackerColor,
-        alpha: 0.55,
-        dash: 5,
-        gap: 5,
-      },
-    );
   }
 
   // Small crossfire ticks make active combat readable even while zoomed out.
@@ -1698,6 +1939,23 @@ function hitTestSystem(nodes: GalaxyNode[], x: number, y: number): string | null
   return best?.id ?? null;
 }
 
+function pointWithStarVisualOffset(
+  x: number,
+  y: number,
+  systemId: string | undefined,
+  offset: StarVisualOffset | null,
+): { x: number; y: number } {
+  if (systemId === undefined || offset === null || offset.systemId !== systemId) {
+    return { x, y };
+  }
+  return { x: x + offset.dx, y: y + offset.dy };
+}
+
+function nodeWithStarVisualOffset(node: GalaxyNode, offset: StarVisualOffset | null): GalaxyNode {
+  if (offset === null || offset.systemId !== node.id) return node;
+  return { ...node, x: node.x + offset.dx, y: node.y + offset.dy };
+}
+
 function drawBackground(graphics: Graphics, width: number, height: number) {
   graphics.clear();
   graphics.rect(0, 0, width, height).fill(0x080d1e);
@@ -1720,35 +1978,78 @@ function drawHyperlanes(
   }
 }
 
-function drawRouteSegments(graphics: Graphics, segments: RouteSegmentModel[]) {
+/** Manual standing route (enabled) — vivid violet; strategy automation uses grey-violet. */
+const GARRISON_ROUTE_MANUAL_ENABLED = 0xc084fc;
+const GARRISON_ROUTE_STRATEGY_ENABLED = 0xa89bb0;
+const GARRISON_ROUTE_DISABLED = 0x64748b;
+
+function garrisonRouteStrokeAppearance(
+  segment: Pick<RouteSegmentModel, "enabled" | "managedByStrategy">,
+): { color: number; alpha: number } {
+  if (!segment.enabled) {
+    return { color: GARRISON_ROUTE_DISABLED, alpha: 0.45 };
+  }
+  if (segment.managedByStrategy === true) {
+    return { color: GARRISON_ROUTE_STRATEGY_ENABLED, alpha: 0.88 };
+  }
+  return { color: GARRISON_ROUTE_MANUAL_ENABLED, alpha: 0.88 };
+}
+
+function drawRouteSegments(
+  graphics: Graphics,
+  segments: RouteSegmentModel[],
+  starVisualOffset: StarVisualOffset | null,
+) {
   graphics.clear();
   for (const segment of segments) {
-    drawDashedPolyline(
-      graphics,
+    const p1 = pointWithStarVisualOffset(
       segment.x1,
       segment.y1,
+      segment.originSystemId,
+      starVisualOffset,
+    );
+    const p2 = pointWithStarVisualOffset(
       segment.x2,
       segment.y2,
-      {
-        width: 2,
-        color: segment.enabled ? 0xc084fc : 0x64748b,
-        alpha: segment.enabled ? 0.88 : 0.45,
-        dash: 11,
-        gap: 9,
-      },
+      segment.destSystemId,
+      starVisualOffset,
     );
+    const { color, alpha } = garrisonRouteStrokeAppearance(segment);
+    drawDashedPolyline(graphics, p1.x, p1.y, p2.x, p2.y, {
+      width: 2,
+      color,
+      alpha,
+      dash: 11,
+      gap: 9,
+    });
   }
 }
 
-function drawPendingSegments(graphics: Graphics, segments: PendingSegmentModel[]) {
+function drawPendingSegments(
+  graphics: Graphics,
+  segments: PendingSegmentModel[],
+  starVisualOffset: StarVisualOffset | null,
+) {
   graphics.clear();
   for (const segment of segments) {
-    drawDashedPolyline(
-      graphics,
+    const p1 = pointWithStarVisualOffset(
       segment.x1,
       segment.y1,
+      segment.originSystemId,
+      starVisualOffset,
+    );
+    const p2 = pointWithStarVisualOffset(
       segment.x2,
       segment.y2,
+      segment.targetSystemId,
+      starVisualOffset,
+    );
+    drawDashedPolyline(
+      graphics,
+      p1.x,
+      p1.y,
+      p2.x,
+      p2.y,
       {
         width: 2,
         color: 0xfbbf24,
@@ -1765,6 +2066,30 @@ function drawStar(graphics: Graphics, node: GalaxyNode) {
   const fillColor = Number.parseInt(node.ownerColor.replace("#", ""), 16);
   graphics.circle(node.x, node.y, 14).fill(fillColor);
   graphics.circle(node.x, node.y, 19).stroke({ width: 3, color: 0xe2e8f0, alpha: 0.8 });
+  graphics.hitArea = new Circle(node.x, node.y, STAR_HIT_RADIUS);
+}
+
+function drawPriorityStarBookmarks(graphics: Graphics, nodes: GalaxyNode[]) {
+  graphics.clear();
+  for (const node of nodes) {
+    if (node.isPriority !== true) continue;
+    const outer = 5;
+    const inner = 2.2;
+    const points: number[] = [];
+    for (let i = 0; i < 10; i++) {
+      const radius = i % 2 === 0 ? outer : inner;
+      const angle = -Math.PI / 2 + (i * Math.PI) / 5;
+      points.push(node.x + Math.cos(angle) * radius, node.y + Math.sin(angle) * radius);
+    }
+    graphics
+      .poly(points)
+      .fill({ color: 0x000000, alpha: 0.9 });
+  }
+}
+
+function drawStarHitTarget(graphics: Graphics, node: GalaxyNode) {
+  graphics.clear();
+  graphics.circle(node.x, node.y, STAR_HIT_RADIUS).fill({ color: 0xffffff, alpha: 0.0001 });
   graphics.hitArea = new Circle(node.x, node.y, STAR_HIT_RADIUS);
 }
 
@@ -2036,6 +2361,41 @@ function drawDashedPolyline(
       const ex = x1 + ux * (pos + segmentLength);
       const ey = y1 + uy * (pos + segmentLength);
       graphics.moveTo(sx, sy).lineTo(ex, ey).stroke({
+        width: opts.width,
+        color: opts.color,
+        alpha: opts.alpha,
+        cap: "round",
+      });
+    }
+    pos += segmentLength;
+    drawingDash = !drawingDash;
+  }
+}
+
+/** Dashed stroke along a circle (arc-length dash pattern, chord segments). */
+function drawDashedCircle(
+  graphics: Graphics,
+  cx: number,
+  cy: number,
+  radius: number,
+  opts: { width: number; color: number; alpha: number; dash: number; gap: number },
+) {
+  if (radius < 2) return;
+  const circumference = 2 * Math.PI * radius;
+  let pos = 0;
+  let drawingDash = true;
+  while (pos < circumference) {
+    const segmentLength = drawingDash
+      ? Math.min(opts.dash, circumference - pos)
+      : Math.min(opts.gap, circumference - pos);
+    if (drawingDash && segmentLength > 0.55) {
+      const a0 = -Math.PI / 2 + pos / radius;
+      const a1 = -Math.PI / 2 + (pos + segmentLength) / radius;
+      const x0 = cx + Math.cos(a0) * radius;
+      const y0 = cy + Math.sin(a0) * radius;
+      const x1 = cx + Math.cos(a1) * radius;
+      const y1 = cy + Math.sin(a1) * radius;
+      graphics.moveTo(x0, y0).lineTo(x1, y1).stroke({
         width: opts.width,
         color: opts.color,
         alpha: opts.alpha,

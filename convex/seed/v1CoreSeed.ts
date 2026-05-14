@@ -2,6 +2,7 @@ import type { MutationCtx } from "../_generated/server";
 import type { Id } from "../_generated/dataModel";
 import { seedNpcTraderIdentitiesForGame } from "./npcTraderIdentitiesSeed";
 import { pickEmpireCatalogColorHex } from "./empireColorPrefLookup";
+import { STAR_SYSTEM_STARTING_TREASURY } from "../sim/economy/constants";
 
 function seedBaseProductivity(resourceRichness: number): number {
   return Math.max(1, Math.min(10, Math.round(3 + resourceRichness * 7)));
@@ -29,6 +30,7 @@ export async function seedLegacyV1Core(
     stockFood: 5_000,
     stockWeapons: 160,
     stockResearch: 120,
+    localTreasury: STAR_SYSTEM_STARTING_TREASURY,
     emphasisFood: 34,
     emphasisShips: 33,
     emphasisResearch: 33,
@@ -47,6 +49,7 @@ export async function seedLegacyV1Core(
     stockFood: 5_000,
     stockWeapons: 160,
     stockResearch: 120,
+    localTreasury: STAR_SYSTEM_STARTING_TREASURY,
     emphasisFood: 34,
     emphasisShips: 33,
     emphasisResearch: 33,
@@ -65,6 +68,7 @@ export async function seedLegacyV1Core(
     stockFood: 2_400,
     stockWeapons: 70,
     stockResearch: 85,
+    localTreasury: STAR_SYSTEM_STARTING_TREASURY,
     emphasisFood: 34,
     emphasisShips: 33,
     emphasisResearch: 33,

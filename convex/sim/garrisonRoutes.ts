@@ -1,6 +1,11 @@
 import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx } from "../_generated/server";
 import { dispatchMoveFromFleet } from "./fleetDispatch";
+import {
+  hasManualOrderOriginLock,
+  loadManualOrderOriginLocks,
+} from "./fleetOrders";
+import { insertSimEvent } from "./eventLog";
 
 /** Ships to send from garrison given total idle strength and slider percentage (1–100). */
 export function shipsToDispatchFromPct(totalIdleStrength: number, dispatchPct: number): number {
@@ -9,7 +14,39 @@ export function shipsToDispatchFromPct(totalIdleStrength: number, dispatchPct: n
   return Math.min(totalIdleStrength, Math.ceil(totalIdleStrength * (dispatchPct / 100)));
 }
 
-async function idleFleetsAtSystemForEmpire(
+export function nextOwnershipInvalidTurns(params: {
+  originOwned: boolean;
+  destinationAvailable: boolean;
+  currentInvalidTurns?: number;
+}): number {
+  if (params.originOwned && params.destinationAvailable) return 0;
+  return Math.max(0, params.currentInvalidTurns ?? 0) + 1;
+}
+
+export function shouldCancelGarrisonRouteForEndpointAvailability(params: {
+  originOwned: boolean;
+  destinationAvailable: boolean;
+}): boolean {
+  return !params.originOwned || !params.destinationAvailable;
+}
+
+/**
+ * Player fleet move orders stamp a per-origin lock for the turn so automation cannot
+ * countermand the move. Standing routes you set are manual (`managedByStrategy` not true)
+ * and must still dispatch; only strategy-maintained routes defer when that lock is present.
+ */
+export function shouldDeferAutomatedGarrisonForManualMoveLock(
+  route: Pick<Doc<"flt_garrison_routes">, "managedByStrategy" | "empireId" | "originSystemId">,
+  manualOrderOriginKeys: Set<string>,
+): boolean {
+  if (route.managedByStrategy !== true) return false;
+  return hasManualOrderOriginLock(manualOrderOriginKeys, {
+    empireId: route.empireId,
+    originSystemId: route.originSystemId,
+  });
+}
+
+export async function idleFleetsAtSystemForEmpire(
   ctx: MutationCtx,
   params: {
     gameId: Id<"sim_games">;
@@ -39,8 +76,16 @@ export async function applyGarrisonRoutes(
   params: {
     gameId: Id<"sim_games">;
     turnNumber: number;
+    manualOrderOriginKeys?: Set<string>;
   },
 ): Promise<void> {
+  const manualOrderOriginKeys =
+    params.manualOrderOriginKeys ??
+    (await loadManualOrderOriginLocks(ctx, {
+      gameId: params.gameId,
+      turnNumber: params.turnNumber,
+    }));
+
   const routes = await ctx.db
     .query("flt_garrison_routes")
     .withIndex("by_gameId", (q) => q.eq("gameId", params.gameId))
@@ -59,13 +104,61 @@ export async function applyGarrisonRoutes(
   });
 
   for (const route of sortedRoutes) {
-    if (!route.enabled || route.dispatchPct <= 0) continue;
-
     const empire = empireById.get(route.empireId);
-    if (empire === undefined || empire.isCollapsed) continue;
+    const origin = await ctx.db.get("gal_systems", route.originSystemId);
+    const destination = await ctx.db.get("gal_systems", route.destinationSystemId);
+    const originOwned =
+      empire !== undefined &&
+      !empire.isCollapsed &&
+      origin !== null &&
+      origin.ownerEmpireId === route.empireId;
+    const destinationAvailable =
+      empire !== undefined &&
+      !empire.isCollapsed &&
+      destination !== null &&
+      destination.gameId === params.gameId;
+    if (
+      shouldCancelGarrisonRouteForEndpointAvailability({
+        originOwned,
+        destinationAvailable,
+      })
+    ) {
+      await ctx.db.delete("flt_garrison_routes", route._id);
+      await insertSimEvent(ctx, {
+        gameId: params.gameId,
+        turnNumber: params.turnNumber,
+        eventType: "garrison_route_cancelled",
+        actorType: "empire",
+        actorId: route.empireId,
+        targetType: "route",
+        targetId: route._id,
+        summary: "Standing route cancelled because its origin or destination is no longer available",
+        payload: {
+          routeId: route._id,
+          originSystemId: route.originSystemId,
+          destinationSystemId: route.destinationSystemId,
+          originOwned,
+          destinationAvailable,
+        },
+      });
+      continue;
+    }
 
-    const system = await ctx.db.get("gal_systems", route.originSystemId);
-    if (system === null || system.ownerEmpireId !== route.empireId) continue;
+    const ownershipInvalidTurns = nextOwnershipInvalidTurns({
+      originOwned,
+      destinationAvailable,
+      currentInvalidTurns: route.ownershipInvalidTurns,
+    });
+    if (ownershipInvalidTurns !== (route.ownershipInvalidTurns ?? 0)) {
+      await ctx.db.patch("flt_garrison_routes", route._id, {
+        ownershipInvalidTurns,
+      });
+    }
+
+    if (!route.enabled || route.dispatchPct <= 0) continue;
+    if (shouldDeferAutomatedGarrisonForManualMoveLock(route, manualOrderOriginKeys)) {
+      continue;
+    }
 
     const fleetsSnapshot = await idleFleetsAtSystemForEmpire(ctx, {
       gameId: params.gameId,

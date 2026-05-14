@@ -7,7 +7,7 @@ export function useGalaxyData() {
   const { activeGame } = useActiveGame();
   const systemsQuery = useQuery(
     api.gal.queries.listSystems,
-    activeGame ? { gameId: activeGame._id, limit: 200 } : "skip",
+    activeGame ? { gameId: activeGame._id, limit: 256 } : "skip",
   );
   const linksQuery = useQuery(
     api.gal.queries.listLinks,

@@ -16,12 +16,14 @@ type Settings = {
   combatAttackMult: number;
   combatDefendMult: number;
   collateralDamageMult: number;
+  shipProdEmphasisPower: number;
   // Balance page fields — managed via /balance, preserved here on GodMode saves
   traderMinActive: number;
   traderMaxActive: number;
   traderShipHirePerTurn: number;
   traderHireChancePct: number;
   traderDockingCost: number;
+  localTreasuryAddsPer100Cr: number;
   foodStockpileMaxPerPop: number;
   foodStockpileMinPerPop: number;
   foodStressFactor: number;
@@ -43,17 +45,19 @@ const DEFAULTS: Settings = {
   combatAttackMult: 1,
   combatDefendMult: 1,
   collateralDamageMult: 1,
+  shipProdEmphasisPower: 1.8,
   traderMinActive: 0,
   traderMaxActive: 3,
   traderShipHirePerTurn: 250,
   traderHireChancePct: 20,
   traderDockingCost: 100,
+  localTreasuryAddsPer100Cr: 50,
   foodStockpileMaxPerPop: 20.0,
-  foodStockpileMinPerPop: 1.5,
+  foodStockpileMinPerPop: 2.0,
   foodStressFactor: 1.0,
-  combatDefenderAdvantage: 2.0,
+  combatDefenderAdvantage: 3.0,
   foodBasePrice: 6,
-  combatFoodDamageMult: 1.0,
+  combatFoodDamageMult: 4.0,
   traderLimitsAutomated: true,
 };
 
@@ -322,8 +326,8 @@ export function GodModePanel({ gameId }: { gameId: Id<"sim_games"> }) {
     if (k === "traderLimitsAutomated") {
       return local.traderLimitsAutomated !== DEFAULTS.traderLimitsAutomated;
     }
-    const def = DEFAULTS[k] as number;
-    return Math.abs((local[k] as number) - def) > (def >= 10 ? 0.51 : 0.005);
+    const def = DEFAULTS[k];
+    return Math.abs(local[k] - def) > (def >= 10 ? 0.51 : 0.005);
   });
 
   if (serverSettings === undefined) {

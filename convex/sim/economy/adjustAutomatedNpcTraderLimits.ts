@@ -120,6 +120,7 @@ export async function maybeAdjustAutomatedNpcTraderLimits(
     combatAttackMult: baseSettings.combatAttackMult,
     combatDefendMult: baseSettings.combatDefendMult,
     collateralDamageMult: baseSettings.collateralDamageMult,
+    shipProdEmphasisPower: baseSettings.shipProdEmphasisPower,
     traderMinActive: baseSettings.traderMinActive,
     traderMaxActive: nextMax,
     traderShipHirePerTurn: baseSettings.traderShipHirePerTurn,

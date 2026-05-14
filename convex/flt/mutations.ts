@@ -82,15 +82,83 @@ async function assertCanIssueFleetOrder(
   }
 }
 
+async function replaceManualGarrisonRoute(
+  ctx: MutationCtx,
+  params: {
+    gameId: Id<"sim_games">;
+    empireId: Id<"emp_states">;
+    originSystemId: Id<"gal_systems">;
+    destinationSystemId: Id<"gal_systems">;
+    dispatchPct: number;
+    enabled: boolean;
+  },
+): Promise<Id<"flt_garrison_routes">> {
+  const pct = Math.round(params.dispatchPct);
+  if (!Number.isInteger(pct) || pct < 0 || pct > 100) {
+    throw new Error("dispatchPct must be an integer from 0 through 100.");
+  }
+  if (params.originSystemId === params.destinationSystemId) {
+    throw new Error("Origin and destination must differ.");
+  }
+
+  const origin = await ctx.db.get("gal_systems", params.originSystemId);
+  if (
+    origin === null ||
+    origin.gameId !== params.gameId ||
+    origin.ownerEmpireId !== params.empireId
+  ) {
+    throw new Error("Standing routes must start from a system owned by the issuing empire.");
+  }
+
+  const destination = await ctx.db.get("gal_systems", params.destinationSystemId);
+  if (destination === null || destination.gameId !== params.gameId) {
+    throw new Error("Destination system not found in this game.");
+  }
+
+  const link = await findLinkBetweenSystems(
+    ctx,
+    params.gameId,
+    params.originSystemId,
+    params.destinationSystemId,
+  );
+  if (link === null) {
+    throw new Error("No direct hyperspace link to that system.");
+  }
+
+  const existing = await ctx.db
+    .query("flt_garrison_routes")
+    .withIndex("by_gameId_and_originSystemId", (q) =>
+      q.eq("gameId", params.gameId).eq("originSystemId", params.originSystemId),
+    )
+    .take(16);
+
+  for (const row of existing) {
+    if (row.empireId === params.empireId) {
+      await ctx.db.delete("flt_garrison_routes", row._id);
+    }
+  }
+
+  return await ctx.db.insert("flt_garrison_routes", {
+    gameId: params.gameId,
+    empireId: params.empireId,
+    originSystemId: params.originSystemId,
+    destinationSystemId: params.destinationSystemId,
+    dispatchPct: pct,
+    enabled: params.enabled,
+    managedByStrategy: false,
+  });
+}
+
 export const issueFleetOrder = mutation({
   args: {
     gameId: v.id("sim_games"),
     fleetId: v.id("flt_fleets"),
     /** Deprecated client hint; orders are stamped with the authoritative server-side current turn. */
     turnNumber: v.optional(v.number()),
-    orderType: v.union(v.literal("move"), v.literal("hold"), v.literal("retreat")),
+    orderType: v.union(v.literal("move"), v.literal("hold")),
     targetSystemId: v.union(v.id("gal_systems"), v.null()),
     shipCount: v.optional(v.number()),
+    standingRouteDispatchPct: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
@@ -119,6 +187,9 @@ export const issueFleetOrder = mutation({
 
     if (args.orderType !== "move" && args.shipCount !== undefined) {
       throw new Error("shipCount is only valid for move orders.");
+    }
+    if (args.orderType !== "move" && args.standingRouteDispatchPct !== undefined) {
+      throw new Error("Standing routes can only be created with move orders.");
     }
 
     if (args.orderType === "move") {
@@ -152,13 +223,6 @@ export const issueFleetOrder = mutation({
       if (link === null) {
         throw new Error("No direct hyperspace link to that system.");
       }
-    } else if (args.orderType === "retreat") {
-      if (args.targetSystemId !== null) {
-        throw new Error("Retreat orders cannot specify a target system.");
-      }
-      if (fleet.status !== "engaged" || fleet.activeBattleId === undefined) {
-        throw new Error("Fleet must be engaged in battle to retreat.");
-      }
     } else if (args.targetSystemId !== null) {
       throw new Error("Hold orders cannot specify a target system.");
     }
@@ -176,7 +240,7 @@ export const issueFleetOrder = mutation({
       }
     }
 
-    return await ctx.db.insert("flt_orders", {
+    const orderId = await ctx.db.insert("flt_orders", {
       gameId: args.gameId,
       fleetId: args.fleetId,
       issuedByUserId: userId,
@@ -186,6 +250,22 @@ export const issueFleetOrder = mutation({
       ...(args.shipCount !== undefined ? { shipCount: args.shipCount } : {}),
       issuedAt: Date.now(),
     });
+
+    if (args.standingRouteDispatchPct !== undefined) {
+      if (args.orderType !== "move" || args.targetSystemId === null) {
+        throw new Error("Standing routes require a move target.");
+      }
+      await replaceManualGarrisonRoute(ctx, {
+        gameId: args.gameId,
+        empireId: fleet.empireId,
+        originSystemId: fleet.originSystemId,
+        destinationSystemId: args.targetSystemId,
+        dispatchPct: args.standingRouteDispatchPct,
+        enabled: true,
+      });
+    }
+
+    return orderId;
   },
 });
 
@@ -239,21 +319,7 @@ export const setGarrisonRoute = mutation({
       return null;
     }
 
-    if (args.originSystemId === args.destinationSystemId) {
-      throw new Error("Origin and destination must differ.");
-    }
-
-    const link = await findLinkBetweenSystems(
-      ctx,
-      args.gameId,
-      args.originSystemId,
-      args.destinationSystemId,
-    );
-    if (link === null) {
-      throw new Error("No direct hyperspace link to that system.");
-    }
-
-    return await ctx.db.insert("flt_garrison_routes", {
+    return await replaceManualGarrisonRoute(ctx, {
       gameId: args.gameId,
       empireId,
       originSystemId: args.originSystemId,

@@ -1,14 +1,19 @@
-import { useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "../../../../convex/_generated/api";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { useGalaxyData } from "@/features/galaxy/hooks/useGalaxyData";
+import { formatMsAsClock } from "@/lib/time/turnClock";
 
 export function TurnPanel() {
   const { activeGame } = useGalaxyData();
   const startGame = useMutation(api.sim.mutations.startGame);
   const stepTurn = useMutation(api.sim.mutations.stepTurn);
+  const rebuildStandingOrders = useMutation(api.sim.mutations.rebuildStandingOrders);
+  const scheduleNextTurnResolutionDelay = useMutation(
+    api.sim.mutations.scheduleNextTurnResolutionDelay,
+  );
   const pauseGame = useMutation(api.sim.mutations.pauseGame);
   const resumeGame = useMutation(api.sim.mutations.resumeGame);
   const killGame = useMutation(api.admin.mutations.killGame);
@@ -20,7 +25,18 @@ export function TurnPanel() {
   const [killError, setKillError] = useState<string | null>(null);
   const [stepBusy, setStepBusy] = useState(false);
   const [stepError, setStepError] = useState<string | null>(null);
+  const [rebuildModalOpen, setRebuildModalOpen] = useState(false);
+  const [rebuildPendingMode, setRebuildPendingMode] = useState<
+    "rebuildCurrent" | "buildBlank" | "rebuildAll" | null
+  >(null);
+  const [rebuildModalError, setRebuildModalError] = useState<string | null>(null);
+  /** Second step inside the modal for full wipe (replaces blocking `window.confirm`). */
+  const [rebuildAllAwaitingInModalConfirm, setRebuildAllAwaitingInModalConfirm] = useState(false);
   const [pauseError, setPauseError] = useState<string | null>(null);
+  const [scheduleBusy, setScheduleBusy] = useState(false);
+  const [scheduleError, setScheduleError] = useState<string | null>(null);
+  const [barNow, setBarNow] = useState(() => Date.now());
+  const planBarRef = useRef<HTMLDivElement | null>(null);
 
   const gameId = activeGame?._id;
   const myRoles = useQuery(
@@ -32,6 +48,7 @@ export function TurnPanel() {
     gameId !== undefined ? { gameId } : "skip",
   );
   const turnResolving = timeline?.turnState === "resolving";
+  const canRebuildModalActions = !turnResolving && rebuildPendingMode === null;
   const isGameAdmin = myRoles?.some((role) => role.role === "admin") ?? false;
   const canPauseOrResumeClock =
     myRoles?.some((role) => role.role === "admin" || role.role === "empire") ??
@@ -41,6 +58,16 @@ export function TurnPanel() {
   const canStep =
     activeGame !== null &&
     activeGame.status === "running" &&
+    gameId !== undefined &&
+    !turnResolving;
+  const canRebuildOrders =
+    activeGame !== null &&
+    (activeGame.status === "running" || activeGame.status === "paused") &&
+    gameId !== undefined &&
+    !turnResolving;
+  const canScheduleNextTurnDelay =
+    activeGame !== null &&
+    (activeGame.status === "running" || activeGame.status === "paused") &&
     gameId !== undefined &&
     !turnResolving;
   const canPauseOrResume =
@@ -120,6 +147,113 @@ export function TurnPanel() {
     }
   }
 
+  function openRebuildOrdersModal() {
+    setRebuildModalError(null);
+    setRebuildAllAwaitingInModalConfirm(false);
+    setRebuildModalOpen(true);
+  }
+
+  async function runRebuildOrdersMode(
+    mode: "rebuildCurrent" | "buildBlank" | "rebuildAll",
+  ) {
+    if (!gameId) return;
+    if (turnResolving) {
+      setRebuildModalError(
+        "This match is resolving a turn. Try again when the current turn is open for orders.",
+      );
+      return;
+    }
+    setRebuildPendingMode(mode);
+    setRebuildModalError(null);
+    try {
+      await rebuildStandingOrders({ gameId, mode });
+      setRebuildModalOpen(false);
+      setRebuildAllAwaitingInModalConfirm(false);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setRebuildModalError(message.replace(/^[\s\S]*?Error:\s*/g, "").trim());
+    } finally {
+      setRebuildPendingMode(null);
+    }
+  }
+
+  const turnOpen = timeline?.turnState === "open";
+  const planDurationMs = Math.max(1, timeline?.turnDurationMs ?? 15_000);
+  const planStartedAt = timeline?.turnStartedAt ?? null;
+  const nowMs = barNow;
+  const planElapsedFrac =
+    turnOpen && planStartedAt !== null
+      ? Math.max(0, Math.min(1, (nowMs - planStartedAt) / planDurationMs))
+      : 0;
+  const pauseUntilMs = timeline?.turnPausedUntilMs;
+  const pauseRemainingMs =
+    pauseUntilMs !== undefined && pauseUntilMs > nowMs
+      ? Math.ceil(pauseUntilMs - nowMs)
+      : 0;
+  const pendingDelayRatio = timeline?.nextTurnAutoResolveDelayRatio;
+
+  useEffect(() => {
+    setBarNow(Date.now());
+  }, [turnOpen, planStartedAt, timeline?.currentTurn, gameId]);
+
+  useEffect(() => {
+    if (!turnOpen || planStartedAt === null) return;
+    const id = window.setInterval(() => {
+      setBarNow(Date.now());
+    }, 200);
+    return () => window.clearInterval(id);
+  }, [turnOpen, planStartedAt]);
+
+  useEffect(() => {
+    if (!rebuildModalOpen || !turnResolving) return;
+    setRebuildAllAwaitingInModalConfirm(false);
+    setRebuildModalError(
+      "This match started resolving a turn. Wait until that finishes, then try again if you still need to change standing orders.",
+    );
+  }, [rebuildModalOpen, turnResolving]);
+
+  const onPlanningBarPointer = useCallback(
+    async (clientX: number) => {
+      if (!gameId || !canScheduleNextTurnDelay || scheduleBusy) return;
+      const el = planBarRef.current;
+      if (el === null) return;
+      const rect = el.getBoundingClientRect();
+      if (rect.width <= 0) return;
+      const x = clientX - rect.left;
+      const ratio = Math.max(0, Math.min(1, x / rect.width));
+      setScheduleBusy(true);
+      setScheduleError(null);
+      try {
+        await scheduleNextTurnResolutionDelay({ gameId, delayRatio: ratio });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        setScheduleError(message.replace(/^[\s\S]*?Error:\s*/g, "").trim());
+      } finally {
+        setScheduleBusy(false);
+      }
+    },
+    [
+      gameId,
+      canScheduleNextTurnDelay,
+      scheduleBusy,
+      scheduleNextTurnResolutionDelay,
+    ],
+  );
+
+  async function clearScheduleDelay() {
+    if (!gameId || !canScheduleNextTurnDelay || scheduleBusy) return;
+    setScheduleBusy(true);
+    setScheduleError(null);
+    try {
+      await scheduleNextTurnResolutionDelay({ gameId, delayRatio: 0 });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setScheduleError(message.replace(/^[\s\S]*?Error:\s*/g, "").trim());
+    } finally {
+      setScheduleBusy(false);
+    }
+  }
+
   return (
     <Card>
       <h2 className="text-sm font-semibold uppercase tracking-wide text-st-muted">
@@ -147,6 +281,76 @@ export function TurnPanel() {
           </>
         ) : null}
       </dl>
+      {gameId !== undefined &&
+      activeGame !== null &&
+      (activeGame.status === "running" || activeGame.status === "paused") ? (
+        <div className="mt-4">
+          <div className="text-xs font-semibold uppercase tracking-wide text-st-muted">
+            Planning window
+          </div>
+          <p className="mt-1 text-xs text-st-muted">
+            Click where this turn should end on the next turn&apos;s timer: after the current turn
+            resolves, the match waits that far into the following turn before resolution may start
+            (autopilot cron and manual Step both wait).
+          </p>
+          <div
+            ref={planBarRef}
+            role="presentation"
+            className={`relative mt-2 h-3 w-full cursor-pointer overflow-hidden rounded-full border border-st-border bg-st-bg/80 ${
+              !canScheduleNextTurnDelay || scheduleBusy ? "pointer-events-none opacity-50" : ""
+            }`}
+            onClick={(e) => {
+              void onPlanningBarPointer(e.clientX);
+            }}
+            title="Click to schedule when the next turn may resolve"
+          >
+            <div
+              className="absolute inset-y-0 left-0 bg-sky-600/70 dark:bg-sky-500/60"
+              style={{ width: `${Math.round(planElapsedFrac * 100)}%` }}
+            />
+            {pendingDelayRatio !== undefined &&
+            pendingDelayRatio !== null &&
+            Number.isFinite(pendingDelayRatio) ? (
+              <div
+                className="pointer-events-none absolute inset-y-0 w-px bg-amber-400 shadow-[0_0_6px_rgba(251,191,36,0.9)]"
+                style={{ left: `${Math.round(Math.max(0, Math.min(1, pendingDelayRatio)) * 100)}%` }}
+              />
+            ) : null}
+          </div>
+          <div className="mt-1 flex flex-wrap items-center justify-between gap-2 text-[11px] text-st-muted">
+            <span>
+              {turnOpen && planStartedAt !== null ? (
+                <>
+                  Elapsed {formatMsAsClock(planElapsedFrac * planDurationMs)} /{" "}
+                  {formatMsAsClock(planDurationMs)}
+                </>
+              ) : turnResolving ? (
+                "Resolving — bar updates next open turn"
+              ) : (
+                "Open a turn to see the timer"
+              )}
+            </span>
+            {pauseRemainingMs > 0 ? (
+              <span className="text-amber-600 dark:text-amber-400">
+                Resolution hold {formatMsAsClock(pauseRemainingMs)} left
+              </span>
+            ) : null}
+          </div>
+          <button
+            type="button"
+            className="mt-1 text-[11px] text-st-muted underline hover:text-st-fg disabled:opacity-40"
+            disabled={!canScheduleNextTurnDelay || scheduleBusy || pendingDelayRatio === undefined}
+            onClick={() => void clearScheduleDelay()}
+          >
+            Clear scheduled delay
+          </button>
+          {scheduleError !== null ? (
+            <p className="mt-1 text-xs text-red-600 dark:text-red-400" role="alert">
+              {scheduleError}
+            </p>
+          ) : null}
+        </div>
+      ) : null}
       <div className="mt-3 flex flex-col gap-2">
         <Button
           disabled={!canStart || startBusy}
@@ -200,6 +404,15 @@ export function TurnPanel() {
             {stepError}
           </p>
         ) : null}
+        <Button
+          disabled={!canRebuildOrders || rebuildPendingMode !== null}
+          variant="secondary"
+          className="w-full"
+          type="button"
+          onClick={() => openRebuildOrdersModal()}
+        >
+          Rebuild orders
+        </Button>
         {gameId !== undefined && isGameAdmin ? (
           <Button
             disabled={killBusy}
@@ -216,11 +429,140 @@ export function TurnPanel() {
           </p>
         ) : null}
       </div>
+      {rebuildModalOpen ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+          role="presentation"
+          onClick={() => {
+            if (!rebuildPendingMode) {
+              setRebuildAllAwaitingInModalConfirm(false);
+              setRebuildModalOpen(false);
+            }
+          }}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="rebuild-orders-title"
+            className="pointer-events-auto max-h-[min(90vh,520px)] w-full max-w-md overflow-y-auto rounded-xl border border-st-border bg-st-bg p-4 shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3
+              id="rebuild-orders-title"
+              className="text-base font-semibold text-st-fg"
+            >
+              Rebuild standing orders
+            </h3>
+            <p className="mt-2 text-sm text-st-muted">
+              Choose how to refresh garrison standing orders for this game. Empire automation must
+              have a strategy loaded to repopulate automation routes.
+            </p>
+            <div className="mt-4 flex flex-col gap-2">
+              <Button
+                type="button"
+                className="w-full"
+                disabled={!canRebuildModalActions}
+                onClick={() => void runRebuildOrdersMode("rebuildCurrent")}
+              >
+                {rebuildPendingMode === "rebuildCurrent" ? "Working…" : "Rebuild current orders"}
+              </Button>
+              <p className="text-xs text-st-muted">
+                Removes automation-managed routes only, then replans them from each empire&apos;s
+                strategy (manual standing orders stay).
+              </p>
+              <Button
+                type="button"
+                variant="secondary"
+                className="w-full"
+                disabled={!canRebuildModalActions}
+                onClick={() => void runRebuildOrdersMode("buildBlank")}
+              >
+                {rebuildPendingMode === "buildBlank" ? "Working…" : "Build all blank"}
+              </Button>
+              <p className="text-xs text-st-muted">
+                At every owned star that has no standing order yet, adds a default hop to a linked
+                owned neighbor (25% dispatch, manual route) where such a link exists.
+              </p>
+              {!rebuildAllAwaitingInModalConfirm ? (
+                <>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    className="w-full border border-amber-500/40 text-amber-800 hover:bg-amber-500/10 dark:text-amber-200"
+                    disabled={!canRebuildModalActions}
+                    onClick={() => {
+                      setRebuildModalError(null);
+                      setRebuildAllAwaitingInModalConfirm(true);
+                    }}
+                  >
+                    Rebuild all…
+                  </Button>
+                  <p className="text-xs text-st-muted">
+                    Deletes <strong className="text-st-fg">all</strong> standing orders (player and
+                    automation), then runs automation planning so only strategy-backed routes return.
+                  </p>
+                </>
+              ) : (
+                <div className="rounded-lg border border-amber-500/50 bg-amber-500/10 p-3 dark:bg-amber-950/40">
+                  <p className="text-sm font-medium text-amber-950 dark:text-amber-100">
+                    Remove every standing order in this game (player and automation), then recreate
+                    only what automation would use now?
+                  </p>
+                  <p className="mt-2 text-xs text-st-muted">This cannot be undone.</p>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      className="flex-1"
+                      disabled={!canRebuildModalActions}
+                      onClick={() => {
+                        setRebuildAllAwaitingInModalConfirm(false);
+                        setRebuildModalError(null);
+                      }}
+                    >
+                      Go back
+                    </Button>
+                    <Button
+                      type="button"
+                      className="min-w-[10rem] flex-1 border border-amber-600/60 bg-amber-600 text-white hover:bg-amber-700 dark:border-amber-500/50"
+                      disabled={!canRebuildModalActions}
+                      onClick={() => void runRebuildOrdersMode("rebuildAll")}
+                    >
+                      {rebuildPendingMode === "rebuildAll" ? "Working…" : "Yes, delete and replan"}
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </div>
+            {rebuildModalError !== null ? (
+              <p className="mt-3 text-xs text-red-600 dark:text-red-400" role="alert">
+                {rebuildModalError}
+              </p>
+            ) : null}
+            <div className="mt-4 flex justify-end gap-2">
+              <Button
+                type="button"
+                variant="secondary"
+                disabled={rebuildPendingMode !== null}
+                onClick={() => {
+                  setRebuildAllAwaitingInModalConfirm(false);
+                  setRebuildModalOpen(false);
+                }}
+              >
+                Cancel
+              </Button>
+            </div>
+          </div>
+        </div>
+      ) : null}
       <p className="mt-2 text-xs text-st-muted">
         Create a game, seed the map, start, issue fleet moves for the current turn, then step.
         Pause freezes the match clock for everyone; admins and empire players can pause or resume.
         Admins can suspend autopilot on the Games page so only that game stops auto-resolving. Game
-        admins can kill a game to remove it entirely.
+        admins can kill a game to remove it entirely. Use <strong className="text-st-fg">Rebuild orders</strong>{" "}
+        to refresh standing routes (see the dialog for current-only, fill-blank, or full reset plus
+        automation replan). The planning bar schedules when the <em>following</em> turn may begin
+        resolving; click near the left for soon, near the right for later in that turn&apos;s window.
       </p>
     </Card>
   );

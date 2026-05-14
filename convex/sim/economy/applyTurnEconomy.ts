@@ -17,6 +17,7 @@ import {
   POP_GROWTH_RATE,
   SHORTAGE_PROD_MULT,
   SHORTAGE_THRESHOLD_RATIO,
+  STAR_SYSTEM_STARTING_TREASURY,
   STARVATION_FACTOR,
   TAX_PER_POP,
   WEAPONS_CONSUMPTION_RATE,
@@ -31,6 +32,8 @@ import {
 import { type GameSettings, loadGameSettings } from "./gameSettings";
 import { computeSystemFoodPrice } from "./foodPricing";
 import { insertSimEvent } from "../eventLog";
+
+const STARVING_SHIP_EFFORT_CREDITS_PER_SHIP_POINT = 100;
 
 function clamp(n: number, lo: number, hi: number): number {
   return Math.min(hi, Math.max(lo, n));
@@ -51,6 +54,13 @@ function normalizedEmphasis(system: Doc<"gal_systems">): {
   const sum = f + s + r;
   if (sum <= 0) return { food: 1 / 3, ships: 1 / 3, research: 1 / 3 };
   return { food: f / sum, ships: s / sum, research: r / sum };
+}
+
+function poweredShipEmphasis(shipShare: number, power: number): number {
+  const referenceShare = 1 / 3;
+  const safePower = clamp(power, 1, 3);
+  if (shipShare <= 0) return 0;
+  return Math.pow(shipShare, safePower) / Math.pow(referenceShare, safePower - 1);
 }
 
 function damagePenaltyMultiplier(
@@ -98,6 +108,9 @@ async function abandonUnderpopulatedColony(
     population: 0,
     ownerEmpireId: null,
     underAttack: false,
+    foodShortageTurns: 0,
+    lastFoodShortageTurn: undefined,
+    lastFoodShortageTurns: undefined,
     taxBlockedUntilTurn: undefined,
     lastContestedTurn: undefined,
   });
@@ -159,10 +172,9 @@ async function collapseEmpire(
     if (sys.ownerEmpireId !== empire._id) continue;
     if (home !== null && sys._id === home) continue;
 
-    const bp = sys.baseProductivity ?? defaultBaseProductivity(sys.resourceRichness);
     await ctx.db.patch("gal_systems", sys._id, {
       ownerEmpireId: null,
-      localTreasury: Math.max(50, bp * 10),
+      localTreasury: STAR_SYSTEM_STARTING_TREASURY,
       underAttack: false,
       taxBlockedUntilTurn: undefined,
     });
@@ -363,14 +375,35 @@ export async function applyTurnEconomy(
     const colonyFoodBonus = system.colonyFoodBonusPerTurn ?? 0;
     const foodProducedTotal = foodProduced + colonyFoodBonus;
     // Ships/research are capital-intensive (infrastructure-limited, not headcount-limited).
-    const shipsProduced = Math.max(
+    const shipProductionWeight = poweredShipEmphasis(
+      w.ships,
+      settings.shipProdEmphasisPower,
+    );
+    const potentialShipsProduced = Math.max(
       0,
-      Math.floor(effectiveProductivity * w.ships * weaponsBonusMult * settings.shipProdMult),
+      Math.floor(
+        effectiveProductivity *
+          shipProductionWeight *
+          weaponsBonusMult *
+          settings.shipProdMult,
+      ),
     );
     const researchProduced = Math.floor(effectiveProductivity * w.research);
 
     const foodAvailable = stockFood + foodProducedTotal;
     const foodNet = foodAvailable - foodDemand;
+    const foodShortage = foodNet < 0;
+    const foodShortageTurns = foodShortage ? (system.foodShortageTurns ?? 0) + 1 : 0;
+    const lastFoodShortageTurn = foodShortage
+      ? params.turnNumber
+      : system.lastFoodShortageTurn;
+    const lastFoodShortageTurns = foodShortage
+      ? foodShortageTurns
+      : system.lastFoodShortageTurns;
+    const shipEffortTreasuryIncome = foodShortage
+      ? potentialShipsProduced * STARVING_SHIP_EFFORT_CREDITS_PER_SHIP_POINT
+      : 0;
+    const shipsProduced = foodShortage ? 0 : potentialShipsProduced;
 
     let newPop = populationPeople;
     let newFoodStock = 0;
@@ -489,24 +522,13 @@ export async function applyTurnEconomy(
       settings,
     });
 
-    await ctx.db.patch("gal_systems", system._id, {
-      stockFood: newFoodStock,
-      stockWeapons: newWeapons,
-      stockResearch: newResearchStock,
-      population: newPop,
-      foodPrice,
-      ...colonyBuildPatch,
-    });
-
-    empireOwnedPop.set(ownerId, (empireOwnedPop.get(ownerId) ?? 0) + newPop);
-    empireOwnedFood.set(ownerId, (empireOwnedFood.get(ownerId) ?? 0) + newFoodStock);
-
     const taxOk =
       system.lastContestedTurn !== params.turnNumber &&
       newPop >= POPULATION_MIN_INHABITED_PEOPLE &&
       (system.taxBlockedUntilTurn === undefined ||
         params.turnNumber > system.taxBlockedUntilTurn);
 
+    let localTaxIncome = 0;
     if (taxOk) {
       const taxBase = populationToSimUnits(newPop) * TAX_PER_POP;
       const hwTax = isOwnedHomeworld ? HOMEWORLD_TAX_MULT : 1;
@@ -522,8 +544,38 @@ export async function applyTurnEconomy(
         damageTax *
         settings.taxMult *
         (r / DEFAULT_EMPIRE_TAX_RATE);
-      taxIncomeByEmpire.set(ownerId, (taxIncomeByEmpire.get(ownerId) ?? 0) + income);
+      // Half of collected tax stays in the local system treasury; the rest goes imperial.
+      localTaxIncome = income * 0.5;
+      taxIncomeByEmpire.set(
+        ownerId,
+        (taxIncomeByEmpire.get(ownerId) ?? 0) + income - localTaxIncome,
+      );
     }
+
+    const localTreasuryIncome = shipEffortTreasuryIncome + localTaxIncome;
+
+    await ctx.db.patch("gal_systems", system._id, {
+      stockFood: newFoodStock,
+      stockWeapons: newWeapons,
+      stockResearch: newResearchStock,
+      population: newPop,
+      foodPrice,
+      foodShortageTurns,
+      lastFoodShortageTurn,
+      lastFoodShortageTurns,
+      ...(localTreasuryIncome > 0
+        ? {
+            localTreasury: Math.max(
+              0,
+              (system.localTreasury ?? 0) + localTreasuryIncome,
+            ),
+          }
+        : {}),
+      ...colonyBuildPatch,
+    });
+
+    empireOwnedPop.set(ownerId, (empireOwnedPop.get(ownerId) ?? 0) + newPop);
+    empireOwnedFood.set(ownerId, (empireOwnedFood.get(ownerId) ?? 0) + newFoodStock);
 
     await ctx.db.insert("eco_system_outputs", {
       gameId: params.gameId,
@@ -539,8 +591,7 @@ export async function applyTurnEconomy(
       turnNumber: params.turnNumber,
       commodity: "ships",
       produced: shipsProduced,
-      consumed:
-        garrisonShips > 0 ? Math.ceil(garrisonShips * WEAPONS_CONSUMPTION_RATE) : 0,
+      consumed: garrisonShips > 0 ? Math.ceil(garrisonShips * WEAPONS_CONSUMPTION_RATE) : 0,
     });
     await ctx.db.insert("eco_system_outputs", {
       gameId: params.gameId,
