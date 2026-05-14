@@ -1,4 +1,8 @@
 import { buildProximityLanes } from "./proximityLanes";
+import {
+  MIN_STAR_PAIRWISE_DISTANCE_WORLD,
+  enforceMinPairwiseSeparation,
+} from "./enforceMinStarSeparation";
 
 export const V1_MEDIUM_LINK_DISTANCE_SCALE = 72;
 
@@ -172,6 +176,16 @@ function buildSystems(): V1MediumSeedSystem[] {
       });
     }
   }
+
+  enforceMinPairwiseSeparation(systems, {
+    minDistance: MIN_STAR_PAIRWISE_DISTANCE_WORLD,
+    minX: 36,
+    maxX: 2040,
+    minY: 36,
+    maxY: 1188,
+    relaxPerCycle: 26,
+    maxCycles: 65,
+  });
 
   return systems;
 }
