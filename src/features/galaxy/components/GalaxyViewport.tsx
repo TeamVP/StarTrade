@@ -84,6 +84,17 @@ function finiteCombatCount(value: unknown, fallback: number): number {
     : Math.max(0, Math.floor(fallback));
 }
 
+function isEditableKeyboardTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  const tagName = target.tagName.toLowerCase();
+  return (
+    tagName === "input" ||
+    tagName === "textarea" ||
+    tagName === "select" ||
+    target.isContentEditable
+  );
+}
+
 type CombatEventRow = {
   _id: string;
   eventType: string;
@@ -547,8 +558,7 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
   const fleetSelectionAllowed = useCallback(
     (fleetEmpireId: string) => {
       if (isAdmin) return true;
-      if (myEmpireId === null) return true;
-      return fleetEmpireId === myEmpireId;
+      return myEmpireId !== null && fleetEmpireId === myEmpireId;
     },
     [isAdmin, myEmpireId],
   );
@@ -574,6 +584,9 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
     (playerEmpireIdProp === null && isAdmin && activeGameId !== null
       ? activeAdminPriorityEmpireId
       : null);
+  const canUseColonyShips =
+    simAllowsPlayerOrders && (isAdmin || myEmpireId !== null);
+  const canMarkPriorityStars = simAllowsPlayerOrders && priorityEmpireId !== null;
 
   const garrisonRouteEmpireFilter: Id<"emp_states"> | null =
     playerEmpireIdProp ?? (isAdmin ? null : myEmpireIdFromRole);
@@ -605,6 +618,75 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
     return merged;
   }, [serverPriorityStarIds, priorityStarOverrideState, activeGameId, priorityEmpireId]);
 
+  const togglePriorityStar = useCallback(
+    async (systemId: Id<"gal_systems">, enabled: boolean) => {
+      if (!activeGame || !canMarkPriorityStars || priorityEmpireId === null) return;
+      setPriorityStarOverrideState((current) => {
+        const overrides =
+          current.gameId === activeGame._id && current.empireId === priorityEmpireId
+            ? current.overrides
+            : {};
+        return {
+          gameId: activeGame._id,
+          empireId: priorityEmpireId,
+          overrides: { ...overrides, [systemId]: enabled },
+        };
+      });
+      setPriorityMutationError(null);
+      try {
+        await setPriorityStar({
+          gameId: activeGame._id,
+          systemId,
+          empireId: priorityEmpireId,
+          enabled,
+        });
+      } catch (e) {
+        setPriorityStarOverrideState((current) => {
+          const overrides =
+            current.gameId === activeGame._id && current.empireId === priorityEmpireId
+              ? current.overrides
+              : {};
+          return {
+            gameId: activeGame._id,
+            empireId: priorityEmpireId,
+            overrides: { ...overrides, [systemId]: !enabled },
+          };
+        });
+        setPriorityMutationError(
+          e instanceof Error ? e.message : "Could not update Priority star.",
+        );
+      }
+    },
+    [activeGame, canMarkPriorityStars, priorityEmpireId, setPriorityStar],
+  );
+
+  useEffect(() => {
+    if (selectedSystem === null || !canMarkPriorityStars) return;
+    const selectedSystemIdForShortcut = selectedSystem._id;
+
+    function onKeyDown(event: KeyboardEvent) {
+      if (
+        event.key.toLowerCase() !== "p" ||
+        event.repeat ||
+        event.altKey ||
+        event.ctrlKey ||
+        event.metaKey ||
+        isEditableKeyboardTarget(event.target)
+      ) {
+        return;
+      }
+
+      event.preventDefault();
+      void togglePriorityStar(
+        selectedSystemIdForShortcut,
+        !priorityStarIds.has(selectedSystemIdForShortcut),
+      );
+    }
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [selectedSystem, canMarkPriorityStars, priorityStarIds, togglePriorityStar]);
+
   const systemOwnerById = useMemo(
     () => Object.fromEntries(systems.map((s) => [s._id, s.ownerEmpireId])),
     [systems],
@@ -629,8 +711,8 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
       try {
         await dispatchColonyShip({
           gameId: activeGame._id,
-          colonyShipId: payload.colonyShipId,
-          routeSystemIds: payload.routeSystemIds,
+          colonyShipId: payload.colonyShipId as Id<"col_colony_ships">,
+          routeSystemIds: payload.routeSystemIds as Id<"gal_systems">[],
         });
       } catch (e) {
         setColonyMutationError(
@@ -641,9 +723,6 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
     [activeGame, dispatchColonyShip],
   );
 
-  const canUseColonyShips =
-    simAllowsPlayerOrders && (isAdmin || myEmpireId !== null);
-  const canMarkPriorityStars = simAllowsPlayerOrders && priorityEmpireId !== null;
   const priorityStarDisabledReason = useMemo(() => {
     if (!simAllowsPlayerOrders) {
       return "Priority stars can be changed while the game is running or paused.";
@@ -717,7 +796,7 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
         await dispatchColonyShip({
           gameId: activeGame._id,
           colonyShipId: idleColonyShipIdAtSelection,
-          routeSystemIds: [toSystemId],
+          routeSystemIds: [toSystemId as Id<"gal_systems">],
         });
       } catch (e) {
         setColonyMutationError(
@@ -807,14 +886,6 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
     },
     [fleets, selectedFleetId, fleetSelectionAllowed],
   );
-
-  useEffect(() => {
-    if (selectedFleetId === null) return;
-    const fleet = fleets.find((f) => f._id === selectedFleetId);
-    if (fleet === undefined || !fleetSelectionAllowed(fleet.empireId)) {
-      setSelectedFleetId(null);
-    }
-  }, [fleets, selectedFleetId, fleetSelectionAllowed]);
 
   const handleStageBackgroundTap = useCallback(() => {
     dismissStarPanel();
@@ -1123,6 +1194,7 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
         (f) =>
           f.status === "enRoute" &&
           f.destinationSystemId !== null &&
+          f.etaTurn !== null &&
           f.dispatchedTurn !== undefined &&
           f.travelTurnsTotal !== undefined,
       )
@@ -1134,6 +1206,7 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
         colorHex: empireColors[f.empireId] ?? "#94a3b8",
         dispatchedTurn: f.dispatchedTurn as number,
         travelTurnsTotal: f.travelTurnsTotal as number,
+        etaTurn: f.etaTurn as number,
       }));
   }, [simAllowsPlayerOrders, fleets, empireColors]);
 
@@ -1144,6 +1217,7 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
         (s) =>
           s.status === "enRoute" &&
           s.destinationSystemId !== null &&
+          s.etaTurn !== null &&
           s.dispatchedTurn !== undefined &&
           s.travelTurnsTotal !== undefined,
       )
@@ -1155,6 +1229,7 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
         colorHex: empireColors[s.empireId] ?? "#5eead4",
         dispatchedTurn: s.dispatchedTurn as number,
         travelTurnsTotal: s.travelTurnsTotal as number,
+        etaTurn: s.etaTurn as number,
         variant: "colony" as const,
       }));
   }, [simAllowsPlayerOrders, colonyShips, empireColors]);
@@ -1392,10 +1467,13 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
       .map((s) => ({ id: s._id }));
   }, [systems]);
 
-  const selectedFleet = useMemo(
-    () => fleets.find((f) => f._id === selectedFleetId),
-    [fleets, selectedFleetId],
-  );
+  const selectedFleet = useMemo(() => {
+    if (selectedFleetId === null) return undefined;
+    const fleet = fleets.find((f) => f._id === selectedFleetId);
+    return fleet !== undefined && fleetSelectionAllowed(fleet.empireId)
+      ? fleet
+      : undefined;
+  }, [fleets, selectedFleetId, fleetSelectionAllowed]);
 
   const selectedTrader = useMemo(() => {
     if (selectedTraderId === null) return undefined;
@@ -1435,7 +1513,8 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
     }) => {
       if (!activeGame || !simAllowsPlayerOrders) return;
       const fleet = fleets.find((f) => f._id === payload.fleetId);
-      const strength = fleet?.strength ?? payload.shipCount;
+      if (fleet === undefined || !fleetSelectionAllowed(fleet.empireId)) return;
+      const strength = fleet.strength;
       const originSystem = systems.find((s) => s._id === payload.originSystemId);
       const canEstablishRecurring =
         payload.establishRecurring &&
@@ -1456,7 +1535,7 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
         ...(standingRouteDispatchPct !== undefined ? { standingRouteDispatchPct } : {}),
       });
     },
-    [activeGame, simAllowsPlayerOrders, issueFleetOrder, fleets, systems],
+    [activeGame, simAllowsPlayerOrders, issueFleetOrder, fleets, systems, fleetSelectionAllowed],
   );
 
   const editingRoute = useMemo(
@@ -1608,6 +1687,7 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
     if (selectedSystem === null) return null;
     return (
         <StarSystemPanel
+          key={`${selectedSystem._id}:${showColonyOperationalIntel ? "food" : "routes"}`}
           system={selectedSystem}
           empireNames={empireNames}
           selectedNeighbors={selectedNeighbors}
@@ -1662,45 +1742,7 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
               );
             }
           }}
-          onPriorityStarToggle={async (enabled) => {
-            if (!activeGame || !canMarkPriorityStars || priorityEmpireId === null) return;
-            const systemId = selectedSystem._id;
-            setPriorityStarOverrideState((current) => {
-              const overrides =
-                current.gameId === activeGame._id && current.empireId === priorityEmpireId
-                  ? current.overrides
-                  : {};
-              return {
-                gameId: activeGame._id,
-                empireId: priorityEmpireId,
-                overrides: { ...overrides, [systemId]: enabled },
-              };
-            });
-            setPriorityMutationError(null);
-            try {
-              await setPriorityStar({
-                gameId: activeGame._id,
-                systemId,
-                empireId: priorityEmpireId,
-                enabled,
-              });
-            } catch (e) {
-              setPriorityStarOverrideState((current) => {
-                const overrides =
-                  current.gameId === activeGame._id && current.empireId === priorityEmpireId
-                    ? current.overrides
-                    : {};
-                return {
-                  gameId: activeGame._id,
-                  empireId: priorityEmpireId,
-                  overrides: { ...overrides, [systemId]: !enabled },
-                };
-              });
-              setPriorityMutationError(
-                e instanceof Error ? e.message : "Could not update Priority star.",
-              );
-            }
-          }}
+          onPriorityStarToggle={(enabled) => togglePriorityStar(selectedSystem._id, enabled)}
           onNeighborNavigate={handleStarTap}
           onClose={dismissStarPanel}
           foodStockpileMinPerPop={gameSettingsQuery?.foodStockpileMinPerPop ?? 2.0}
@@ -1717,7 +1759,7 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
           colonizeShipId={idleColonyShipIdAtSelection}
           idleColonyShipIdForNeighborDispatch={idleColonyShipIdAtSelection}
           colonyMutationError={colonyMutationError}
-          gameIdForColony={activeGame._id}
+          gameIdForColony={activeGame?._id ?? null}
           onStartColonyBuild={handleStarPanelStartColonyBuild}
           onCancelColonyBuild={handleStarPanelCancelColonyBuild}
           onDispatchColonyFromStarPanel={handleStarPanelDispatchColony}
@@ -1805,7 +1847,7 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
       traderShips={traderShips}
       combatMarkers={visibleCombatMarkers}
       turnTimeline={turnTimeline}
-      selectedFleetId={selectedFleetId}
+      selectedFleetId={selectedFleet?._id ?? null}
       onSelectedFleetChange={handleSelectedFleetChange}
       selectedTraderId={selectedTraderId}
       onSelectedTraderChange={handleTraderSelect}
@@ -1991,7 +2033,7 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
               await dispatchColonyShip({
                 gameId: activeGame._id,
                 colonyShipId: selectedColonyShip._id,
-                routeSystemIds: [toSystemId],
+                routeSystemIds: [toSystemId as Id<"gal_systems">],
               });
             } catch (e) {
               setColonyMutationError(
@@ -2456,11 +2498,7 @@ function StarSystemPanel({
   const [colonyBusy, setColonyBusy] = useState(false);
   const [planetPanelTab, setPlanetPanelTab] = useState<
     "food" | "fleet" | "battle" | "routes"
-  >("food");
-
-  useEffect(() => {
-    setPlanetPanelTab(showColonyOperationalIntel ? "food" : "routes");
-  }, [system._id, showColonyOperationalIntel]);
+  >(showColonyOperationalIntel ? "food" : "routes");
   const runColonyAction = useCallback(async (fn: () => Promise<void>) => {
     setColonyBusy(true);
     try {
@@ -3208,7 +3246,7 @@ function StarSystemPanel({
                             className="h-8 w-full justify-start text-xs"
                             disabled={colonyBusy}
                             onClick={() =>
-                              void runColonyAction(() => onDispatchColonyFromStarPanel!(n.id))
+                              void runColonyAction(() => onDispatchColonyFromStarPanel(n.id))
                             }
                           >
                             Dispatch to {n.name}
@@ -3279,7 +3317,7 @@ function StarSystemPanel({
                           variant="secondary"
                           className="h-8 w-full justify-start text-xs"
                           disabled={colonyBusy}
-                          onClick={() => void runColonyAction(() => onDispatchColonyFromStarPanel!(n.id))}
+                          onClick={() => void runColonyAction(() => onDispatchColonyFromStarPanel(n.id))}
                         >
                           Dispatch to {n.name}
                         </Button>
@@ -3303,7 +3341,7 @@ function StarSystemPanel({
                 type="button"
                 className="mt-2 h-8 w-full text-xs"
                 disabled={colonyBusy}
-                onClick={() => void runColonyAction(onColonizeFromStarPanel!)}
+                onClick={() => void runColonyAction(onColonizeFromStarPanel)}
               >
                 Colonize this system
               </Button>

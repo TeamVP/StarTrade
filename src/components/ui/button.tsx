@@ -1,7 +1,7 @@
 import type { ButtonHTMLAttributes } from "react";
 import { cn } from "@/lib/utils";
 
-type ButtonVariant = "primary" | "secondary" | "ghost";
+type ButtonVariant = "primary" | "secondary" | "outline" | "ghost";
 
 type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
   variant?: ButtonVariant;
@@ -10,6 +10,7 @@ type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
 const variantClasses: Record<ButtonVariant, string> = {
   primary: "bg-st-accent text-slate-950 hover:opacity-90",
   secondary: "bg-st-panel text-st-fg border border-st-border hover:border-st-accent",
+  outline: "border border-st-border text-st-fg hover:border-st-accent hover:bg-st-panel",
   ghost: "text-st-muted hover:text-st-fg",
 };
 

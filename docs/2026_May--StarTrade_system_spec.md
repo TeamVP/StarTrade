@@ -12,7 +12,7 @@ It is intended to sit below the PRD level and above task-level engineering ticke
 
 - One shared simulation powers both empire and trader roles.
 - Star systems are the main gameplay nodes; planets are flavor only.
-- Turns resolve every 15 seconds.
+- Turns resolve every 10 seconds.
 - All orders entered during turn `T` resolve at the start of turn `T+1`.
 - Ownership, economy, fleets, prices, and route knowledge all live in the same authoritative backend state.
 - Traders never negotiate prices; settlement is automatic from system state.
@@ -229,7 +229,7 @@ This order is important. Combat must happen before economic recovery so damage m
 
 ## 6. Time and turn rules
 
-- One turn = 15 seconds real time.
+- One turn = 10 seconds real time.
 - Commands entered during turn `T` are committed for `T+1`.
 - A global pause halts the turn timer for all players.
 - Each empire player has 20 seconds pause budget.

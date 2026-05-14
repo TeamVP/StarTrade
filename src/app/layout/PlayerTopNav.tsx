@@ -3,6 +3,7 @@ import { cn } from "@/lib/utils";
 import { usePlayerPreview } from "@/features/player/PlayerPreviewContext";
 
 const subPaths = [
+  { segment: "lobby", label: "Lobby" },
   { segment: "empire", label: "Empire" },
   { segment: "economy", label: "Economy" },
   { segment: "fleet", label: "Fleet" },

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "../../../../convex/_generated/api";
 import type { Doc } from "../../../../convex/_generated/dataModel";
+import { DEFAULT_TURN_DURATION_SECONDS } from "../../../../convex/sim/turnTiming";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { AdminPanel } from "@/features/admin/components/AdminPanel";
@@ -125,15 +126,13 @@ export function GamesScreen() {
     api.sim.mutations.setSimCronTurnsDisabled,
   );
 
-  const [, setTick] = useState(0);
+  const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     const id = window.setInterval(() => {
-      setTick((t) => t + 1);
+      setNow(Date.now());
     }, 5000);
     return () => window.clearInterval(id);
   }, []);
-
-  const now = Date.now();
 
   const runningRows = useMemo(() => running ?? [], [running]);
 
@@ -182,7 +181,7 @@ export function GamesScreen() {
           <p className="mt-1 text-sm text-st-muted">
             Running games, turn resolution status, and Convex ids. Game admins can{" "}
             <strong className="font-medium text-st-fg">Suspend autopilot</strong> on a single game
-            so the 15s cron stops starting turns there (other running games keep going). Simulation
+            so the {DEFAULT_TURN_DURATION_SECONDS}s cron stops starting turns there (other running games keep going). Simulation
             data lives in Convex—restarting your local dev server does not reset these games.
           </p>
         </div>
@@ -298,7 +297,7 @@ export function GamesScreen() {
                             variant="outline"
                             className="whitespace-nowrap px-2 py-1 text-xs"
                             disabled={retryBusyId !== null}
-                            onClick={() => onForceRetry(game.gameId)}
+                            onClick={() => void onForceRetry(game.gameId)}
                           >
                             {retryBusyId === game.gameId ? "Retry…" : "Retry resolve"}
                           </Button>

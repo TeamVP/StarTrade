@@ -54,7 +54,6 @@ export function AdminPanel() {
       const newGameId = await createGame({
         name,
         mapKey,
-        turnDurationMs: 15000,
         seed: crypto.randomUUID(),
         npcEmpireKeys,
       });

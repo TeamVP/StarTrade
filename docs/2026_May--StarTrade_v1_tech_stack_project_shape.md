@@ -574,7 +574,7 @@ Prioritize in roughly this order unless product cuts scope.
 
 **Core gameplay & rules**
 
-- [ ] **Automated 15s turn clock** (cron / scheduler + pause rules per PRD), not only manual **Step turn**
+- [ ] **Automated 10s turn clock** (cron / scheduler + pause rules per PRD), not only manual **Step turn**
 - [ ] **Combat:** battle resolution, casualties, collateral to systems/stockpiles, persisted battle outputs and UI on `/combat`
 - [ ] **Economy:** production, consumption, stockpiles, prices driven by simulation rules (not only stub snapshots); **Recharts** on `/economy`
 - [ ] **Information / fog:** observation aging, visibility rules per PRD

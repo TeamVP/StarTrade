@@ -1,5 +1,7 @@
+import { DEFAULT_TURN_DURATION_MS } from "../../../convex/sim/turnTiming";
+
 export const BALANCE = {
-  turnDurationMs: 15_000,
+  turnDurationMs: DEFAULT_TURN_DURATION_MS,
   defenderMultiplier: 2,
   taxPerPopulation: 0.7,
   starvationFactor: 0.06,

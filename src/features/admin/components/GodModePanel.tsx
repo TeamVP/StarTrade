@@ -33,6 +33,10 @@ type Settings = {
   traderLimitsAutomated: boolean;
 };
 
+type NumericSettingKey = {
+  [K in keyof Settings]: Settings[K] extends number ? K : never;
+}[keyof Settings];
+
 const DEFAULTS: Settings = {
   foodProdMult: 1,
   shipProdMult: 1,
@@ -62,7 +66,7 @@ const DEFAULTS: Settings = {
 };
 
 type SliderSpec = {
-  key: keyof Settings;
+  key: NumericSettingKey;
   label: string;
   min: number;
   max: number;
@@ -246,7 +250,7 @@ function SliderGroup({
   title: string;
   sliders: SliderSpec[];
   settings: Settings;
-  onChange: (key: keyof Settings, v: number) => void;
+  onChange: (key: NumericSettingKey, v: number) => void;
 }) {
   return (
     <div className="space-y-3">
@@ -284,7 +288,7 @@ export function GodModePanel({ gameId }: { gameId: Id<"sim_games"> }) {
     }
   }, [serverSettings]);
 
-  function handleChange(key: keyof Settings, value: number) {
+  function handleChange(key: NumericSettingKey, value: number) {
     setLocal((prev) => ({ ...prev, [key]: value }));
     setSavedAt(null);
   }

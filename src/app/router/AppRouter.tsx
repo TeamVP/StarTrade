@@ -12,6 +12,7 @@ import { BalancePage } from "@/app/router/BalancePage";
 import { SignInPage } from "@/app/router/SignInPage";
 import { PlayerGameLayout } from "@/app/router/PlayerGameLayout";
 import { PlayerHomePage } from "@/app/router/PlayerHomePage";
+import { PlayerLobbyPage } from "@/app/router/PlayerLobbyPage";
 import { PlayerEmpirePage } from "@/app/router/PlayerEmpirePage";
 import { PlayerEconomyPage } from "@/app/router/PlayerEconomyPage";
 import { PlayerFleetPage } from "@/app/router/PlayerFleetPage";
@@ -21,6 +22,7 @@ import { PLAYER_PREVIEW_BY_PATH } from "@/features/player/playerPreviewConfig";
 
 const playerChildRoutes = [
   { index: true, element: <PlayerHomePage /> },
+  { path: "lobby", element: <PlayerLobbyPage /> },
   { path: "empire", element: <PlayerEmpirePage /> },
   { path: "economy", element: <PlayerEconomyPage /> },
   { path: "fleet", element: <PlayerFleetPage /> },

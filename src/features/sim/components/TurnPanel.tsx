@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "../../../../convex/_generated/api";
+import { DEFAULT_TURN_DURATION_MS } from "../../../../convex/sim/turnTiming";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { useGalaxyData } from "@/features/galaxy/hooks/useGalaxyData";
@@ -178,7 +179,7 @@ export function TurnPanel() {
   }
 
   const turnOpen = timeline?.turnState === "open";
-  const planDurationMs = Math.max(1, timeline?.turnDurationMs ?? 15_000);
+  const planDurationMs = Math.max(1, timeline?.turnDurationMs ?? DEFAULT_TURN_DURATION_MS);
   const planStartedAt = timeline?.turnStartedAt ?? null;
   const nowMs = barNow;
   const planElapsedFrac =
@@ -193,10 +194,6 @@ export function TurnPanel() {
   const pendingDelayRatio = timeline?.nextTurnAutoResolveDelayRatio;
 
   useEffect(() => {
-    setBarNow(Date.now());
-  }, [turnOpen, planStartedAt, timeline?.currentTurn, gameId]);
-
-  useEffect(() => {
     if (!turnOpen || planStartedAt === null) return;
     const id = window.setInterval(() => {
       setBarNow(Date.now());
@@ -206,10 +203,13 @@ export function TurnPanel() {
 
   useEffect(() => {
     if (!rebuildModalOpen || !turnResolving) return;
-    setRebuildAllAwaitingInModalConfirm(false);
-    setRebuildModalError(
-      "This match started resolving a turn. Wait until that finishes, then try again if you still need to change standing orders.",
-    );
+    const id = window.setTimeout(() => {
+      setRebuildAllAwaitingInModalConfirm(false);
+      setRebuildModalError(
+        "This match started resolving a turn. Wait until that finishes, then try again if you still need to change standing orders.",
+      );
+    }, 0);
+    return () => window.clearTimeout(id);
   }, [rebuildModalOpen, turnResolving]);
 
   const onPlanningBarPointer = useCallback(

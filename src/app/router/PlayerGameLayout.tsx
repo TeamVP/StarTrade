@@ -11,7 +11,10 @@ export function PlayerGameLayout({ config }: { config: PlayerPreviewRouteConfig 
   return (
     <>
       <Authenticated>
-        <ActiveGameProvider>
+        <ActiveGameProvider
+          key={config.basePath}
+          storageKey={`startrade:activeGameId:${config.basePath}`}
+        >
           <PlayerPreviewProvider value={config}>
             <AppShell
               nav={<PlayerTopNav />}

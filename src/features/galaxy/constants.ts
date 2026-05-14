@@ -1,3 +1,5 @@
+import { DEFAULT_TURN_DURATION_MS } from "../../../convex/sim/turnTiming";
+
 export const GALAXY_STAGE_WIDTH = 760;
 export const GALAXY_STAGE_HEIGHT = 520;
 /** Idle fleets orbit outside the white system ring (~radius 19 + stroke). */
@@ -9,7 +11,7 @@ export const COLONY_ORBIT_ANGLE_OFFSET_RAD = Math.PI / 4;
 /** Star tap target slightly larger than the drawn disk for comfortable clicks. */
 export const STAR_HIT_RADIUS = 24;
 /** Fallback travel animation duration when the turn timeline is unavailable. */
-export const TRAVEL_ANIM_MS = 15_000;
+export const TRAVEL_ANIM_MS = DEFAULT_TURN_DURATION_MS;
 
 /** Map camera: min/max zoom scale (1 = default world units). */
 export const MIN_MAP_SCALE = 0.35;

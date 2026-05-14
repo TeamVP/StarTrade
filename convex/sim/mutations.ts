@@ -13,12 +13,12 @@ import {
 import { applyNpcStrategy } from "./economy/applyNpcStrategy";
 import { findLinkBetweenSystems } from "../gal/linkUtils";
 import { normalizeNpcEmpireKeys } from "../seed/npcEmpirePlayers";
+import { DEFAULT_TURN_DURATION_MS } from "./turnTiming";
 
 export const createGame = mutation({
   args: {
     name: v.string(),
     mapKey: v.string(),
-    turnDurationMs: v.number(),
     /** Per-game RNG seed (e.g. from `crypto.randomUUID()` on the client). */
     seed: v.string(),
     npcEmpireKeys: v.optional(v.array(v.string())),
@@ -40,7 +40,7 @@ export const createGame = mutation({
       name: args.name,
       status: "lobby",
       mapKey: args.mapKey,
-      turnDurationMs: args.turnDurationMs,
+      turnDurationMs: DEFAULT_TURN_DURATION_MS,
       currentTurn: 0,
       seed,
       startedAt: null,
@@ -390,9 +390,9 @@ export const scheduleNextTurnResolutionDelay = mutation({
 
     const r = clampDelayRatio(args.delayRatio);
     if (r === 0) {
-      await ctx.db.patch(args.gameId, { nextTurnAutoResolveDelayRatio: undefined });
+      await ctx.db.patch("sim_games", args.gameId, { nextTurnAutoResolveDelayRatio: undefined });
     } else {
-      await ctx.db.patch(args.gameId, { nextTurnAutoResolveDelayRatio: r });
+      await ctx.db.patch("sim_games", args.gameId, { nextTurnAutoResolveDelayRatio: r });
     }
     return { delayRatio: r } as const;
   },
@@ -464,7 +464,7 @@ export const setSimCronTurnsDisabled = mutation({
       throw new Error("Auto turns can only be toggled for a running or paused game.");
     }
 
-    await ctx.db.patch(args.gameId, {
+    await ctx.db.patch("sim_games", args.gameId, {
       simCronTurnsDisabled: args.disabled ? true : undefined,
     });
     return { disabled: args.disabled } as const;

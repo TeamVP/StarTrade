@@ -21,11 +21,14 @@ function useActiveGameSelection() {
 export function useActiveGame(): {
   activeGame: Doc<"sim_games"> | null;
   games: Doc<"sim_games">[];
+  gamesLoading: boolean;
+  selectedGameId: Doc<"sim_games">["_id"] | null;
   setSelectedGameId: (id: Doc<"sim_games">["_id"] | null) => void;
 } {
   const { selectedGameId, setSelectedGameId } = useActiveGameSelection();
   const gamesQuery = useQuery(api.sim.queries.listGames, { limit: LIST_GAMES_LIMIT });
   const games = useMemo(() => gamesQuery ?? [], [gamesQuery]);
+  const gamesLoading = gamesQuery === undefined;
 
   const activeGame = useMemo((): Doc<"sim_games"> | null => {
     if (games.length === 0) {
@@ -50,5 +53,5 @@ export function useActiveGame(): {
     }
   }, [games, selectedGameId, setSelectedGameId]);
 
-  return { activeGame, games, setSelectedGameId };
+  return { activeGame, games, gamesLoading, selectedGameId, setSelectedGameId };
 }

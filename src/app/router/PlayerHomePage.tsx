@@ -18,7 +18,7 @@ export function PlayerHomePage() {
         </h2>
         <p className="mt-3 text-sm text-st-muted">
           No empire named <span className="font-medium text-st-fg">{empireName}</span> appears in
-          the active game. Seed a map that includes this faction or switch games from the main app.
+          the active game. Seed a map that includes this faction or choose another game from Lobby.
         </p>
       </Card>
     );

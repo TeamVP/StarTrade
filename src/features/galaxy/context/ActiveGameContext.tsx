@@ -8,7 +8,7 @@ import {
 } from "react";
 import type { Id } from "../../../../convex/_generated/dataModel";
 
-const STORAGE_KEY = "startrade:activeGameId";
+const DEFAULT_STORAGE_KEY = "startrade:activeGameId";
 
 export type ActiveGameContextValue = {
   selectedGameId: Id<"sim_games"> | null;
@@ -17,9 +17,9 @@ export type ActiveGameContextValue = {
 
 export const ActiveGameContext = createContext<ActiveGameContextValue | null>(null);
 
-function readStoredGameId(): Id<"sim_games"> | null {
+function readStoredGameId(storageKey: string): Id<"sim_games"> | null {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = localStorage.getItem(storageKey);
     if (raw !== null && raw.length > 0) {
       return raw as Id<"sim_games">;
     }
@@ -29,23 +29,29 @@ function readStoredGameId(): Id<"sim_games"> | null {
   return null;
 }
 
-export function ActiveGameProvider({ children }: { children: ReactNode }) {
+export function ActiveGameProvider({
+  children,
+  storageKey = DEFAULT_STORAGE_KEY,
+}: {
+  children: ReactNode;
+  storageKey?: string;
+}) {
   const [selectedGameId, setSelectedGameIdState] = useState<Id<"sim_games"> | null>(
-    readStoredGameId,
+    () => readStoredGameId(storageKey),
   );
 
   const setSelectedGameId = useCallback((id: Id<"sim_games"> | null) => {
     setSelectedGameIdState(id);
     try {
       if (id === null) {
-        localStorage.removeItem(STORAGE_KEY);
+        localStorage.removeItem(storageKey);
       } else {
-        localStorage.setItem(STORAGE_KEY, id);
+        localStorage.setItem(storageKey, id);
       }
     } catch {
       /* ignore */
     }
-  }, []);
+  }, [storageKey]);
 
   const value = useMemo(
     (): ActiveGameContextValue => ({ selectedGameId, setSelectedGameId }),

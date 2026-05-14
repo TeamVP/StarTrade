@@ -20,44 +20,13 @@ import {
   type GalaxyLinkRow,
   systemsShareLink,
 } from "@/features/galaxy/utils/linkAdjacency";
+import { turnTravelProgress } from "@/features/galaxy/utils/turnTravelProgress";
 
 extend({ Graphics, Container });
 
 const STAR_VISUAL_DRAG_MAX_DISTANCE = STAR_HIT_RADIUS * 2;
 const STAR_VISUAL_RETURN_MS = 2500;
 
-/** Fraction 0–1 along the origin→destination chord for in-flight ships (fleets, traders). */
-// eslint-disable-next-line react-refresh/only-export-components -- shared by GalaxyViewport + types
-export function enRouteLineFraction(params: {
-  now: number;
-  currentTurn: number;
-  dispatchedTurn: number;
-  travelTurnsTotal: number;
-  turnStartedAt: number | null;
-  travelAnimMs: number;
-}): number {
-  const {
-    now,
-    currentTurn,
-    dispatchedTurn,
-    travelTurnsTotal,
-    turnStartedAt,
-    travelAnimMs,
-  } = params;
-  const completedSegments = Math.min(
-    Math.max(currentTurn - dispatchedTurn - 1, 0),
-    travelTurnsTotal - 1,
-  );
-  if (currentTurn <= dispatchedTurn) {
-    return 0;
-  }
-  if (currentTurn > dispatchedTurn + travelTurnsTotal) {
-    return 1;
-  }
-  const phase =
-    turnStartedAt === null ? 0 : Math.min((now - turnStartedAt) / travelAnimMs, 1);
-  return Math.min((completedSegments + phase) / travelTurnsTotal, 1);
-}
 export type GalaxyNode = {
   id: string;
   x: number;
@@ -147,6 +116,7 @@ export type EnRouteGhostModel = {
   colorHex: string;
   dispatchedTurn: number;
   travelTurnsTotal: number;
+  etaTurn: number;
   /** When set, draw as colony transport instead of military chevron. */
   variant?: "fleet" | "colony";
 };
@@ -1822,13 +1792,14 @@ function EnRouteGhostGraphics({
         if (!from || !to) continue;
 
         const t = Math.max(1, ghost.travelTurnsTotal);
-        const fraction = enRouteLineFraction({
+        const fraction = turnTravelProgress({
           now,
           currentTurn,
           dispatchedTurn: ghost.dispatchedTurn,
+          etaTurn: ghost.etaTurn,
           travelTurnsTotal: t,
           turnStartedAt,
-          travelAnimMs,
+          turnDurationMs: travelAnimMs,
         });
 
         const gx = from.x + (to.x - from.x) * fraction;
@@ -1889,13 +1860,14 @@ function TraderShipMarker({
       if (!from || !to) return;
 
       const t = Math.max(1, trader.travelTurnsTotal);
-      const fraction = enRouteLineFraction({
+      const fraction = turnTravelProgress({
         now,
         currentTurn,
         dispatchedTurn: trader.dispatchedTurn,
+        etaTurn: trader.etaTurn,
         travelTurnsTotal: t,
         turnStartedAt,
-        travelAnimMs,
+        turnDurationMs: travelAnimMs,
       });
 
       const gx = from.x + (to.x - from.x) * fraction;
