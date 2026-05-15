@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useMutation, useQuery } from "convex/react";
+import { Link } from "react-router-dom";
 import { api } from "../../../../convex/_generated/api";
 import type { Doc } from "../../../../convex/_generated/dataModel";
 import { DEFAULT_TURN_DURATION_SECONDS } from "../../../../convex/sim/turnTiming";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { AdminPanel } from "@/features/admin/components/AdminPanel";
+import { getGamePath, getGameRouteKey } from "@/features/games/gameRoutes";
 import { useActiveGame } from "@/features/galaxy/hooks/useActiveGame";
 
 /** Matches `TURN_RESOLUTION_STALE_MS` in convex/sim/internal.ts — cron may start a new job after this. */
@@ -189,7 +191,7 @@ export function GamesScreen() {
             Games
           </h2>
           <p className="mt-1 text-sm text-st-muted">
-            Running games, turn resolution status, and Convex ids. Game admins can{" "}
+            Running games, turn resolution status, and short game URLs. Game admins can{" "}
             <strong className="font-medium text-st-fg">Suspend autopilot</strong> on a single game
             so the {DEFAULT_TURN_DURATION_SECONDS}s cron stops starting turns there (other running games keep going). Simulation
             data lives in Convex—restarting your local dev server does not reset these games.
@@ -226,7 +228,7 @@ export function GamesScreen() {
             <thead>
               <tr className="text-left text-xs uppercase tracking-wide text-st-muted">
                 <th className="border-b border-st-border px-3 py-2 font-medium">Name</th>
-                <th className="border-b border-st-border px-3 py-2 font-medium">Game ID</th>
+                <th className="border-b border-st-border px-3 py-2 font-medium">Game URL</th>
                 <th className="border-b border-st-border px-3 py-2 font-medium">Map</th>
                 <th className="border-b border-st-border px-3 py-2 font-medium">Turn</th>
                 <th className="border-b border-st-border px-3 py-2 font-medium">
@@ -252,9 +254,17 @@ export function GamesScreen() {
                       ) : null}
                     </td>
                     <td className="border-b border-st-border/60 px-3 py-2">
-                      <code className="break-all rounded bg-st-bg px-1.5 py-0.5 text-xs text-st-fg">
-                        {game.gameId}
-                      </code>
+                      <div className="space-y-1">
+                        <code className="block break-all rounded bg-st-bg px-1.5 py-0.5 text-xs text-st-fg">
+                          {getGameRouteKey(game)}
+                        </code>
+                        <Link
+                          to={getGamePath(game)}
+                          className="text-xs text-cyan-300 hover:text-cyan-200"
+                        >
+                          Open /game/{getGameRouteKey(game)}
+                        </Link>
+                      </div>
                     </td>
                     <td className="border-b border-st-border/60 px-3 py-2 font-mono text-xs text-st-fg">
                       {game.mapKey}
@@ -367,6 +377,12 @@ export function GamesScreen() {
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
                       <div className="font-medium text-st-fg">{result.name}</div>
+                      <Link
+                        to={getGamePath(result)}
+                        className="text-xs text-cyan-300 hover:text-cyan-200"
+                      >
+                        /game/{getGameRouteKey(result)}
+                      </Link>
                       <span className="rounded-full border border-st-border px-2 py-0.5 text-xs font-medium text-st-muted">
                         {result.mapKey}
                       </span>

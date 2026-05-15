@@ -3,6 +3,7 @@ import { useMutation, useQuery } from "convex/react";
 import { api } from "../../../../convex/_generated/api";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { getGamePath, getGameRouteKey } from "@/features/games/gameRoutes";
 import { useActiveGame } from "@/features/galaxy/hooks/useActiveGame";
 
 function formatDateTime(value: number | null): string {
@@ -201,6 +202,12 @@ export function DatabaseScreen() {
                   <p className="mt-1 text-xs text-st-muted">
                     Last activity {formatDateTime(game.lastMeaningfulActivityAt)} · abandonment eligible {formatDateTime(game.abandonmentEligibleAt)}
                   </p>
+                  <a
+                    href={getGamePath(game)}
+                    className="mt-1 inline-block text-xs text-cyan-300 hover:text-cyan-200"
+                  >
+                    /game/{getGameRouteKey(game)}
+                  </a>
                 </div>
                 <Button
                   type="button"
@@ -251,6 +258,12 @@ export function DatabaseScreen() {
             <p className="text-sm text-st-muted">
               <span className="font-medium text-st-fg">{selected.name}</span> · {selected.status} · turn {selected.currentTurn} · retention {selected.retentionClass ?? "unset"} · finalization {selected.finalizationState ?? "unset"}
             </p>
+            <a
+              href={getGamePath(selected)}
+              className="text-xs text-cyan-300 hover:text-cyan-200"
+            >
+              /game/{getGameRouteKey(selected)}
+            </a>
             <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
               {tableStats.map(({ label, stat }) => (
                 <div key={label} className="rounded border border-st-border bg-st-bg px-3 py-2 text-sm">

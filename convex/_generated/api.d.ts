@@ -82,6 +82,7 @@ import type * as sim_mutations from "../sim/mutations.js";
 import type * as sim_queries from "../sim/queries.js";
 import type * as sim_systemHoldings from "../sim/systemHoldings.js";
 import type * as sim_turnTiming from "../sim/turnTiming.js";
+import type * as sim_urlCodes from "../sim/urlCodes.js";
 import type * as sim_wipeGame from "../sim/wipeGame.js";
 import type * as sim_wipeGamePhases from "../sim/wipeGamePhases.js";
 import type * as trd_internal from "../trd/internal.js";
@@ -173,6 +174,7 @@ declare const fullApi: ApiFromModules<{
   "sim/queries": typeof sim_queries;
   "sim/systemHoldings": typeof sim_systemHoldings;
   "sim/turnTiming": typeof sim_turnTiming;
+  "sim/urlCodes": typeof sim_urlCodes;
   "sim/wipeGame": typeof sim_wipeGame;
   "sim/wipeGamePhases": typeof sim_wipeGamePhases;
   "trd/internal": typeof trd_internal;

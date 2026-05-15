@@ -80,6 +80,7 @@ function LibraryRosterCard(props: {
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showCodeModal, setShowCodeModal] = useState(false);
 
   async function handleAdd() {
     setBusy(true);
@@ -113,11 +114,43 @@ function LibraryRosterCard(props: {
         ))}
       </div>
       {error ? <p className="text-sm text-red-300">{error}</p> : null}
-      <div className="flex justify-end">
+      <div className="flex flex-wrap justify-end gap-2">
+        <Button type="button" variant="outline" onClick={() => setShowCodeModal(true)}>
+          View Code
+        </Button>
         <Button type="button" onClick={() => void handleAdd()} disabled={busy}>
           {busy ? "Adding..." : "Add To Roster"}
         </Button>
       </div>
+
+      {showCodeModal ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 px-4 py-6">
+          <div className="max-h-[85vh] w-full max-w-4xl overflow-hidden rounded-xl border border-st-border bg-st-bg shadow-2xl shadow-black/40">
+            <div className="flex items-start justify-between gap-4 border-b border-st-border px-5 py-4">
+              <div>
+                <h4 className="text-base font-semibold text-st-fg">{props.strategy.name} code</h4>
+                <p className="mt-1 text-sm text-st-muted">
+                  Read-only strategy JSON for the public library entry.
+                </p>
+              </div>
+              <Button type="button" variant="secondary" onClick={() => setShowCodeModal(false)}>
+                Close
+              </Button>
+            </div>
+            <div className="max-h-[calc(85vh-5rem)] overflow-auto px-5 py-4">
+              <pre className="overflow-x-auto rounded-lg border border-st-border bg-slate-950/80 p-4 font-mono text-xs leading-6 text-st-fg">
+                <code>{props.strategy.strategyJson}</code>
+              </pre>
+            </div>
+          </div>
+          <button
+            type="button"
+            aria-label="Close strategy code viewer"
+            className="absolute inset-0 -z-10"
+            onClick={() => setShowCodeModal(false)}
+          />
+        </div>
+      ) : null}
     </Card>
   );
 }

@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { api } from "../../../convex/_generated/api";
 import { Card } from "@/components/ui/card";
+import { getGamePath, getGameRouteKey } from "@/features/games/gameRoutes";
 import { useActiveGame } from "@/features/galaxy/hooks/useActiveGame";
 import { cn } from "@/lib/utils";
 
@@ -222,10 +223,18 @@ export function LobbyPage() {
                         <div>
                           <dt className="text-xs uppercase tracking-wide">Game ID</dt>
                           <dd className="mt-0.5 truncate font-mono text-xs text-st-fg">
-                            {game?._id ?? "Preparing..."}
+                            {game === null ? "Preparing..." : getGameRouteKey(game)}
                           </dd>
                         </div>
                       </dl>
+                      {game !== null ? (
+                        <Link
+                          to={getGamePath(game)}
+                          className="mt-2 inline-block text-xs text-cyan-300 hover:text-cyan-200"
+                        >
+                          Open /game/{getGameRouteKey(game)}
+                        </Link>
+                      ) : null}
                       {game?.status === "finished" && result !== null ? (
                         <div className="mt-3 grid gap-2 text-sm text-st-muted sm:grid-cols-4">
                           <div>

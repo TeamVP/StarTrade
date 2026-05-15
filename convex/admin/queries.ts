@@ -118,6 +118,7 @@ export const getDatabaseHealth = query({
       .slice(0, 20)
       .map((game) => ({
         gameId: game._id,
+        urlCode: game.urlCode ?? null,
         name: game.name,
         status: game.status,
         currentTurn: game.currentTurn,
@@ -146,6 +147,7 @@ export const getDatabaseHealth = query({
         ? null
         : {
             gameId: selectedGame._id,
+          urlCode: selectedGame.urlCode ?? null,
             name: selectedGame.name,
             status: selectedGame.status,
             currentTurn: selectedGame.currentTurn,

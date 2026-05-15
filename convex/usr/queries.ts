@@ -421,6 +421,7 @@ export const listRecentOfficialEmpireResults = query({
 
     const results = [] as Array<{
       gameId: Id<"sim_games">;
+      urlCode: string | null;
       endedAt: number;
       name: string;
       mapKey: string;
@@ -440,11 +441,13 @@ export const listRecentOfficialEmpireResults = query({
     }>;
 
     for (const gameResult of gameResults) {
+      const game = await ctx.db.get("sim_games", gameResult.gameId);
       const winner = gameResult.winnerEmpireResultId === null
         ? null
         : await ctx.db.get("emp_results", gameResult.winnerEmpireResultId);
       results.push({
         gameId: gameResult.gameId,
+        urlCode: game?.urlCode ?? null,
         endedAt: gameResult.endedAt,
         name: gameResult.name,
         mapKey: gameResult.mapKey,

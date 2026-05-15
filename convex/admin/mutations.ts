@@ -7,6 +7,7 @@ import type { Id } from "../_generated/dataModel";
 import { Scrypt } from "lucia";
 import { assertGameAdmin } from "../sim/helpers";
 import { evaluateGameFinalization } from "../sim/finalization";
+import { createUniqueGameUrlCode, gameUrlCodeNeedsRefresh } from "../sim/urlCodes";
 import {
   DEFAULT_GAME_SETTINGS,
   loadGameSettings,
@@ -651,6 +652,44 @@ export const runLegacyGameCleanupBatch = mutation({
       finalized,
       limit,
       processedGameIds,
+    };
+  },
+});
+
+export const backfillGameUrlCodes = mutation({
+  args: {
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const viewerUserId = await getAuthUserId(ctx);
+    if (viewerUserId === null) {
+      throw new Error("Authentication required.");
+    }
+
+    const limit = Math.max(1, Math.min(Math.floor(args.limit ?? 64), 128));
+    const games = await ctx.db.query("sim_games").order("desc").take(limit * 4);
+
+    let updated = 0;
+    const updatedGameIds: Id<"sim_games">[] = [];
+
+    for (const game of games) {
+      if (updated >= limit) {
+        break;
+      }
+      if (!gameUrlCodeNeedsRefresh(game.urlCode)) {
+        continue;
+      }
+
+      const urlCode = await createUniqueGameUrlCode(ctx);
+      await ctx.db.patch("sim_games", game._id, { urlCode });
+      updated += 1;
+      updatedGameIds.push(game._id);
+    }
+
+    return {
+      scanned: games.length,
+      updated,
+      updatedGameIds,
     };
   },
 });

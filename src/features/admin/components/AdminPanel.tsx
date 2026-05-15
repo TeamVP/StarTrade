@@ -6,6 +6,7 @@ import { NPC_EMPIRE_PLAYERS } from "../../../../convex/seed/npcEmpirePlayers";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { useActiveGame } from "@/features/galaxy/hooks/useActiveGame";
+import { getGamePath, getGameRouteKey } from "@/features/games/gameRoutes";
 import { GodModePanel } from "./GodModePanel";
 
 function mutationErrorMessage(error: unknown): string {
@@ -28,6 +29,7 @@ export function AdminPanel() {
   const reseedGame = useMutation(api.admin.mutations.reseedGame);
   const repairGameEconomy = useMutation(api.admin.mutations.repairGameEconomy);
   const runLegacyGameCleanupBatch = useMutation(api.admin.mutations.runLegacyGameCleanupBatch);
+  const backfillGameUrlCodes = useMutation(api.admin.mutations.backfillGameUrlCodes);
   const [creating, setCreating] = useState(false);
   const [seedingGameId, setSeedingGameId] = useState<Id<"sim_games"> | null>(null);
   const [seedError, setSeedError] = useState<string | null>(null);
@@ -36,6 +38,8 @@ export function AdminPanel() {
   const [repairResult, setRepairResult] = useState<string | null>(null);
   const [cleaningLegacyGames, setCleaningLegacyGames] = useState(false);
   const [legacyCleanupResult, setLegacyCleanupResult] = useState<string | null>(null);
+  const [backfillingUrls, setBackfillingUrls] = useState(false);
+  const [backfillUrlResult, setBackfillUrlResult] = useState<string | null>(null);
 
   async function onCreateGame(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -207,6 +211,12 @@ export function AdminPanel() {
                 <p className="text-xs text-st-muted">
                   {game.mapKey} - {game.npcEmpireKeys?.length ?? 0} NPC empires - {game.retentionClass ?? "official"}
                 </p>
+                <a
+                  href={getGamePath(game)}
+                  className="text-xs text-cyan-300 hover:text-cyan-200"
+                >
+                  /game/{getGameRouteKey(game)}
+                </a>
               </div>
               <Button
                 type="button"
@@ -223,6 +233,36 @@ export function AdminPanel() {
 
       {activeGame != null && (
         <div className="mt-4 border-t border-st-border pt-4 space-y-3">
+          <div>
+            <p className="text-xs text-st-muted mb-1">
+              Regenerates missing or outdated game short URLs so all active links use the 10-character format.
+            </p>
+            <Button
+              type="button"
+              disabled={backfillingUrls}
+              className="w-full text-xs"
+              onClick={() => {
+                setBackfillUrlResult(null);
+                setBackfillingUrls(true);
+                void backfillGameUrlCodes({ limit: 64 })
+                  .then((result) => {
+                    setBackfillUrlResult(
+                      `Updated ${result.updated} games after scanning ${result.scanned}. Run again if older games still show long ids.`,
+                    );
+                  })
+                  .catch((e: unknown) => {
+                    setBackfillUrlResult(mutationErrorMessage(e));
+                  })
+                  .finally(() => setBackfillingUrls(false));
+              }}
+            >
+              {backfillingUrls ? "Refreshing game URLs…" : "Refresh Game URLs"}
+            </Button>
+            {backfillUrlResult !== null && (
+              <p className="mt-1 text-xs text-emerald-400">{backfillUrlResult}</p>
+            )}
+          </div>
+
           <div>
             <p className="text-xs text-st-muted mb-1">
               Compacts older finished or abandoned games through the new durable-results pipeline.

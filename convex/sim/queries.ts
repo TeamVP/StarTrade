@@ -103,6 +103,7 @@ export const listRunningGamesTurnProgress = query({
 
     const result: {
       gameId: Id<"sim_games">;
+      urlCode: string | null;
       name: string;
       mapKey: string;
       currentTurn: number;
@@ -137,6 +138,7 @@ export const listRunningGamesTurnProgress = query({
 
       result.push({
         gameId: game._id,
+        urlCode: game.urlCode ?? null,
         name: game.name,
         mapKey: game.mapKey,
         currentTurn: game.currentTurn,
