@@ -1,9 +1,15 @@
 import { Link } from "react-router-dom";
+import { Authenticated, Unauthenticated } from "convex/react";
 
-const links = [
+const publicLinks = [
   { to: "/eplayer1", label: "Empire Player 1" },
   { to: "/eplayer2", label: "Empire Player 2" },
   { to: "/admin", label: "Admin" },
+] as const;
+
+const authenticatedLinks = [
+  { to: "/lobby", label: "Lobby" },
+  { to: "/profile", label: "Profile" },
 ] as const;
 
 export function LandingPage() {
@@ -18,11 +24,29 @@ export function LandingPage() {
         <h1 className="text-4xl font-semibold tracking-[0.2em] text-white sm:text-6xl">
           Welcome to Starstrat
         </h1>
-        <p className="mt-4 max-w-xl text-sm leading-6 text-st-muted sm:text-base">
-          Choose a preview empire or enter the admin shell.
-        </p>
+        <Unauthenticated>
+          <p className="mt-4 max-w-xl text-sm leading-6 text-st-muted sm:text-base">
+            Choose a preview empire or enter the admin shell.
+          </p>
+        </Unauthenticated>
+        <Authenticated>
+          <p className="mt-4 max-w-xl text-sm leading-6 text-st-muted sm:text-base">
+            Jump back into your account area or review your player profile.
+          </p>
+        </Authenticated>
         <div className="mt-10 flex flex-wrap items-center justify-center gap-3">
-          {links.map(({ to, label }) => (
+          <Authenticated>
+            {authenticatedLinks.map(({ to, label }) => (
+              <Link
+                key={to}
+                to={to}
+                className="rounded-full border border-st-border/80 bg-st-panel/70 px-5 py-2 text-sm font-medium text-st-fg transition-colors hover:border-st-accent hover:bg-st-accent hover:text-slate-950"
+              >
+                {label}
+              </Link>
+            ))}
+          </Authenticated>
+          {publicLinks.map(({ to, label }) => (
             <Link
               key={to}
               to={to}
