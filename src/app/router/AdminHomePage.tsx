@@ -25,6 +25,12 @@ const adminLinks = [
       "Manage the strategy library, edit strategy JSON, and control availability for NPCs and human users.",
   },
   {
+    to: "/admin/mission",
+    label: "Missions",
+    description:
+      "Manage mission records, progression sequencing, scenario JSON, and built-in player campaign content.",
+  },
+  {
     to: "/admin/empire-npcs",
     label: "Empire NPCs",
     description:

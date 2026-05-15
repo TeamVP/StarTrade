@@ -17,6 +17,12 @@ import {
   getAutomationStrategyByKey,
 } from "../usr/automationStrategyCatalog";
 import { BUILT_IN_AUTOMATION_STRATEGY_SEED_ROWS } from "../usr/automationStrategyLibrary";
+import { NPC_EMPIRE_PLAYERS, normalizeNpcEmpireKeys } from "../seed/npcEmpirePlayers";
+import {
+  BUILT_IN_MISSION_SEED_ROWS,
+  canonicalizeMissionScenarioJson,
+  parseMissionScenarioJson,
+} from "../usr/missionCatalog";
 
 const LEGACY_GAME_CLEANUP_SCAN_MULTIPLIER = 4;
 const PASSWORD_PROVIDER_ID = "password";
@@ -56,6 +62,133 @@ function normalizeStrategyTags(tags: string[]): string[] {
 
 function normalizeStrategyDescription(description: string): string {
   return description.trim();
+}
+
+function normalizeNpcPlayerKey(key: string): string {
+  const normalized = key.trim();
+  if (normalized.length === 0) {
+    throw new Error("NPC key is required.");
+  }
+  return normalized;
+}
+
+function normalizeNpcPlayerName(name: string, label: string): string {
+  const normalized = name.trim();
+  if (normalized.length === 0) {
+    throw new Error(`${label} is required.`);
+  }
+  return normalized;
+}
+
+function normalizeNpcSortOrder(sortOrder: number): number {
+  if (!Number.isFinite(sortOrder)) {
+    throw new Error("Sort order must be a number.");
+  }
+  return Math.max(0, Math.floor(sortOrder));
+}
+
+function normalizeNpcColorHex(colorHex: string): string {
+  const normalized = colorHex.trim().toLowerCase();
+  if (!/^#[0-9a-f]{6}$/.test(normalized)) {
+    throw new Error("Color must be a #RRGGBB hex value.");
+  }
+  return normalized;
+}
+
+function normalizeMissionKey(key: string): string {
+  const normalized = key.trim();
+  if (normalized.length === 0) {
+    throw new Error("Mission key is required.");
+  }
+  return normalized;
+}
+
+function normalizeMissionName(name: string): string {
+  const normalized = name.trim();
+  if (normalized.length === 0) {
+    throw new Error("Mission name is required.");
+  }
+  return normalized;
+}
+
+function normalizeMissionDescription(description: string): string {
+  return description.trim();
+}
+
+function normalizeMissionSortOrder(sortOrder: number): number {
+  if (!Number.isFinite(sortOrder)) {
+    throw new Error("Mission sort order must be a number.");
+  }
+  return Math.max(0, Math.floor(sortOrder));
+}
+
+function normalizeMissionLevel(level: number): number {
+  if (!Number.isFinite(level)) {
+    throw new Error("Mission level must be a number.");
+  }
+  return Math.max(1, Math.floor(level));
+}
+
+function normalizeMissionRequiredWins(requiredWins: number): number {
+  if (!Number.isFinite(requiredWins)) {
+    throw new Error("Mission required wins must be a number.");
+  }
+  return Math.max(1, Math.floor(requiredWins));
+}
+
+function normalizeMissionPrerequisites(prerequisiteMissionKeys: string[]): string[] {
+  const seen = new Set<string>();
+  const normalized: string[] = [];
+  for (const rawKey of prerequisiteMissionKeys) {
+    const key = rawKey.trim();
+    if (key.length === 0 || seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    normalized.push(key);
+  }
+  return normalized;
+}
+
+async function normalizeMissionScenarioJson(ctx: MutationCtx, scenarioJson: string): Promise<string> {
+  const normalized = canonicalizeMissionScenarioJson(scenarioJson);
+  const scenario = parseMissionScenarioJson(normalized);
+
+  await normalizeNpcEmpireKeys(ctx, scenario.npcEmpireKeys);
+  for (const config of scenario.empireConfigs) {
+    if (config.targetNpcPlayerKey !== null) {
+      await normalizeNpcEmpireKeys(ctx, [config.targetNpcPlayerKey]);
+    }
+    if (config.strategyLibraryKey !== null) {
+      const strategy = await getAutomationStrategyByKey(ctx, config.strategyLibraryKey);
+      if (strategy === null) {
+        throw new Error(`Mission strategy ${config.strategyLibraryKey} was not found.`);
+      }
+    }
+  }
+
+  return normalized;
+}
+
+async function assertNpcStrategyKey(
+  ctx: MutationCtx,
+  strategyLibraryKey: string | null | undefined,
+): Promise<string | null> {
+  if (strategyLibraryKey === undefined) {
+    return null;
+  }
+  if (strategyLibraryKey === null || strategyLibraryKey.trim().length === 0) {
+    return null;
+  }
+  const strategyKey = normalizeStrategyKey(strategyLibraryKey);
+  const strategy = await getAutomationStrategyByKey(ctx, strategyKey);
+  if (strategy === null) {
+    throw new Error("Selected strategy not found.");
+  }
+  if (!strategy.availableForNpcs) {
+    throw new Error("Selected strategy is not available to NPC players.");
+  }
+  return strategyKey;
 }
 
 async function findPasswordAccountByEmail(ctx: MutationCtx, email: string) {
@@ -837,6 +970,326 @@ export const seedMissingAutomationStrategies = mutation({
         strategyJson: strategy.strategyJson,
         availableForHumans: strategy.availableForHumans,
         availableForNpcs: strategy.availableForNpcs,
+        createdAt: now,
+        updatedAt: now,
+      });
+      inserted += 1;
+    }
+
+    return { inserted, skipped };
+  },
+});
+
+export const createEmpireNpcPlayer = mutation({
+  args: {
+    key: v.string(),
+    playerName: v.string(),
+    empireName: v.string(),
+    colorHex: v.string(),
+    strategyLibraryKey: v.union(v.string(), v.null()),
+    isActive: v.boolean(),
+    sortOrder: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (userId === null) {
+      throw new Error("Authentication required.");
+    }
+
+    const key = normalizeNpcPlayerKey(args.key);
+    const existing = await ctx.db
+      .query("emp_npc_players")
+      .withIndex("by_key", (q) => q.eq("key", key))
+      .unique();
+    if (existing !== null) {
+      throw new Error("That NPC key already exists.");
+    }
+
+    const now = Date.now();
+    return await ctx.db.insert("emp_npc_players", {
+      key,
+      playerName: normalizeNpcPlayerName(args.playerName, "Player name"),
+      empireName: normalizeNpcPlayerName(args.empireName, "Empire name"),
+      colorHex: normalizeNpcColorHex(args.colorHex),
+      strategyLibraryKey: await assertNpcStrategyKey(ctx, args.strategyLibraryKey),
+      isActive: args.isActive,
+      sortOrder: normalizeNpcSortOrder(args.sortOrder),
+      createdAt: now,
+      updatedAt: now,
+    });
+  },
+});
+
+export const updateEmpireNpcPlayer = mutation({
+  args: {
+    key: v.string(),
+    playerName: v.optional(v.string()),
+    empireName: v.optional(v.string()),
+    colorHex: v.optional(v.string()),
+    strategyLibraryKey: v.optional(v.union(v.string(), v.null())),
+    isActive: v.optional(v.boolean()),
+    sortOrder: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (userId === null) {
+      throw new Error("Authentication required.");
+    }
+
+    const key = normalizeNpcPlayerKey(args.key);
+    const existing = await ctx.db
+      .query("emp_npc_players")
+      .withIndex("by_key", (q) => q.eq("key", key))
+      .unique();
+    if (existing === null) {
+      throw new Error("NPC player not found.");
+    }
+
+    const patch: {
+      playerName?: string;
+      empireName?: string;
+      colorHex?: string;
+      strategyLibraryKey?: string | null;
+      isActive?: boolean;
+      sortOrder?: number;
+      updatedAt: number;
+    } = { updatedAt: Date.now() };
+
+    if (args.playerName !== undefined) {
+      patch.playerName = normalizeNpcPlayerName(args.playerName, "Player name");
+    }
+    if (args.empireName !== undefined) {
+      patch.empireName = normalizeNpcPlayerName(args.empireName, "Empire name");
+    }
+    if (args.colorHex !== undefined) {
+      patch.colorHex = normalizeNpcColorHex(args.colorHex);
+    }
+    if (args.strategyLibraryKey !== undefined) {
+      patch.strategyLibraryKey = await assertNpcStrategyKey(ctx, args.strategyLibraryKey);
+    }
+    if (args.isActive !== undefined) {
+      patch.isActive = args.isActive;
+    }
+    if (args.sortOrder !== undefined) {
+      patch.sortOrder = normalizeNpcSortOrder(args.sortOrder);
+    }
+
+    await ctx.db.patch(existing._id, patch);
+    return { key };
+  },
+});
+
+export const seedMissingEmpireNpcPlayers = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const userId = await getAuthUserId(ctx);
+    if (userId === null) {
+      throw new Error("Authentication required.");
+    }
+
+    let inserted = 0;
+    let skipped = 0;
+
+    for (const player of NPC_EMPIRE_PLAYERS) {
+      const existing = await ctx.db
+        .query("emp_npc_players")
+        .withIndex("by_key", (q) => q.eq("key", player.key))
+        .unique();
+      if (existing !== null) {
+        skipped += 1;
+        continue;
+      }
+
+      const now = Date.now();
+      await ctx.db.insert("emp_npc_players", {
+        key: player.key,
+        playerName: player.playerName,
+        empireName: player.empireName,
+        colorHex: player.colorHex,
+        strategyLibraryKey: player.strategyLibraryKey,
+        isActive: player.isActive,
+        sortOrder: player.sortOrder,
+        createdAt: now,
+        updatedAt: now,
+      });
+      inserted += 1;
+    }
+
+    return { inserted, skipped };
+  },
+});
+
+export const createMission = mutation({
+  args: {
+    key: v.string(),
+    name: v.string(),
+    description: v.string(),
+    mapKey: v.string(),
+    level: v.number(),
+    requiredWins: v.number(),
+    prerequisiteMissionKeys: v.array(v.string()),
+    published: v.boolean(),
+    sortOrder: v.number(),
+    retentionClass: v.union(
+      v.literal("discarded"),
+      v.literal("official"),
+      v.literal("archived_debug"),
+    ),
+    scenarioJson: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (userId === null) {
+      throw new Error("Authentication required.");
+    }
+
+    const key = normalizeMissionKey(args.key);
+    const existing = await ctx.db
+      .query("sim_missions")
+      .withIndex("by_key", (q) => q.eq("key", key))
+      .unique();
+    if (existing !== null) {
+      throw new Error("That mission key already exists.");
+    }
+
+    const now = Date.now();
+    return await ctx.db.insert("sim_missions", {
+      key,
+      name: normalizeMissionName(args.name),
+      description: normalizeMissionDescription(args.description),
+      mapKey: args.mapKey.trim(),
+      level: normalizeMissionLevel(args.level),
+      requiredWins: normalizeMissionRequiredWins(args.requiredWins),
+      prerequisiteMissionKeys: normalizeMissionPrerequisites(args.prerequisiteMissionKeys),
+      published: args.published,
+      sortOrder: normalizeMissionSortOrder(args.sortOrder),
+      retentionClass: args.retentionClass,
+      scenarioJson: await normalizeMissionScenarioJson(ctx, args.scenarioJson),
+      createdAt: now,
+      updatedAt: now,
+    });
+  },
+});
+
+export const updateMission = mutation({
+  args: {
+    key: v.string(),
+    name: v.optional(v.string()),
+    description: v.optional(v.string()),
+    mapKey: v.optional(v.string()),
+    level: v.optional(v.number()),
+    requiredWins: v.optional(v.number()),
+    prerequisiteMissionKeys: v.optional(v.array(v.string())),
+    published: v.optional(v.boolean()),
+    sortOrder: v.optional(v.number()),
+    retentionClass: v.optional(
+      v.union(
+        v.literal("discarded"),
+        v.literal("official"),
+        v.literal("archived_debug"),
+      ),
+    ),
+    scenarioJson: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (userId === null) {
+      throw new Error("Authentication required.");
+    }
+
+    const key = normalizeMissionKey(args.key);
+    const existing = await ctx.db
+      .query("sim_missions")
+      .withIndex("by_key", (q) => q.eq("key", key))
+      .unique();
+    if (existing === null) {
+      throw new Error("Mission not found.");
+    }
+
+    const patch: {
+      name?: string;
+      description?: string;
+      mapKey?: string;
+      level?: number;
+      requiredWins?: number;
+      prerequisiteMissionKeys?: string[];
+      published?: boolean;
+      sortOrder?: number;
+      retentionClass?: "discarded" | "official" | "archived_debug";
+      scenarioJson?: string;
+      updatedAt: number;
+    } = { updatedAt: Date.now() };
+
+    if (args.name !== undefined) {
+      patch.name = normalizeMissionName(args.name);
+    }
+    if (args.description !== undefined) {
+      patch.description = normalizeMissionDescription(args.description);
+    }
+    if (args.mapKey !== undefined) {
+      patch.mapKey = args.mapKey.trim();
+    }
+    if (args.level !== undefined) {
+      patch.level = normalizeMissionLevel(args.level);
+    }
+    if (args.requiredWins !== undefined) {
+      patch.requiredWins = normalizeMissionRequiredWins(args.requiredWins);
+    }
+    if (args.prerequisiteMissionKeys !== undefined) {
+      patch.prerequisiteMissionKeys = normalizeMissionPrerequisites(args.prerequisiteMissionKeys);
+    }
+    if (args.published !== undefined) {
+      patch.published = args.published;
+    }
+    if (args.sortOrder !== undefined) {
+      patch.sortOrder = normalizeMissionSortOrder(args.sortOrder);
+    }
+    if (args.retentionClass !== undefined) {
+      patch.retentionClass = args.retentionClass;
+    }
+    if (args.scenarioJson !== undefined) {
+      patch.scenarioJson = await normalizeMissionScenarioJson(ctx, args.scenarioJson);
+    }
+
+    await ctx.db.patch("sim_missions", existing._id, patch);
+    return { key };
+  },
+});
+
+export const seedMissingMissions = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const userId = await getAuthUserId(ctx);
+    if (userId === null) {
+      throw new Error("Authentication required.");
+    }
+
+    let inserted = 0;
+    let skipped = 0;
+
+    for (const mission of BUILT_IN_MISSION_SEED_ROWS) {
+      const existing = await ctx.db
+        .query("sim_missions")
+        .withIndex("by_key", (q) => q.eq("key", mission.key))
+        .unique();
+      if (existing !== null) {
+        skipped += 1;
+        continue;
+      }
+
+      const now = Date.now();
+      await ctx.db.insert("sim_missions", {
+        key: mission.key,
+        name: mission.name,
+        description: mission.description,
+        mapKey: mission.mapKey,
+        level: mission.level,
+        requiredWins: mission.requiredWins,
+        prerequisiteMissionKeys: mission.prerequisiteMissionKeys,
+        published: mission.published,
+        sortOrder: mission.sortOrder,
+        retentionClass: mission.retentionClass,
+        scenarioJson: mission.scenarioJson,
         createdAt: now,
         updatedAt: now,
       });

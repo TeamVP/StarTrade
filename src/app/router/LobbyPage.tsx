@@ -131,11 +131,11 @@ export function LobbyPage() {
                 Lobby
               </h1>
               <p className="mt-2 max-w-3xl text-sm text-st-muted">
-                Manage the starter games tied to <span className="font-medium text-st-fg">{profileLabel}</span>. Your wins unlock more maps, and the selected game follows the same flow used in the preview lobby.
+                Manage the mission runs tied to <span className="font-medium text-st-fg">{profileLabel}</span>. Mission wins unlock later missions, and the selected game follows the same flow used in the preview lobby.
               </p>
             </div>
             <div className="rounded-md border border-st-border bg-st-bg px-3 py-2 text-xs text-st-muted">
-              {gamesLoading ? "Loading..." : `${games.length} starter games`}
+              {gamesLoading ? "Loading..." : `${games.length} missions`}
             </div>
           </div>
         </Card>
@@ -147,15 +147,15 @@ export function LobbyPage() {
                 Progression
               </h2>
               <p className="mt-2 text-sm text-st-muted">
-                Win 2 small maps to unlock medium maps. Win 1 medium map to unlock large maps.
+                Complete missions to raise your level and unlock later missions in sequence.
               </p>
             </div>
             <div className="grid gap-2 text-sm text-st-muted sm:grid-cols-2">
               <div className="rounded border border-st-border bg-st-bg px-3 py-2">
-                Small wins: <span className="font-medium text-st-fg">{lobbyState?.progression.smallWins ?? 0}</span>/2
+                Level: <span className="font-medium text-st-fg">{lobbyState?.progression.currentLevel ?? 1}</span>
               </div>
               <div className="rounded border border-st-border bg-st-bg px-3 py-2">
-                Medium wins: <span className="font-medium text-st-fg">{lobbyState?.progression.mediumWins ?? 0}</span>/1
+                Completed: <span className="font-medium text-st-fg">{lobbyState?.progression.completedMissionCount ?? 0}</span>/{lobbyState?.progression.totalMissionCount ?? 0}
               </div>
             </div>
           </div>
@@ -168,7 +168,7 @@ export function LobbyPage() {
         {gamesLoading ? (
           <Card className="text-sm text-st-muted">Loading games...</Card>
         ) : games.length === 0 ? (
-          <Card className="text-sm text-st-muted">Preparing your starter games...</Card>
+          <Card className="text-sm text-st-muted">Preparing your missions...</Card>
         ) : (
           <div className="grid gap-3">
             {games
@@ -210,6 +210,9 @@ export function LobbyPage() {
                           {entry.mapTier} map
                         </span>
                         <span className="rounded-full border border-st-border px-2 py-0.5 text-xs font-medium text-st-muted">
+                          Level {entry.level}
+                        </span>
+                        <span className="rounded-full border border-st-border px-2 py-0.5 text-xs font-medium text-st-muted">
                           {entry.npcCount} NPC{entry.npcCount === 1 ? "" : "s"}
                         </span>
                         {isSelected ? (
@@ -229,10 +232,16 @@ export function LobbyPage() {
                         ) : null}
                         {!entry.unlocked ? (
                           <span className="rounded-full border border-amber-500/40 bg-amber-950/30 px-2 py-0.5 text-xs font-medium text-amber-200">
-                            Requires {entry.requiredSmallWins} small win{entry.requiredSmallWins === 1 ? "" : "s"}
+                            Locked by prerequisite missions
+                          </span>
+                        ) : null}
+                        {entry.unlocked ? (
+                          <span className="rounded-full border border-st-border px-2 py-0.5 text-xs font-medium text-st-muted">
+                            {entry.winCount}/{entry.requiredWins} required wins
                           </span>
                         ) : null}
                       </div>
+                      <p className="mt-2 text-sm text-st-muted">{entry.description}</p>
                       <dl className="mt-3 grid gap-2 text-sm text-st-muted sm:grid-cols-4">
                         <div>
                           <dt className="text-xs uppercase tracking-wide">Map</dt>
@@ -267,7 +276,7 @@ export function LobbyPage() {
                             <dt className="text-xs uppercase tracking-wide">Outcome</dt>
                             <dd className="mt-0.5 text-st-fg">
                               {result.auroraPlacement === null
-                                ? "No Aurora result"
+                                ? "No player result"
                                 : `Placed #${result.auroraPlacement}`}
                             </dd>
                           </div>
@@ -286,6 +295,16 @@ export function LobbyPage() {
                             <dd className="mt-0.5 text-st-fg">{result.finishReason ?? "Pending"}</dd>
                           </div>
                         </div>
+                      ) : null}
+                      {game?.status === "finished" && result !== null && result.auroraPlacement !== null ? (
+                        <p className="mt-3 text-xs text-st-muted">
+                          Your empire finished with {result.auroraStarsControlledFinal ?? 0} stars, {result.auroraFleetStrengthFinal ?? 0} fleet strength, and score {result.auroraScoreFinal ?? 0}.
+                        </p>
+                      ) : null}
+                      {!entry.unlocked ? (
+                        <p className="mt-3 text-xs text-st-muted">
+                          Complete the prerequisite missions before attempting this mission.
+                        </p>
                       ) : null}
                     </div>
 

@@ -44,6 +44,10 @@ const AdminEmpireNpcsPage = lazyNamedComponent(
   () => import("@/app/router/AdminEmpireNpcsPage"),
   "AdminEmpireNpcsPage",
 );
+const AdminMissionsPage = lazyNamedComponent(
+  () => import("@/app/router/AdminMissionsPage"),
+  "AdminMissionsPage",
+);
 const AdminTraderNpcsPage = lazyNamedComponent(
   () => import("@/app/router/AdminTraderNpcsPage"),
   "AdminTraderNpcsPage",
@@ -138,6 +142,7 @@ const adminChildRoutes = [
   { path: "results", element: <ResultsPage /> },
   { path: "db", element: <AdminDatabasePage /> },
   { path: "strategies", element: <AdminStrategiesPage /> },
+  { path: "mission", element: <AdminMissionsPage /> },
   { path: "empire-npcs", element: <AdminEmpireNpcsPage /> },
   { path: "trader-npcs", element: <AdminTraderNpcsPage /> },
   { path: "balance", element: <BalancePage /> },

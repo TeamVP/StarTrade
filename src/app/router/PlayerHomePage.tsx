@@ -25,20 +25,21 @@ export function PlayerHomePage() {
   const [newGameBusy, setNewGameBusy] = useState(false);
   const [newGameError, setNewGameError] = useState<string | null>(null);
   const focusFleetId = focusFleetIdFromState(location.state);
+  const activeMissionKey = activeGame?.missionKey ?? activeGame?.lobbyScenarioKey ?? null;
   const canCreateNewStarterGame =
     empireId === null &&
     activeGame !== null &&
-    activeGame?.lobbyScenarioKey !== null &&
+    activeMissionKey !== null &&
     (activeGame.status === "finished" || membership.isSpectator);
 
   async function onCreateNewStarterGame() {
-    if (activeGame?.lobbyScenarioKey === null || activeGame?.lobbyScenarioKey === undefined) {
+    if (activeMissionKey === null) {
       return;
     }
     setNewGameBusy(true);
     setNewGameError(null);
     try {
-      const result = await resetMyStarterGame({ scenarioKey: activeGame.lobbyScenarioKey });
+      const result = await resetMyStarterGame({ scenarioKey: activeMissionKey });
       setSelectedGameId(result.gameId as Parameters<typeof setSelectedGameId>[0]);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -81,7 +82,7 @@ export function PlayerHomePage() {
               {newGameBusy ? "Working..." : "New game"}
             </Button>
             <p className="text-xs text-st-muted">
-              Create a fresh run for this same starter scenario and switch this view to it.
+              Create a fresh run for this same mission and switch this view to it.
             </p>
           </div>
         ) : null}

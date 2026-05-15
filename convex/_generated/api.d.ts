@@ -92,6 +92,7 @@ import type * as trd_queries from "../trd/queries.js";
 import type * as usr_automationStrategyCatalog from "../usr/automationStrategyCatalog.js";
 import type * as usr_automationStrategyLibrary from "../usr/automationStrategyLibrary.js";
 import type * as usr_lobbyScenarios from "../usr/lobbyScenarios.js";
+import type * as usr_missionCatalog from "../usr/missionCatalog.js";
 import type * as usr_mutations from "../usr/mutations.js";
 import type * as usr_queries from "../usr/queries.js";
 
@@ -186,6 +187,7 @@ declare const fullApi: ApiFromModules<{
   "usr/automationStrategyCatalog": typeof usr_automationStrategyCatalog;
   "usr/automationStrategyLibrary": typeof usr_automationStrategyLibrary;
   "usr/lobbyScenarios": typeof usr_lobbyScenarios;
+  "usr/missionCatalog": typeof usr_missionCatalog;
   "usr/mutations": typeof usr_mutations;
   "usr/queries": typeof usr_queries;
 }>;

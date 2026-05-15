@@ -2,7 +2,7 @@ import { query, type QueryCtx } from "../_generated/server";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { v } from "convex/values";
 import type { Doc, Id } from "../_generated/dataModel";
-import { STARTER_LOBBY_SCENARIOS, mapTierFromMapKey } from "./lobbyScenarios";
+import { listMissions, mapTierFromMapKey } from "./missionCatalog";
 import { getAutomationStrategyByKey, toPublicAutomationStrategy } from "./automationStrategyCatalog";
 import { summarizeAutomationStrategy } from "./automationStrategyLibrary";
 
@@ -202,22 +202,30 @@ export const getMyLobbyState = query({
       return null;
     }
 
-    const currentGames = await ctx.db
-      .query("sim_games")
-      .withIndex("by_ownerUserId", (q) => q.eq("ownerUserId", userId))
-      .collect();
+    const [currentGames, missions] = await Promise.all([
+      ctx.db.query("sim_games").withIndex("by_ownerUserId", (q) => q.eq("ownerUserId", userId)).collect(),
+      listMissions(ctx, { publishedOnly: true, fallbackToBuiltIns: true }),
+    ]);
 
     const winningRows = await ctx.db
       .query("emp_results")
       .withIndex("by_userId_and_isWinner", (q) => q.eq("userId", userId).eq("isWinner", true))
       .take(256);
     const wins = await attachGameResults(ctx, winningRows);
-    const auroraWins = wins.filter(
-      (row) =>
-        row.empireKey === "aurora" &&
-        row.gameResult.isOfficial &&
-        row.gameResult.lobbyScenarioKey !== null,
-    );
+    const missionByKey = new Map(missions.map((mission) => [mission.key, mission]));
+    const missionWinsByKey = new Map<string, number>();
+    const auroraWins = wins.filter((row) => {
+      const missionKey = row.gameResult.missionKey ?? row.gameResult.lobbyScenarioKey;
+      if (missionKey === null || !row.gameResult.isOfficial) {
+        return false;
+      }
+      const mission = missionByKey.get(missionKey);
+      if (mission === undefined || row.empireKey !== mission.scenario.playerEmpireKey) {
+        return false;
+      }
+      missionWinsByKey.set(missionKey, (missionWinsByKey.get(missionKey) ?? 0) + 1);
+      return true;
+    });
     const smallWins = auroraWins.filter(
       (row) => mapTierFromMapKey(row.gameResult.mapKey) === "small",
     ).length;
@@ -227,8 +235,8 @@ export const getMyLobbyState = query({
 
     const gamesByScenario = new Map(
       currentGames
-        .filter((game) => game.lobbyScenarioKey !== null)
-        .map((game) => [game.lobbyScenarioKey, game]),
+        .map((game) => [game.missionKey ?? game.lobbyScenarioKey, game] as const)
+        .filter((entry): entry is [string, (typeof currentGames)[number]] => entry[0] !== null),
     );
 
     const resultByGameId = new Map<
@@ -259,8 +267,11 @@ export const getMyLobbyState = query({
         .query("emp_results")
         .withIndex("by_gameResultId", (q) => q.eq("gameResultId", gameResult._id))
         .collect();
+      const missionKey = gameResult.missionKey ?? gameResult.lobbyScenarioKey;
+      const mission = missionKey === null ? null : missionByKey.get(missionKey) ?? null;
+      const playerEmpireKey = mission?.scenario.playerEmpireKey ?? "aurora";
       const winner = empireResults.find((row) => row.isWinner) ?? null;
-      const aurora = empireResults.find((row) => row.empireKey === "aurora") ?? null;
+      const aurora = empireResults.find((row) => row.empireKey === playerEmpireKey) ?? null;
 
       resultByGameId.set(game._id, {
         endedAt: gameResult.endedAt,
@@ -282,8 +293,16 @@ export const getMyLobbyState = query({
         mediumWins,
         mediumUnlocked: smallWins >= 2,
         largeUnlocked: mediumWins >= 1,
+        currentLevel: missions.reduce((level, mission) => {
+          const winsForMission = missionWinsByKey.get(mission.key) ?? 0;
+          return winsForMission >= mission.requiredWins ? Math.max(level, mission.level + 1) : level;
+        }, 1),
+        completedMissionCount: missions.filter(
+          (mission) => (missionWinsByKey.get(mission.key) ?? 0) >= mission.requiredWins,
+        ).length,
+        totalMissionCount: missions.length,
       },
-      games: await Promise.all(STARTER_LOBBY_SCENARIOS.map((scenario) => {
+      games: await Promise.all(missions.map((scenario) => {
         const game = gamesByScenario.get(scenario.key) ?? null;
         const activeMembershipPromise =
           game === null
@@ -294,18 +313,24 @@ export const getMyLobbyState = query({
                   q.eq("gameId", game._id).eq("userId", userId),
                 )
                 .unique();
-        const unlocked =
-          smallWins >= scenario.requiredSmallWins &&
-          mediumWins >= scenario.requiredMediumWins;
+        const unlocked = scenario.prerequisiteMissionKeys.every(
+          (missionKey) =>
+            (missionWinsByKey.get(missionKey) ?? 0) >= (missionByKey.get(missionKey)?.requiredWins ?? 1),
+        );
         return activeMembershipPromise.then((membership) => ({
           key: scenario.key,
           name: scenario.name,
+          description: scenario.description,
           mapKey: scenario.mapKey,
           mapTier: scenario.mapTier,
+          level: scenario.level,
           sortOrder: scenario.sortOrder,
-          npcCount: scenario.automatedEmpireKeys.length,
-          requiredSmallWins: scenario.requiredSmallWins,
-          requiredMediumWins: scenario.requiredMediumWins,
+          npcCount: scenario.preview.npcEmpireCount,
+          requiredWins: scenario.requiredWins,
+          winCount: missionWinsByKey.get(scenario.key) ?? 0,
+          prerequisiteMissionKeys: scenario.prerequisiteMissionKeys,
+          requiredSmallWins: 0,
+          requiredMediumWins: 0,
           unlocked,
           game,
           result: game === null ? null : resultByGameId.get(game._id) ?? null,

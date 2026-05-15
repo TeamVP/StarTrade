@@ -1,7 +1,9 @@
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { v } from "convex/values";
 import { query } from "../_generated/server";
-import { toAutomationStrategyCatalogRow } from "../usr/automationStrategyCatalog";
+import { getAutomationStrategyByKey, toAutomationStrategyCatalogRow } from "../usr/automationStrategyCatalog";
+import { listMissions as listMissionCatalogRows } from "../usr/missionCatalog";
+import { listNpcEmpirePlayers } from "../seed/npcEmpirePlayers";
 
 export const listUsers = query({
   args: {
@@ -293,6 +295,68 @@ export const listAutomationStrategies = query({
       strategies: strategies
         .map((row) => toAutomationStrategyCatalogRow(row))
         .sort((left, right) => left.name.localeCompare(right.name)),
+    };
+  },
+});
+
+export const listEmpireNpcPlayers = query({
+  args: {
+    includeInactive: v.optional(v.boolean()),
+    fallbackToBuiltIns: v.optional(v.boolean()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (userId === null) {
+      return { authorized: false as const, empireNpcs: [] as const };
+    }
+
+    const players = await listNpcEmpirePlayers(ctx, {
+      includeInactive: args.includeInactive ?? true,
+      fallbackToBuiltIns: args.fallbackToBuiltIns ?? false,
+    });
+
+    return {
+      authorized: true as const,
+      empireNpcs: await Promise.all(
+        players.map(async (player) => {
+          const strategy =
+            player.strategyLibraryKey === null
+              ? null
+              : await getAutomationStrategyByKey(ctx, player.strategyLibraryKey);
+          return {
+            key: player.key,
+            playerName: player.playerName,
+            empireName: player.empireName,
+            colorHex: player.colorHex,
+            strategyLibraryKey: player.strategyLibraryKey,
+            defaultStrategy:
+              strategy === null ? null : toAutomationStrategyCatalogRow(strategy),
+            isActive: player.isActive,
+            sortOrder: player.sortOrder,
+          };
+        }),
+      ),
+    };
+  },
+});
+
+export const listMissions = query({
+  args: {
+    publishedOnly: v.optional(v.boolean()),
+    fallbackToBuiltIns: v.optional(v.boolean()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (userId === null) {
+      return { authorized: false as const, missions: [] as const };
+    }
+
+    return {
+      authorized: true as const,
+      missions: await listMissionCatalogRows(ctx, {
+        publishedOnly: args.publishedOnly ?? false,
+        fallbackToBuiltIns: args.fallbackToBuiltIns ?? false,
+      }),
     };
   },
 });

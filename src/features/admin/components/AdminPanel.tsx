@@ -1,8 +1,7 @@
 import { FormEvent, useState, type MouseEvent } from "react";
-import { useMutation } from "convex/react";
+import { useMutation, useQuery } from "convex/react";
 import { api } from "../../../../convex/_generated/api";
 import type { Id } from "../../../../convex/_generated/dataModel";
-import { NPC_EMPIRE_PLAYERS } from "../../../../convex/seed/npcEmpirePlayers";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { useActiveGame } from "@/features/galaxy/hooks/useActiveGame";
@@ -25,6 +24,10 @@ function mutationErrorMessage(error: unknown): string {
 
 export function AdminPanel() {
   const { games, activeGame, setSelectedGameId } = useActiveGame();
+  const npcCatalog = useQuery(api.admin.queries.listEmpireNpcPlayers, {
+    includeInactive: false,
+    fallbackToBuiltIns: true,
+  });
   const createGame = useMutation(api.sim.mutations.createGame);
   const reseedGame = useMutation(api.admin.mutations.reseedGame);
   const repairGameEconomy = useMutation(api.admin.mutations.repairGameEconomy);
@@ -40,6 +43,7 @@ export function AdminPanel() {
   const [legacyCleanupResult, setLegacyCleanupResult] = useState<string | null>(null);
   const [backfillingUrls, setBackfillingUrls] = useState(false);
   const [backfillUrlResult, setBackfillUrlResult] = useState<string | null>(null);
+  const availableNpcPlayers = npcCatalog?.authorized ? npcCatalog.empireNpcs : [];
 
   async function onCreateGame(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -144,7 +148,13 @@ export function AdminPanel() {
             Select specific NPC players to add as independent computer empires.
           </p>
           <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-            {NPC_EMPIRE_PLAYERS.map((player) => (
+            {npcCatalog === undefined ? (
+              <p className="text-xs text-st-muted">Loading NPC roster...</p>
+            ) : availableNpcPlayers.length === 0 ? (
+              <p className="text-xs text-st-muted">
+                No active NPC players are seeded yet. Configure them on /admin/empire-npcs.
+              </p>
+            ) : availableNpcPlayers.map((player) => (
               <label
                 key={player.key}
                 className="flex cursor-pointer items-start gap-2 rounded border border-st-border/70 bg-st-panel/60 px-2 py-2 text-xs hover:border-st-accent/60"

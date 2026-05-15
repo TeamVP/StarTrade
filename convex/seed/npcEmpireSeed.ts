@@ -1,6 +1,7 @@
 import type { MutationCtx } from "../_generated/server";
 import type { Id } from "../_generated/dataModel";
 import { pickEmpireCatalogColorHex } from "./empireColorPrefLookup";
+import { getAutomationStrategyByKey } from "../usr/automationStrategyCatalog";
 import { getNpcEmpirePlayersForKeys } from "./npcEmpirePlayers";
 
 type NpcHomeworldSeedSystem = {
@@ -71,7 +72,7 @@ export async function seedSelectedNpcEmpires(
   ctx: MutationCtx,
   args: SeedNpcEmpiresArgs,
 ): Promise<number> {
-  const npcPlayers = getNpcEmpirePlayersForKeys(args.npcEmpireKeys);
+  const npcPlayers = await getNpcEmpirePlayersForKeys(ctx, args.npcEmpireKeys);
   if (npcPlayers.length === 0) {
     return 0;
   }
@@ -93,6 +94,11 @@ export async function seedSelectedNpcEmpires(
       throw new Error(`NPC empire seed: missing home system ${homeKey}.`);
     }
 
+    const strategy =
+      player.strategyLibraryKey === null
+        ? null
+        : await getAutomationStrategyByKey(ctx, player.strategyLibraryKey);
+
     const empireId = await ctx.db.insert("emp_states", {
       gameId: args.gameId,
       empireKey: `npc-${player.key}`,
@@ -113,6 +119,7 @@ export async function seedSelectedNpcEmpires(
       controller: "npc",
       npcPlayerKey: player.key,
       playerName: player.playerName,
+      strategyJson: strategy?.strategyJson,
     });
 
     await ctx.db.patch("gal_systems", homeSystemId, {

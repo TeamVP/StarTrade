@@ -385,7 +385,7 @@ function EmpireSnapshotListRow(props: {
           {canFocusHomeworld ? (
             <button
               type="button"
-              className="block max-w-[11rem] text-left font-medium text-cyan-200/95 underline decoration-cyan-500/40 decoration-dotted underline-offset-2 hover:text-cyan-100 hover:decoration-cyan-300/70"
+              className="block max-w-44 text-left font-medium text-cyan-200/95 underline decoration-cyan-500/40 decoration-dotted underline-offset-2 hover:text-cyan-100 hover:decoration-cyan-300/70"
               title={`${empire.name} — pan map to homeworld`}
               onClick={() => requestEmpireHomeworldFocus?.(empire._id)}
             >
@@ -488,7 +488,7 @@ export function EmpirePanel(props: { focusEmpireId?: Id<"emp_states"> | null }) 
     myMembership.empireId === snapshotEmpire._id;
   const canCreateNewStarterGame =
     activeGame !== null &&
-    activeGame.lobbyScenarioKey !== null &&
+    (activeGame.missionKey ?? activeGame.lobbyScenarioKey ?? null) !== null &&
     activeGame.status === "finished";
   const canPauseOrResume =
     activeGame !== null &&
@@ -533,13 +533,14 @@ export function EmpirePanel(props: { focusEmpireId?: Id<"emp_states"> | null }) 
   }
 
   async function onStartNewStarterGame() {
-    if (activeGame?.lobbyScenarioKey === null || activeGame?.lobbyScenarioKey === undefined) {
+    const missionKey = activeGame?.missionKey ?? activeGame?.lobbyScenarioKey ?? null;
+    if (missionKey === null) {
       return;
     }
     setGameActionBusy("new");
     setGameActionError(null);
     try {
-      const result = await resetMyStarterGame({ scenarioKey: activeGame.lobbyScenarioKey });
+      const result = await resetMyStarterGame({ scenarioKey: missionKey });
       setSelectedGameId(result.gameId as Id<"sim_games">);
     } catch (error) {
       setGameActionError(mutationErrorMessage(error));

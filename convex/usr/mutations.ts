@@ -5,7 +5,7 @@ import { api } from "../_generated/api";
 import { assignStarterOwnerEmpireSeat } from "../sim/mutations";
 import { gameAllowsPlayerActions, touchGameMeaningfulActivity } from "../sim/helpers";
 import { evaluateGameFinalization } from "../sim/finalization";
-import { getStarterLobbyScenario, STARTER_LOBBY_SCENARIOS } from "./lobbyScenarios";
+import { getMissionByKey, listMissions } from "./missionCatalog";
 import {
   buildStrategyFromBaseAndOverrides,
   canonicalizeStrategyJson,
@@ -534,16 +534,16 @@ export const ensureMyStarterGames = mutation({
       throw new Error("Authentication required.");
     }
 
+    const [missions, ownedGames] = await Promise.all([
+      listMissions(ctx, { publishedOnly: true, fallbackToBuiltIns: true }),
+      ctx.db.query("sim_games").withIndex("by_ownerUserId", (q) => q.eq("ownerUserId", userId)).collect(),
+    ]);
+
     let created = 0;
-    for (const scenario of STARTER_LOBBY_SCENARIOS) {
-      const existing = await ctx.db
-        .query("sim_games")
-        .withIndex("by_ownerUserId_and_lobbyScenarioKey", (q) =>
-          q.eq("ownerUserId", userId).eq("lobbyScenarioKey", scenario.key),
-        )
-        .take(1);
-      if (existing.length > 0) {
-        const existingGame = existing[0]!;
+    for (const scenario of missions) {
+      const existingGame =
+        ownedGames.find((game) => (game.missionKey ?? game.lobbyScenarioKey) === scenario.key) ?? null;
+      if (existingGame !== null) {
         if (
           existingGame.status === "finished" ||
           existingGame.finalizationState === "pending_cleanup" ||
@@ -567,9 +567,11 @@ export const ensureMyStarterGames = mutation({
         name: scenario.name,
         mapKey: scenario.mapKey,
         seed: `${scenario.key}:${userId}:${Date.now()}`,
-        npcEmpireKeys: scenario.npcEmpireKeys,
-        automatedEmpireKeys: scenario.automatedEmpireKeys,
+        npcEmpireKeys: scenario.scenario.npcEmpireKeys,
+        automatedEmpireKeys: scenario.scenario.automatedEmpireKeys,
+        missionKey: scenario.key,
         lobbyScenarioKey: scenario.key,
+        retentionClass: scenario.retentionClass,
       });
       created += 1;
     }
@@ -586,18 +588,18 @@ export const resetMyStarterGame = mutation({
       throw new Error("Authentication required.");
     }
 
-    const scenario = getStarterLobbyScenario(args.scenarioKey);
+    const scenario = await getMissionByKey(ctx, args.scenarioKey);
     if (scenario === null) {
-      throw new Error("Unknown starter scenario.");
+      throw new Error("Unknown mission.");
     }
 
-    const existing = await ctx.db
+    const current = await ctx.db
       .query("sim_games")
-      .withIndex("by_ownerUserId_and_lobbyScenarioKey", (q) =>
-        q.eq("ownerUserId", userId).eq("lobbyScenarioKey", scenario.key),
-      )
-      .take(1);
-    const current = existing[0] ?? null;
+      .withIndex("by_ownerUserId", (q) => q.eq("ownerUserId", userId))
+      .collect()
+      .then((games) =>
+        games.find((game) => (game.missionKey ?? game.lobbyScenarioKey) === scenario.key) ?? null,
+      );
 
     if (current !== null && current.status === "running") {
       const existingRole = await ctx.db
@@ -621,9 +623,11 @@ export const resetMyStarterGame = mutation({
       name: scenario.name,
       mapKey: scenario.mapKey,
       seed: `${scenario.key}:${userId}:${Date.now()}`,
-      npcEmpireKeys: scenario.npcEmpireKeys,
-      automatedEmpireKeys: scenario.automatedEmpireKeys,
+      npcEmpireKeys: scenario.scenario.npcEmpireKeys,
+      automatedEmpireKeys: scenario.scenario.automatedEmpireKeys,
+      missionKey: scenario.key,
       lobbyScenarioKey: scenario.key,
+      retentionClass: scenario.retentionClass,
     });
 
     return { gameId };

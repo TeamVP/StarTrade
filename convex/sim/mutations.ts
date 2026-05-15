@@ -13,6 +13,8 @@ import {
 import { applyNpcStrategy } from "./economy/applyNpcStrategy";
 import { findLinkBetweenSystems } from "../gal/linkUtils";
 import { normalizeNpcEmpireKeys } from "../seed/npcEmpirePlayers";
+import { getAutomationStrategyByKey } from "../usr/automationStrategyCatalog";
+import { getMissionByKey } from "../usr/missionCatalog";
 import { DEFAULT_TURN_DURATION_MS } from "./turnTiming";
 import { touchGameMeaningfulActivity } from "./helpers";
 import { createUniqueGameUrlCode } from "./urlCodes";
@@ -43,18 +45,18 @@ async function resolveStarterOwnerDisplayName(
   return "Player";
 }
 
-export async function assignStarterOwnerEmpireSeat(
+export async function assignOwnerEmpireSeat(
   ctx: MutationCtx,
-  params: { gameId: Id<"sim_games">; userId: Id<"users"> },
+  params: { gameId: Id<"sim_games">; userId: Id<"users">; empireKey: string },
 ): Promise<void> {
-  const auroraEmpire = await ctx.db
+  const playerEmpire = await ctx.db
     .query("emp_states")
     .withIndex("by_gameId", (q) => q.eq("gameId", params.gameId))
     .collect()
-    .then((rows) => rows.find((row) => row.empireKey === "aurora") ?? null);
+    .then((rows) => rows.find((row) => row.empireKey === params.empireKey) ?? null);
 
-  if (auroraEmpire === null) {
-    throw new Error("Starter games require the Aurora empire to be seeded.");
+  if (playerEmpire === null) {
+    throw new Error(`Mission owner empire ${params.empireKey} was not seeded.`);
   }
 
   const playerName = await resolveStarterOwnerDisplayName(ctx, params.userId);
@@ -70,25 +72,166 @@ export async function assignStarterOwnerEmpireSeat(
       gameId: params.gameId,
       userId: params.userId,
       role: "empire",
-      empireId: auroraEmpire._id,
+      empireId: playerEmpire._id,
       joinedAt: Date.now(),
       isActive: true,
     });
   } else if (
     existingRole.role !== "empire" ||
-    existingRole.empireId !== auroraEmpire._id ||
+    existingRole.empireId !== playerEmpire._id ||
     !existingRole.isActive
   ) {
     await ctx.db.patch("usr_game_roles", existingRole._id, {
       role: "empire",
-      empireId: auroraEmpire._id,
+      empireId: playerEmpire._id,
       isActive: true,
     });
   }
 
-  await ctx.db.patch("emp_states", auroraEmpire._id, {
+  await ctx.db.patch("emp_states", playerEmpire._id, {
     controller: "human",
     playerName,
+  });
+}
+
+export async function assignStarterOwnerEmpireSeat(
+  ctx: MutationCtx,
+  params: { gameId: Id<"sim_games">; userId: Id<"users"> },
+): Promise<void> {
+  await assignOwnerEmpireSeat(ctx, {
+    gameId: params.gameId,
+    userId: params.userId,
+    empireKey: "aurora",
+  });
+}
+
+async function applyMissionScenarioIfNeeded(
+  ctx: MutationCtx,
+  params: { gameId: Id<"sim_games">; userId: Id<"users">; missionKey: string },
+): Promise<void> {
+  const game = await ctx.db.get("sim_games", params.gameId);
+  if (game === null || game.missionAppliedAt !== undefined) {
+    return;
+  }
+
+  const mission = await getMissionByKey(ctx, params.missionKey);
+  if (mission === null) {
+    throw new Error("Mission not found.");
+  }
+
+  const empires = await ctx.db
+    .query("emp_states")
+    .withIndex("by_gameId", (q) => q.eq("gameId", params.gameId))
+    .collect();
+  const empiresByKey = new Map(empires.map((empire) => [empire.empireKey, empire]));
+  const empiresByNpcKey = new Map(
+    empires
+      .filter((empire) => empire.npcPlayerKey !== undefined)
+      .map((empire) => [empire.npcPlayerKey!, empire]),
+  );
+
+  await assignOwnerEmpireSeat(ctx, {
+    gameId: params.gameId,
+    userId: params.userId,
+    empireKey: mission.scenario.playerEmpireKey,
+  });
+
+  for (const config of mission.scenario.empireConfigs) {
+    const empire =
+      (config.targetEmpireKey !== null ? empiresByKey.get(config.targetEmpireKey) : undefined) ??
+      (config.targetNpcPlayerKey !== null
+        ? empiresByNpcKey.get(config.targetNpcPlayerKey)
+        : undefined) ??
+      null;
+    if (empire === null) {
+      continue;
+    }
+
+    const empirePatch: {
+      controller?: "human" | "npc";
+      strategyJson?: string;
+      strategyStartMode?: "turn" | "attacked";
+      strategyStartTurn?: number;
+      strategyActivatedAtTurn?: number | undefined;
+      name?: string;
+      playerName?: string;
+      treasury?: number;
+    } = {};
+
+    if (config.controller !== null) {
+      empirePatch.controller = config.controller;
+    }
+    if (config.strategyLibraryKey !== null) {
+      const strategy = await getAutomationStrategyByKey(ctx, config.strategyLibraryKey);
+      if (strategy === null) {
+        throw new Error(`Mission strategy ${config.strategyLibraryKey} was not found.`);
+      }
+      empirePatch.strategyJson = strategy.strategyJson;
+    }
+    if (config.strategyStartMode !== null) {
+      empirePatch.strategyStartMode = config.strategyStartMode;
+      empirePatch.strategyActivatedAtTurn = undefined;
+    }
+    if (config.strategyStartTurn !== null) {
+      empirePatch.strategyStartTurn = config.strategyStartTurn;
+      empirePatch.strategyActivatedAtTurn = undefined;
+    }
+    if (config.empireNameOverride !== null) {
+      empirePatch.name = config.empireNameOverride;
+    }
+    if (config.playerNameOverride !== null) {
+      empirePatch.playerName = config.playerNameOverride;
+    }
+    if (config.treasuryDelta !== 0) {
+      empirePatch.treasury = empire.treasury + config.treasuryDelta;
+    }
+
+    if (Object.keys(empirePatch).length > 0) {
+      await ctx.db.patch("emp_states", empire._id, empirePatch);
+    }
+
+    if (empire.homeSystemId !== null) {
+      const homeSystem = await ctx.db.get("gal_systems", empire.homeSystemId);
+      if (homeSystem !== null) {
+        const homePatch: {
+          population?: number;
+          stockFood?: number;
+          stockWeapons?: number;
+          stockResearch?: number;
+          localTreasury?: number;
+        } = {};
+
+        if (config.homeworldPopulationDelta !== 0) {
+          homePatch.population = Math.max(
+            0,
+            (homeSystem.population ?? 0) + config.homeworldPopulationDelta,
+          );
+        }
+        if (config.homeworldStockFoodDelta !== 0) {
+          homePatch.stockFood = (homeSystem.stockFood ?? 0) + config.homeworldStockFoodDelta;
+        }
+        if (config.homeworldStockWeaponsDelta !== 0) {
+          homePatch.stockWeapons =
+            (homeSystem.stockWeapons ?? 0) + config.homeworldStockWeaponsDelta;
+        }
+        if (config.homeworldStockResearchDelta !== 0) {
+          homePatch.stockResearch =
+            (homeSystem.stockResearch ?? 0) + config.homeworldStockResearchDelta;
+        }
+        if (config.homeworldLocalTreasuryDelta !== 0) {
+          homePatch.localTreasury =
+            (homeSystem.localTreasury ?? 0) + config.homeworldLocalTreasuryDelta;
+        }
+
+        if (Object.keys(homePatch).length > 0) {
+          await ctx.db.patch("gal_systems", homeSystem._id, homePatch);
+        }
+      }
+    }
+  }
+
+  await ctx.db.patch("sim_games", params.gameId, {
+    missionAppliedAt: Date.now(),
   });
 }
 
@@ -100,6 +243,7 @@ export const createGame = mutation({
     seed: v.string(),
     npcEmpireKeys: v.optional(v.array(v.string())),
     automatedEmpireKeys: v.optional(v.array(v.string())),
+    missionKey: v.optional(v.string()),
     lobbyScenarioKey: v.optional(v.string()),
     retentionClass: v.optional(
       v.union(
@@ -115,7 +259,7 @@ export const createGame = mutation({
       throw new Error("Authentication required.");
     }
 
-    const npcEmpireKeys = normalizeNpcEmpireKeys(args.npcEmpireKeys ?? []);
+    const npcEmpireKeys = await normalizeNpcEmpireKeys(ctx, args.npcEmpireKeys ?? []);
 
     const seed = args.seed.trim();
     if (seed.length === 0) {
@@ -133,8 +277,10 @@ export const createGame = mutation({
       currentTurn: 0,
       seed,
       createdByUserId: userId,
-      ownerUserId: args.lobbyScenarioKey !== undefined ? userId : null,
-      lobbyScenarioKey: args.lobbyScenarioKey ?? null,
+      ownerUserId: args.lobbyScenarioKey !== undefined || args.missionKey !== undefined ? userId : null,
+      missionKey: args.missionKey ?? null,
+      lobbyScenarioKey: args.lobbyScenarioKey ?? args.missionKey ?? null,
+      missionAppliedAt: undefined,
       startedAt: null,
       endedAt: null,
       winnerEmpireKey: null,
@@ -186,8 +332,9 @@ export const createGame = mutation({
         }
       }
 
-      if (args.lobbyScenarioKey !== undefined) {
-        await assignStarterOwnerEmpireSeat(ctx, { gameId, userId });
+      const missionKey = args.missionKey ?? args.lobbyScenarioKey;
+      if (missionKey !== undefined) {
+        await applyMissionScenarioIfNeeded(ctx, { gameId, userId, missionKey });
       }
     }
 
@@ -207,8 +354,8 @@ export const startGame = mutation({
     if (game === null) {
       throw new Error("Game not found.");
     }
-    const isStarterOwner = game.ownerUserId !== null && game.ownerUserId === userId;
-    if (!isStarterOwner) {
+    const isOwnedMissionGame = game.ownerUserId !== null && game.ownerUserId === userId;
+    if (!isOwnedMissionGame) {
       await assertGameAdmin(ctx, args.gameId, userId);
     }
     if (game.status !== "lobby") {
@@ -235,6 +382,15 @@ export const startGame = mutation({
         gameId: args.gameId,
         mapKey: game.mapKey,
         colorPrefsUserId: userId,
+      });
+    }
+
+    const missionKey = game.missionKey ?? game.lobbyScenarioKey;
+    if (missionKey !== null && game.missionAppliedAt === undefined) {
+      await applyMissionScenarioIfNeeded(ctx, {
+        gameId: args.gameId,
+        userId,
+        missionKey,
       });
     }
 

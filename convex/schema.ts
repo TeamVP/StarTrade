@@ -19,7 +19,9 @@ export default defineSchema({
     seed: v.string(),
     createdByUserId: v.id("users"),
     ownerUserId: v.union(v.id("users"), v.null()),
+    missionKey: v.optional(v.union(v.string(), v.null())),
     lobbyScenarioKey: v.union(v.string(), v.null()),
+    missionAppliedAt: v.optional(v.number()),
     startedAt: v.union(v.number(), v.null()),
     endedAt: v.union(v.number(), v.null()),
     winnerEmpireKey: v.union(v.string(), v.null()),
@@ -75,14 +77,39 @@ export default defineSchema({
     .index("by_status", ["status"])
     .index("by_createdByUserId", ["createdByUserId"])
     .index("by_ownerUserId", ["ownerUserId"])
+    .index("by_ownerUserId_and_missionKey", ["ownerUserId", "missionKey"])
     .index("by_finalizationState", ["finalizationState"])
     .index("by_status_and_lastMeaningfulActivityAt", ["status", "lastMeaningfulActivityAt"])
     .index("by_ownerUserId_and_lobbyScenarioKey", ["ownerUserId", "lobbyScenarioKey"]),
+
+  sim_missions: defineTable({
+    key: v.string(),
+    name: v.string(),
+    description: v.string(),
+    mapKey: v.string(),
+    level: v.number(),
+    requiredWins: v.number(),
+    prerequisiteMissionKeys: v.array(v.string()),
+    published: v.boolean(),
+    sortOrder: v.number(),
+    retentionClass: v.union(
+      v.literal("discarded"),
+      v.literal("official"),
+      v.literal("archived_debug"),
+    ),
+    scenarioJson: v.string(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_key", ["key"])
+    .index("by_published_and_sortOrder", ["published", "sortOrder"])
+    .index("by_level_and_sortOrder", ["level", "sortOrder"]),
 
   sim_game_results: defineTable({
     gameId: v.id("sim_games"),
     name: v.string(),
     mapKey: v.string(),
+    missionKey: v.optional(v.union(v.string(), v.null())),
     lobbyScenarioKey: v.union(v.string(), v.null()),
     seed: v.string(),
     startedAt: v.union(v.number(), v.null()),
@@ -117,6 +144,7 @@ export default defineSchema({
     summaryJson: v.optional(v.string()),
   })
     .index("by_gameId", ["gameId"])
+    .index("by_missionKey", ["missionKey"])
     .index("by_isOfficial_and_endedAt", ["isOfficial", "endedAt"])
     .index("by_winnerUserId", ["winnerUserId"])
     .index("by_winnerNpcPlayerKey", ["winnerNpcPlayerKey"]),
@@ -288,6 +316,21 @@ export default defineSchema({
     .index("by_key", ["key"])
     .index("by_availableForHumans", ["availableForHumans"])
     .index("by_availableForNpcs", ["availableForNpcs"]),
+
+  /** Shared empire NPC catalog used by admin tooling and game seeding. */
+  emp_npc_players: defineTable({
+    key: v.string(),
+    playerName: v.string(),
+    empireName: v.string(),
+    colorHex: v.string(),
+    strategyLibraryKey: v.union(v.string(), v.null()),
+    isActive: v.boolean(),
+    sortOrder: v.number(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_key", ["key"])
+    .index("by_isActive_and_sortOrder", ["isActive", "sortOrder"]),
 
   /**
    * Per-user default colors for empire roster slots. Keys match `emp_states.empireKey` for

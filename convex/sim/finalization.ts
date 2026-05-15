@@ -189,6 +189,7 @@ async function upsertResultsForGame(
     gameId: game._id,
     name: game.name,
     mapKey: game.mapKey,
+    missionKey: game.missionKey ?? game.lobbyScenarioKey,
     lobbyScenarioKey: game.lobbyScenarioKey,
     seed: game.seed,
     startedAt: game.startedAt,
