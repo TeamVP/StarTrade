@@ -22,6 +22,8 @@ export const createGame = mutation({
     /** Per-game RNG seed (e.g. from `crypto.randomUUID()` on the client). */
     seed: v.string(),
     npcEmpireKeys: v.optional(v.array(v.string())),
+    automatedEmpireKeys: v.optional(v.array(v.string())),
+    lobbyScenarioKey: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
@@ -43,8 +45,12 @@ export const createGame = mutation({
       turnDurationMs: DEFAULT_TURN_DURATION_MS,
       currentTurn: 0,
       seed,
+      createdByUserId: userId,
+      ownerUserId: args.lobbyScenarioKey !== undefined ? userId : null,
+      lobbyScenarioKey: args.lobbyScenarioKey ?? null,
       startedAt: null,
       endedAt: null,
+      winnerEmpireKey: null,
       npcEmpireKeys,
     });
 
@@ -69,6 +75,24 @@ export const createGame = mutation({
         mapKey: args.mapKey,
         colorPrefsUserId: userId,
       });
+
+      const automatedEmpireKeys = new Set(args.automatedEmpireKeys ?? []);
+      if (automatedEmpireKeys.size > 0) {
+        const empires = await ctx.db
+          .query("emp_states")
+          .withIndex("by_gameId", (q) => q.eq("gameId", gameId))
+          .collect();
+        for (const empire of empires) {
+          if (!automatedEmpireKeys.has(empire.empireKey)) {
+            continue;
+          }
+          await ctx.db.patch("emp_states", empire._id, {
+            controller: "npc",
+            strategyJson: empire.strategyJson ?? "{}",
+            playerName: empire.playerName ?? `${empire.name} AI`,
+          });
+        }
+      }
     }
 
     return gameId;

@@ -84,6 +84,8 @@ import type * as sim_wipeGamePhases from "../sim/wipeGamePhases.js";
 import type * as trd_internal from "../trd/internal.js";
 import type * as trd_mutations from "../trd/mutations.js";
 import type * as trd_queries from "../trd/queries.js";
+import type * as usr_automationStrategyLibrary from "../usr/automationStrategyLibrary.js";
+import type * as usr_lobbyScenarios from "../usr/lobbyScenarios.js";
 import type * as usr_mutations from "../usr/mutations.js";
 import type * as usr_queries from "../usr/queries.js";
 
@@ -170,6 +172,8 @@ declare const fullApi: ApiFromModules<{
   "trd/internal": typeof trd_internal;
   "trd/mutations": typeof trd_mutations;
   "trd/queries": typeof trd_queries;
+  "usr/automationStrategyLibrary": typeof usr_automationStrategyLibrary;
+  "usr/lobbyScenarios": typeof usr_lobbyScenarios;
   "usr/mutations": typeof usr_mutations;
   "usr/queries": typeof usr_queries;
 }>;

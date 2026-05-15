@@ -5,6 +5,7 @@ import type { Id } from "../_generated/dataModel";
 import type { MutationCtx } from "../_generated/server";
 import { gameAllowsPlayerActions } from "../sim/helpers";
 import type { StrategicSliderKey, StrategicSliderOverrides } from "../sim/economy/strategicSliders";
+import { canonicalizeStrategyJson } from "../usr/automationStrategyLibrary";
 
 const STRATEGIC_LEVEL = v.union(
   v.literal("lowest"),
@@ -44,26 +45,6 @@ async function assertEmpireSeatForGame(
 }
 
 const HEX_COLOR_RE = /^#[0-9a-fA-F]{6}$/;
-
-function validateStrategyJson(strategyJson: string): string {
-  const trimmed = strategyJson.trim();
-  if (trimmed.length === 0) {
-    throw new Error("Strategy JSON cannot be empty.");
-  }
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(trimmed);
-  } catch {
-    throw new Error("Strategy JSON must be valid JSON.");
-  }
-
-  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-    throw new Error("Strategy JSON must be a JSON object.");
-  }
-
-  return JSON.stringify(parsed, null, 2);
-}
 
 export const adjustTreasury = mutation({
   args: {
@@ -154,7 +135,7 @@ export const updateEmpireMeta = mutation({
 
     if (args.strategyJson !== undefined) {
       patch.strategyJson =
-        args.strategyJson === null ? undefined : validateStrategyJson(args.strategyJson);
+        args.strategyJson === null ? undefined : canonicalizeStrategyJson(args.strategyJson);
     }
 
     await ctx.db.patch("emp_states", args.empireId, patch);

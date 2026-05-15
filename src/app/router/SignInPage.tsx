@@ -7,7 +7,7 @@ export function SignInPage() {
   return (
     <AppShell>
       <Authenticated>
-        <Navigate to="/admin" replace />
+        <Navigate to="/eplayer1/lobby" replace />
       </Authenticated>
       <Unauthenticated>
         <SignInCard />

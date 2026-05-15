@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "../../../../convex/_generated/api";
 import type { Doc, Id } from "../../../../convex/_generated/dataModel";
@@ -31,6 +31,605 @@ function validateStrategyText(text: string): string {
     throw new Error("Strategy JSON must be a JSON object.");
   }
   return JSON.stringify(parsed, null, 2);
+}
+
+function mutationErrorMessage(error: unknown): string {
+  const raw = error instanceof Error ? error.message : String(error);
+  return raw.replace(/^[\s\S]*?Error:\s*/g, "").trim() || "Something went wrong.";
+}
+
+function formatPreview(preview: {
+  stance: string;
+  earlyRush: boolean;
+  reserveShipsPct: number;
+  reinforceAttackedSystems: boolean;
+} | null): string {
+  if (preview === null) {
+    return "No automation preview available.";
+  }
+  return [
+    `Stance ${preview.stance}`,
+    `Reserve ${preview.reserveShipsPct}%`,
+    preview.earlyRush ? "Early rush on" : "Early rush off",
+    preview.reinforceAttackedSystems ? "Reinforce attacked worlds" : "No auto reinforcement",
+  ].join(" · ");
+}
+
+function formatTimestamp(value: number | undefined): string {
+  if (value === undefined) {
+    return "Never";
+  }
+  return new Date(value).toLocaleString();
+}
+
+async function copyTextToClipboard(text: string): Promise<void> {
+  if (typeof navigator === "undefined" || navigator.clipboard?.writeText === undefined) {
+    throw new Error("Clipboard access is unavailable in this browser.");
+  }
+  await navigator.clipboard.writeText(text);
+}
+
+type PublicAutomationStrategyRow = {
+  key: string;
+  name: string;
+  description: string;
+  tags: string[];
+  strategyJson: string;
+  preview: {
+    stance: string;
+    earlyRush: boolean;
+    reserveShipsPct: number;
+    reinforceAttackedSystems: boolean;
+  } | null;
+};
+
+type AutomationProfileRow = {
+  _id: Id<"usr_automation_profiles">;
+  name: string;
+  description?: string;
+  sourceKind: "custom" | "library";
+  sourceLibraryKey?: string;
+  overridesJson?: string;
+  strategyJson: string;
+  createdAt: number;
+  updatedAt: number;
+  lastUsedAt?: number;
+  sourceLibrary: PublicAutomationStrategyRow | null;
+  automationPreview: PublicAutomationStrategyRow["preview"];
+};
+
+function LibraryStrategyCard(props: {
+  strategy: PublicAutomationStrategyRow;
+  onCreate: (params: {
+    libraryKey: string;
+    name: string;
+    description: string | null;
+    overridesJson: string | null;
+  }) => Promise<void>;
+  onLoadStrategy: (strategyJson: string) => void;
+}) {
+  const [name, setName] = useState(`${props.strategy.name} Copy`);
+  const [description, setDescription] = useState(props.strategy.description);
+  const [overridesText, setOverridesText] = useState("");
+  const [isSaving, setIsSaving] = useState(false);
+  const [status, setStatus] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function saveToProfile() {
+    setIsSaving(true);
+    setStatus(null);
+    setError(null);
+    try {
+      await props.onCreate({
+        libraryKey: props.strategy.key,
+        name,
+        description,
+        overridesJson: overridesText.trim().length > 0 ? overridesText : null,
+      });
+      setStatus("Saved to your automation profiles.");
+      setOverridesText("");
+    } catch (saveError) {
+      setError(mutationErrorMessage(saveError));
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+  return (
+    <details className="rounded-lg border border-st-border bg-st-panel/50 p-3">
+      <summary className="cursor-pointer text-sm font-medium text-st-fg">{props.strategy.name}</summary>
+      <div className="mt-3 space-y-3">
+        <p className="text-xs text-st-muted">{props.strategy.description}</p>
+        <p className="text-[11px] text-st-muted">{formatPreview(props.strategy.preview)}</p>
+        <div className="flex flex-wrap gap-2 text-[11px] text-st-muted">
+          {props.strategy.tags.map((tag) => (
+            <span key={tag} className="rounded-full border border-st-border px-2 py-0.5">
+              {tag}
+            </span>
+          ))}
+        </div>
+        <div className="grid gap-3 md:grid-cols-2">
+          <label className="space-y-1 text-xs text-st-muted">
+            <span>Profile name</span>
+            <input
+              value={name}
+              onChange={(event) => setName(event.target.value)}
+              className="w-full rounded border border-st-border bg-st-panel px-3 py-2 text-sm text-st-fg outline-none focus:border-st-accent"
+            />
+          </label>
+          <label className="space-y-1 text-xs text-st-muted">
+            <span>Description</span>
+            <input
+              value={description}
+              onChange={(event) => setDescription(event.target.value)}
+              className="w-full rounded border border-st-border bg-st-panel px-3 py-2 text-sm text-st-fg outline-none focus:border-st-accent"
+            />
+          </label>
+        </div>
+        <label className="space-y-1 text-xs text-st-muted">
+          <span>Numeric overrides JSON</span>
+          <textarea
+            value={overridesText}
+            onChange={(event) => setOverridesText(event.target.value)}
+            rows={8}
+            spellCheck={false}
+            className="w-full rounded border border-st-border bg-slate-950/60 px-3 py-2 font-mono text-xs text-st-fg outline-none focus:border-st-accent"
+            placeholder='{"expansion":{"reserveShipsPct":22},"borderPolicy":{"attackAdvantageRequired":1.2}}'
+          />
+        </label>
+        <div className="flex flex-wrap gap-2">
+          <Button type="button" onClick={() => void saveToProfile()} disabled={isSaving}>
+            {isSaving ? "Saving..." : "Copy To My Profiles"}
+          </Button>
+          <Button
+            type="button"
+            variant="secondary"
+            onClick={() => props.onLoadStrategy(props.strategy.strategyJson)}
+          >
+            Load Into Editor
+          </Button>
+        </div>
+        {status !== null ? <p className="text-xs text-emerald-400">{status}</p> : null}
+        {error !== null ? <p className="text-xs text-red-400">{error}</p> : null}
+      </div>
+    </details>
+  );
+}
+
+function SavedAutomationProfileCard(props: {
+  profile: AutomationProfileRow;
+  onApply: (strategyJson: string) => Promise<void>;
+  onLoadStrategy: (strategyJson: string) => void;
+  onUpdateCustom: (params: {
+    profileId: Id<"usr_automation_profiles">;
+    name?: string;
+    description?: string | null;
+    strategyJson?: string;
+  }) => Promise<unknown>;
+  onUpdateLibrary: (params: {
+    profileId: Id<"usr_automation_profiles">;
+    name?: string;
+    description?: string | null;
+    overridesJson?: string | null;
+  }) => Promise<unknown>;
+  onDuplicate: (params: {
+    profileId: Id<"usr_automation_profiles">;
+    name?: string;
+  }) => Promise<unknown>;
+  onDelete: (profileId: Id<"usr_automation_profiles">) => Promise<unknown>;
+}) {
+  const { profile } = props;
+  const [name, setName] = useState(profile.name);
+  const [description, setDescription] = useState(profile.description ?? "");
+  const [strategyText, setStrategyText] = useState(profile.strategyJson);
+  const [overridesText, setOverridesText] = useState(profile.overridesJson ?? "");
+  const [isBusy, setIsBusy] = useState(false);
+  const [status, setStatus] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setName(profile.name);
+    setDescription(profile.description ?? "");
+    setStrategyText(profile.strategyJson);
+    setOverridesText(profile.overridesJson ?? "");
+  }, [profile]);
+
+  async function handleSave() {
+    setIsBusy(true);
+    setStatus(null);
+    setError(null);
+    try {
+      if (profile.sourceKind === "custom") {
+        await props.onUpdateCustom({
+          profileId: profile._id,
+          name,
+          description,
+          strategyJson: strategyText,
+        });
+      } else {
+        await props.onUpdateLibrary({
+          profileId: profile._id,
+          name,
+          description,
+          overridesJson: overridesText.trim().length > 0 ? overridesText : null,
+        });
+      }
+      setStatus("Saved profile changes.");
+    } catch (saveError) {
+      setError(mutationErrorMessage(saveError));
+    } finally {
+      setIsBusy(false);
+    }
+  }
+
+  async function handleApply() {
+    setIsBusy(true);
+    setStatus(null);
+    setError(null);
+    try {
+      await props.onApply(profile.strategyJson);
+      setStatus("Applied to the current empire.");
+    } catch (applyError) {
+      setError(mutationErrorMessage(applyError));
+    } finally {
+      setIsBusy(false);
+    }
+  }
+
+  async function handleDuplicate() {
+    setIsBusy(true);
+    setStatus(null);
+    setError(null);
+    try {
+      await props.onDuplicate({ profileId: profile._id, name: `${name} Copy` });
+      setStatus("Duplicated profile.");
+    } catch (duplicateError) {
+      setError(mutationErrorMessage(duplicateError));
+    } finally {
+      setIsBusy(false);
+    }
+  }
+
+  async function handleExport() {
+    setStatus(null);
+    setError(null);
+    try {
+      await copyTextToClipboard(profile.strategyJson);
+      setStatus("Copied strategy JSON to clipboard.");
+    } catch (copyError) {
+      setError(mutationErrorMessage(copyError));
+    }
+  }
+
+  async function handleDelete() {
+    setIsBusy(true);
+    setStatus(null);
+    setError(null);
+    try {
+      await props.onDelete(profile._id);
+    } catch (deleteError) {
+      setError(mutationErrorMessage(deleteError));
+      setIsBusy(false);
+    }
+  }
+
+  return (
+    <details className="rounded-lg border border-st-border bg-st-panel/50 p-3">
+      <summary className="cursor-pointer text-sm font-medium text-st-fg">{profile.name}</summary>
+      <div className="mt-3 space-y-3">
+        <div className="flex flex-wrap items-center gap-2 text-[11px] text-st-muted">
+          <span className="rounded-full border border-st-border px-2 py-0.5">
+            {profile.sourceKind === "library" ? "Library-derived" : "Custom"}
+          </span>
+          {profile.sourceLibrary !== null ? (
+            <span className="rounded-full border border-st-border px-2 py-0.5">
+              Source {profile.sourceLibrary.name}
+            </span>
+          ) : null}
+          <span>Updated {formatTimestamp(profile.updatedAt)}</span>
+          <span>Last used {formatTimestamp(profile.lastUsedAt)}</span>
+        </div>
+        <p className="text-[11px] text-st-muted">{formatPreview(profile.automationPreview)}</p>
+        <div className="grid gap-3 md:grid-cols-2">
+          <label className="space-y-1 text-xs text-st-muted">
+            <span>Profile name</span>
+            <input
+              value={name}
+              onChange={(event) => setName(event.target.value)}
+              className="w-full rounded border border-st-border bg-st-panel px-3 py-2 text-sm text-st-fg outline-none focus:border-st-accent"
+            />
+          </label>
+          <label className="space-y-1 text-xs text-st-muted">
+            <span>Description</span>
+            <input
+              value={description}
+              onChange={(event) => setDescription(event.target.value)}
+              className="w-full rounded border border-st-border bg-st-panel px-3 py-2 text-sm text-st-fg outline-none focus:border-st-accent"
+            />
+          </label>
+        </div>
+        {profile.sourceKind === "custom" ? (
+          <label className="space-y-1 text-xs text-st-muted">
+            <span>Strategy JSON</span>
+            <textarea
+              value={strategyText}
+              onChange={(event) => setStrategyText(event.target.value)}
+              rows={10}
+              spellCheck={false}
+              className="w-full rounded border border-st-border bg-slate-950/60 px-3 py-2 font-mono text-xs text-st-fg outline-none focus:border-st-accent"
+            />
+          </label>
+        ) : (
+          <label className="space-y-1 text-xs text-st-muted">
+            <span>Overrides JSON</span>
+            <textarea
+              value={overridesText}
+              onChange={(event) => setOverridesText(event.target.value)}
+              rows={8}
+              spellCheck={false}
+              className="w-full rounded border border-st-border bg-slate-950/60 px-3 py-2 font-mono text-xs text-st-fg outline-none focus:border-st-accent"
+              placeholder='{"expansion":{"reserveShipsPct":24}}'
+            />
+          </label>
+        )}
+        <div className="flex flex-wrap gap-2">
+          <Button type="button" onClick={() => void handleApply()} disabled={isBusy}>
+            Apply To Empire
+          </Button>
+          <Button
+            type="button"
+            variant="secondary"
+            onClick={() => props.onLoadStrategy(profile.strategyJson)}
+            disabled={isBusy}
+          >
+            Load Into Editor
+          </Button>
+          <Button type="button" variant="secondary" onClick={() => void handleSave()} disabled={isBusy}>
+            Save Changes
+          </Button>
+          <Button type="button" variant="secondary" onClick={() => void handleDuplicate()} disabled={isBusy}>
+            Duplicate
+          </Button>
+          <Button type="button" variant="outline" onClick={() => void handleExport()} disabled={isBusy}>
+            Export JSON
+          </Button>
+          <Button type="button" variant="ghost" onClick={() => void handleDelete()} disabled={isBusy}>
+            Delete
+          </Button>
+        </div>
+        {status !== null ? <p className="text-xs text-emerald-400">{status}</p> : null}
+        {error !== null ? <p className="text-xs text-red-400">{error}</p> : null}
+      </div>
+    </details>
+  );
+}
+
+function AutomationProfilesPanel(props: {
+  empire: Doc<"emp_states">;
+  strategyText: string;
+  setStrategyText: (value: string) => void;
+}) {
+  const publicStrategiesQuery = useQuery(api.usr.queries.listPublicAutomationStrategies, {});
+  const profilesQuery = useQuery(api.usr.queries.listMyAutomationProfiles, {});
+  const createCustomAutomationProfile = useMutation(api.usr.mutations.createCustomAutomationProfile);
+  const createAutomationProfileFromLibrary = useMutation(
+    api.usr.mutations.createAutomationProfileFromLibrary,
+  );
+  const updateCustomAutomationProfile = useMutation(api.usr.mutations.updateCustomAutomationProfile);
+  const updateLibraryAutomationProfile = useMutation(api.usr.mutations.updateLibraryAutomationProfile);
+  const duplicateMyAutomationProfile = useMutation(api.usr.mutations.duplicateMyAutomationProfile);
+  const deleteMyAutomationProfile = useMutation(api.usr.mutations.deleteMyAutomationProfile);
+  const updateEmpireMeta = useMutation(api.emp.mutations.updateEmpireMeta);
+
+  const publicStrategies = (publicStrategiesQuery ?? []) as PublicAutomationStrategyRow[];
+  const profiles = (profilesQuery ?? []) as AutomationProfileRow[];
+
+  const [saveName, setSaveName] = useState(`${props.empire.name} Strategy`);
+  const [saveDescription, setSaveDescription] = useState("");
+  const [importName, setImportName] = useState("");
+  const [importDescription, setImportDescription] = useState("");
+  const [importText, setImportText] = useState("");
+  const [status, setStatus] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [isBusy, setIsBusy] = useState(false);
+
+  async function saveCurrentStrategy() {
+    setIsBusy(true);
+    setStatus(null);
+    setError(null);
+    try {
+      const normalized = validateStrategyText(props.strategyText);
+      await createCustomAutomationProfile({
+        name: saveName,
+        description: saveDescription.trim().length > 0 ? saveDescription : null,
+        strategyJson: normalized,
+      });
+      setStatus("Saved the current strategy to your profile library.");
+    } catch (saveError) {
+      setError(mutationErrorMessage(saveError));
+    } finally {
+      setIsBusy(false);
+    }
+  }
+
+  async function importCustomProfile() {
+    setIsBusy(true);
+    setStatus(null);
+    setError(null);
+    try {
+      const normalized = validateStrategyText(importText);
+      await createCustomAutomationProfile({
+        name: importName,
+        description: importDescription.trim().length > 0 ? importDescription : null,
+        strategyJson: normalized,
+      });
+      setStatus("Imported strategy JSON into your profile library.");
+      setImportName("");
+      setImportDescription("");
+      setImportText("");
+    } catch (importError) {
+      setError(mutationErrorMessage(importError));
+    } finally {
+      setIsBusy(false);
+    }
+  }
+
+  async function applyProfileStrategy(strategyJson: string) {
+    const normalized = validateStrategyText(strategyJson);
+    await updateEmpireMeta({
+      empireId: props.empire._id,
+      strategyJson: normalized,
+    });
+    props.setStrategyText(normalized);
+    setStatus("Applied saved strategy to the empire editor and backend.");
+    setError(null);
+  }
+
+  return (
+    <div className="space-y-4 border-t border-st-border pt-4">
+      <div>
+        <h3 className="text-sm font-semibold uppercase tracking-wide text-st-muted">
+          Automation Profile Library
+        </h3>
+        <p className="mt-1 text-xs text-st-muted">
+          Save 0-n personal automation profiles, branch public presets with numeric overrides,
+          export/import JSON, and apply any saved profile to this empire.
+        </p>
+      </div>
+
+      <Card className="bg-st-panel/60">
+        <h4 className="text-sm font-medium text-st-fg">Save Current Strategy</h4>
+        <div className="mt-3 grid gap-3 md:grid-cols-2">
+          <label className="space-y-1 text-xs text-st-muted">
+            <span>Profile name</span>
+            <input
+              value={saveName}
+              onChange={(event) => setSaveName(event.target.value)}
+              className="w-full rounded border border-st-border bg-st-panel px-3 py-2 text-sm text-st-fg outline-none focus:border-st-accent"
+            />
+          </label>
+          <label className="space-y-1 text-xs text-st-muted">
+            <span>Description</span>
+            <input
+              value={saveDescription}
+              onChange={(event) => setSaveDescription(event.target.value)}
+              className="w-full rounded border border-st-border bg-st-panel px-3 py-2 text-sm text-st-fg outline-none focus:border-st-accent"
+            />
+          </label>
+        </div>
+        <div className="mt-3 flex flex-wrap gap-2">
+          <Button type="button" onClick={() => void saveCurrentStrategy()} disabled={isBusy}>
+            Save Current As Profile
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => void copyTextToClipboard(props.strategyText).then(
+              () => {
+                setStatus("Copied current strategy JSON to clipboard.");
+                setError(null);
+              },
+              (copyError: unknown) => {
+                setError(mutationErrorMessage(copyError));
+              },
+            )}
+          >
+            Export Current JSON
+          </Button>
+        </div>
+      </Card>
+
+      <details className="rounded-lg border border-st-border bg-st-panel/50 p-3">
+        <summary className="cursor-pointer text-sm font-medium text-st-fg">
+          Import Custom Strategy JSON
+        </summary>
+        <div className="mt-3 space-y-3">
+          <div className="grid gap-3 md:grid-cols-2">
+            <label className="space-y-1 text-xs text-st-muted">
+              <span>Profile name</span>
+              <input
+                value={importName}
+                onChange={(event) => setImportName(event.target.value)}
+                className="w-full rounded border border-st-border bg-st-panel px-3 py-2 text-sm text-st-fg outline-none focus:border-st-accent"
+              />
+            </label>
+            <label className="space-y-1 text-xs text-st-muted">
+              <span>Description</span>
+              <input
+                value={importDescription}
+                onChange={(event) => setImportDescription(event.target.value)}
+                className="w-full rounded border border-st-border bg-st-panel px-3 py-2 text-sm text-st-fg outline-none focus:border-st-accent"
+              />
+            </label>
+          </div>
+          <textarea
+            value={importText}
+            onChange={(event) => setImportText(event.target.value)}
+            rows={10}
+            spellCheck={false}
+            className="w-full rounded border border-st-border bg-slate-950/60 px-3 py-2 font-mono text-xs text-st-fg outline-none focus:border-st-accent"
+            placeholder='{"archetype":"My tuned branch","expansion":{"reserveShipsPct":20}}'
+          />
+          <Button type="button" onClick={() => void importCustomProfile()} disabled={isBusy}>
+            Import Profile
+          </Button>
+        </div>
+      </details>
+
+      <div className="space-y-3">
+        <h4 className="text-sm font-medium text-st-fg">Public Library</h4>
+        {publicStrategiesQuery === undefined ? (
+          <p className="text-xs text-st-muted">Loading public strategies...</p>
+        ) : (
+          publicStrategies.map((strategy) => (
+            <LibraryStrategyCard
+              key={strategy.key}
+              strategy={strategy}
+              onCreate={async (params) => {
+                await createAutomationProfileFromLibrary(params);
+                setStatus(`Saved ${params.name} to your automation profiles.`);
+                setError(null);
+              }}
+              onLoadStrategy={(strategyJson) => {
+                props.setStrategyText(strategyJson);
+                setStatus(`Loaded ${strategy.name} into the editor.`);
+                setError(null);
+              }}
+            />
+          ))
+        )}
+      </div>
+
+      <div className="space-y-3">
+        <h4 className="text-sm font-medium text-st-fg">Your Saved Profiles</h4>
+        {profilesQuery === undefined ? (
+          <p className="text-xs text-st-muted">Loading your profiles...</p>
+        ) : profiles.length === 0 ? (
+          <p className="text-xs text-st-muted">No saved automation profiles yet.</p>
+        ) : (
+          profiles.map((profile) => (
+            <SavedAutomationProfileCard
+              key={profile._id}
+              profile={profile}
+              onApply={applyProfileStrategy}
+              onLoadStrategy={(strategyJson) => {
+                props.setStrategyText(strategyJson);
+                setStatus(`Loaded ${profile.name} into the editor.`);
+                setError(null);
+              }}
+              onUpdateCustom={updateCustomAutomationProfile}
+              onUpdateLibrary={updateLibraryAutomationProfile}
+              onDuplicate={duplicateMyAutomationProfile}
+              onDelete={(profileId) => deleteMyAutomationProfile({ profileId })}
+            />
+          ))
+        )}
+      </div>
+
+      {status !== null ? <p className="text-xs text-emerald-400">{status}</p> : null}
+      {error !== null ? <p className="text-xs text-red-400">{error}</p> : null}
+    </div>
+  );
 }
 
 function EmpireEditor({ empire }: { empire: Doc<"emp_states"> }) {
@@ -209,6 +808,12 @@ function EmpireEditor({ empire }: { empire: Doc<"emp_states"> }) {
             </div>
           </div>
         </details>
+
+        <AutomationProfilesPanel
+          empire={empire}
+          strategyText={strategyText}
+          setStrategyText={setStrategyText}
+        />
 
         {status !== null ? <p className="text-xs text-emerald-400">{status}</p> : null}
         {error !== null ? <p className="text-xs text-red-400">{error}</p> : null}

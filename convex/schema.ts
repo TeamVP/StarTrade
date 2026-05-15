@@ -16,8 +16,12 @@ export default defineSchema({
     turnDurationMs: v.number(),
     currentTurn: v.number(),
     seed: v.string(),
+    createdByUserId: v.id("users"),
+    ownerUserId: v.union(v.id("users"), v.null()),
+    lobbyScenarioKey: v.union(v.string(), v.null()),
     startedAt: v.union(v.number(), v.null()),
     endedAt: v.union(v.number(), v.null()),
+    winnerEmpireKey: v.union(v.string(), v.null()),
     /** Global turn timer pause (real-time ms); cron skips resolve while Date.now() < this. */
     turnPausedUntilMs: v.optional(v.number()),
     /**
@@ -33,7 +37,11 @@ export default defineSchema({
     nextTurnAutoResolveDelayRatio: v.optional(v.number()),
     /** Selected NPC empire roster keys to seed when the map is created. */
     npcEmpireKeys: v.optional(v.array(v.string())),
-  }).index("by_status", ["status"]),
+  })
+    .index("by_status", ["status"])
+    .index("by_createdByUserId", ["createdByUserId"])
+    .index("by_ownerUserId", ["ownerUserId"])
+    .index("by_ownerUserId_and_lobbyScenarioKey", ["ownerUserId", "lobbyScenarioKey"]),
 
   sim_turns: defineTable({
     gameId: v.id("sim_games"),
@@ -112,6 +120,26 @@ export default defineSchema({
     timezone: v.union(v.string(), v.null()),
     analyticsConsent: v.boolean(),
   }).index("by_userId", ["userId"]),
+
+  /**
+   * User-owned automation profile library. Profiles may be custom or derived from the public
+   * library with saved numeric overrides. `strategyJson` is always the effective strategy that can
+   * be applied directly to an empire.
+   */
+  usr_automation_profiles: defineTable({
+    userId: v.id("users"),
+    name: v.string(),
+    description: v.optional(v.string()),
+    sourceKind: v.union(v.literal("custom"), v.literal("library")),
+    sourceLibraryKey: v.optional(v.string()),
+    overridesJson: v.optional(v.string()),
+    strategyJson: v.string(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+    lastUsedAt: v.optional(v.number()),
+  })
+    .index("by_userId", ["userId"])
+    .index("by_userId_and_name", ["userId", "name"]),
 
   /**
    * Per-user default colors for empire roster slots. Keys match `emp_states.empireKey` for

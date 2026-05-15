@@ -41,6 +41,13 @@ That runs [`@convex-dev/auth`](https://labs.convex.dev/auth/setup/manual) and se
 
 For Google OAuth, also set `AUTH_GOOGLE_ID` and `AUTH_GOOGLE_SECRET` on the same Convex deployment. In Google Cloud, use your Convex HTTP actions URL with `/api/auth/callback/google` as the redirect URI.
 
+For `https://www.starstrat.org/`, register these Google Cloud OAuth values:
+
+- Authorized JavaScript origins: `https://www.starstrat.org`
+- Authorized redirect URIs: `https://<your-production-convex-site>.convex.site/api/auth/callback/google`
+
+If you also serve the apex domain, add `https://starstrat.org` as a second JavaScript origin and redirect users consistently to one canonical host.
+
 Then restart `npm run dev`.
 
 If `predev` already ran `setup.mjs --once` and skipped auth setup, you still need to run `npm run setup:auth` once per new machine or deployment. You can also set `JWT_PRIVATE_KEY` and `JWKS` manually under your project in the [Convex dashboard](https://dashboard.convex.dev) → **Settings** → **Environment Variables** (see the manual setup link above for key generation).

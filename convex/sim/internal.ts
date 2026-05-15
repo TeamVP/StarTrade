@@ -131,6 +131,50 @@ async function refreshEmpirePauseBudgets(
   }
 }
 
+async function finishGameIfSingleEmpireRemains(
+  ctx: MutationCtx,
+  gameId: Id<"sim_games">,
+  turnNumber: number,
+): Promise<Doc<"emp_states"> | null> {
+  const empires = await ctx.db
+    .query("emp_states")
+    .withIndex("by_gameId", (q) => q.eq("gameId", gameId))
+    .collect();
+  const activeEmpires = empires.filter((empire) => !empire.isCollapsed);
+
+  if (activeEmpires.length !== 1) {
+    return null;
+  }
+
+  const winner = activeEmpires[0];
+  const game = await ctx.db.get("sim_games", gameId);
+  if (game === null || game.status === "finished") {
+    return winner;
+  }
+
+  await ctx.db.patch("sim_games", gameId, {
+    status: "finished",
+    endedAt: Date.now(),
+    winnerEmpireKey: winner.empireKey,
+    turnPausedUntilMs: undefined,
+    nextTurnAutoResolveDelayRatio: undefined,
+  });
+
+  await ctx.db.insert("sim_events", {
+    gameId,
+    turnNumber,
+    eventType: "game_finished",
+    actorType: "empire",
+    actorId: winner._id,
+    targetType: null,
+    targetId: null,
+    summary: `${winner.name} wins the game`,
+    payload: JSON.stringify({ winnerEmpireKey: winner.empireKey }),
+  });
+
+  return winner;
+}
+
 async function decayRecentBattleDamage(
   ctx: MutationCtx,
   gameId: Id<"sim_games">,
@@ -2007,6 +2051,11 @@ export const finalizeTurnResolution = internalMutation({
       resolutionPhase: undefined,
       resolvingStartedAt: undefined,
     });
+
+    const winner = await finishGameIfSingleEmpireRemains(ctx, args.gameId, t);
+    if (winner !== null) {
+      return { skipped: false, resolvedTurn: t, nextTurn: t };
+    }
 
     const gameBeforeAdvance = await ctx.db.get("sim_games", args.gameId);
     if (gameBeforeAdvance === null) {
