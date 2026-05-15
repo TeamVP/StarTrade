@@ -31,6 +31,31 @@ const ALLOWED_TOP_LEVEL_STRATEGY_KEYS = new Set([
   "defense",
 ]);
 
+function normalizeLegacyStrategyShape(strategy: JsonObject): JsonObject {
+  const legacyFoodShortageResponse = strategy.foodShortageResponse;
+  if (legacyFoodShortageResponse === undefined) {
+    return strategy;
+  }
+
+  const normalized: JsonObject = { ...strategy };
+  delete normalized.foodShortageResponse;
+
+  const economyValue = normalized.economy;
+  const economy: JsonObject =
+    typeof economyValue === "object" &&
+    economyValue !== null &&
+    !Array.isArray(economyValue)
+      ? { ...(economyValue as JsonObject) }
+      : {};
+
+  if (economy.foodShortageResponse === undefined) {
+    economy.foodShortageResponse = cloneJsonValue(legacyFoodShortageResponse);
+  }
+
+  normalized.economy = economy;
+  return normalized;
+}
+
 function asJsonObject(value: unknown, label: string): JsonObject {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     throw new Error(`${label} must be a JSON object.`);
@@ -55,7 +80,9 @@ function parseJsonObjectString(text: string, label: string): JsonObject {
 }
 
 export function canonicalizeStrategyJson(strategyJson: string): string {
-  const strategy = parseJsonObjectString(strategyJson, "Strategy JSON");
+  const strategy = normalizeLegacyStrategyShape(
+    parseJsonObjectString(strategyJson, "Strategy JSON"),
+  );
   for (const key of Object.keys(strategy)) {
     if (!ALLOWED_TOP_LEVEL_STRATEGY_KEYS.has(key)) {
       throw new Error(`Unsupported strategy key: ${key}`);
@@ -68,7 +95,9 @@ export function canonicalizeOverridesJson(overridesJson: string | null): string 
   if (overridesJson === null) {
     return null;
   }
-  const overrides = parseJsonObjectString(overridesJson, "Overrides JSON");
+  const overrides = normalizeLegacyStrategyShape(
+    parseJsonObjectString(overridesJson, "Overrides JSON"),
+  );
   for (const key of Object.keys(overrides)) {
     if (!ALLOWED_TOP_LEVEL_STRATEGY_KEYS.has(key)) {
       throw new Error(`Unsupported override key: ${key}`);
