@@ -87,6 +87,7 @@ type AutomationProfileRow = {
   _id: Id<"usr_automation_profiles">;
   name: string;
   description?: string;
+  isActive?: boolean;
   sourceKind: "custom" | "library";
   sourceLibraryKey?: string;
   overridesJson?: string;
@@ -422,7 +423,8 @@ function AutomationProfilesPanel(props: {
   const updateEmpireMeta = useMutation(api.emp.mutations.updateEmpireMeta);
 
   const publicStrategies = (publicStrategiesQuery ?? []) as PublicAutomationStrategyRow[];
-  const profiles = (profilesQuery ?? []) as AutomationProfileRow[];
+  const profilesAll = (profilesQuery ?? []) as AutomationProfileRow[];
+  const profiles = profilesAll.filter((profile) => profile.isActive ?? true);
 
   const [saveName, setSaveName] = useState(`${props.empire.name} Strategy`);
   const [saveDescription, setSaveDescription] = useState("");
@@ -494,6 +496,9 @@ function AutomationProfilesPanel(props: {
         <p className="mt-1 text-xs text-st-muted">
           Save 0-n personal automation profiles, branch public presets with numeric overrides,
           export/import JSON, and apply any saved profile to this empire.
+          {profilesAll.length > profiles.length
+            ? ` ${profilesAll.length - profiles.length} inactive roster profile${profilesAll.length - profiles.length === 1 ? " is" : "s are"} hidden here.`
+            : ""}
         </p>
       </div>
 

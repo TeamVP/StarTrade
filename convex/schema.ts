@@ -6,6 +6,7 @@ export default defineSchema({
   ...authTables,
   sim_games: defineTable({
     name: v.string(),
+    urlCode: v.optional(v.string()),
     status: v.union(
       v.literal("lobby"),
       v.literal("running"),
@@ -70,6 +71,7 @@ export default defineSchema({
     /** Selected NPC empire roster keys to seed when the map is created. */
     npcEmpireKeys: v.optional(v.array(v.string())),
   })
+    .index("by_urlCode", ["urlCode"])
     .index("by_status", ["status"])
     .index("by_createdByUserId", ["createdByUserId"])
     .index("by_ownerUserId", ["ownerUserId"])
@@ -256,6 +258,7 @@ export default defineSchema({
     userId: v.id("users"),
     name: v.string(),
     description: v.optional(v.string()),
+    isActive: v.optional(v.boolean()),
     sourceKind: v.union(v.literal("custom"), v.literal("library")),
     sourceLibraryKey: v.optional(v.string()),
     overridesJson: v.optional(v.string()),

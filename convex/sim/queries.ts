@@ -18,6 +18,36 @@ export const getGame = query({
   },
 });
 
+export const resolveGameRoute = query({
+  args: { routeKey: v.string() },
+  handler: async (ctx, args) => {
+    const routeKey = args.routeKey.trim();
+    if (routeKey.length === 0) {
+      return null;
+    }
+
+    const byUrlCode = await ctx.db
+      .query("sim_games")
+      .withIndex("by_urlCode", (q) => q.eq("urlCode", routeKey))
+      .unique();
+    if (byUrlCode !== null) {
+      return { gameId: byUrlCode._id, urlCode: byUrlCode.urlCode ?? null };
+    }
+
+    const normalizedId = ctx.db.normalizeId("sim_games", routeKey);
+    if (normalizedId === null) {
+      return null;
+    }
+
+    const game = await ctx.db.get(normalizedId);
+    if (game === null) {
+      return null;
+    }
+
+    return { gameId: game._id, urlCode: game.urlCode ?? null };
+  },
+});
+
 export const getDurableGameResult = query({
   args: { gameId: v.id("sim_games") },
   handler: async (ctx, args) => {

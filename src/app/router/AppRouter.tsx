@@ -36,6 +36,18 @@ const AdminDatabasePage = lazyNamedComponent(
   () => import("@/app/router/AdminDatabasePage"),
   "AdminDatabasePage",
 );
+const AdminStrategiesPage = lazyNamedComponent(
+  () => import("@/app/router/AdminStrategiesPage"),
+  "AdminStrategiesPage",
+);
+const AdminEmpireNpcsPage = lazyNamedComponent(
+  () => import("@/app/router/AdminEmpireNpcsPage"),
+  "AdminEmpireNpcsPage",
+);
+const AdminTraderNpcsPage = lazyNamedComponent(
+  () => import("@/app/router/AdminTraderNpcsPage"),
+  "AdminTraderNpcsPage",
+);
 const GamesPage = lazyNamedComponent(() => import("@/app/router/GamesPage"), "GamesPage");
 const FleetPage = lazyNamedComponent(() => import("@/app/router/FleetPage"), "FleetPage");
 const CombatPage = lazyNamedComponent(() => import("@/app/router/CombatPage"), "CombatPage");
@@ -52,6 +64,7 @@ const UserAreaLayout = lazyNamedComponent(
 );
 const LobbyPage = lazyNamedComponent(() => import("@/app/router/LobbyPage"), "LobbyPage");
 const ProfilePage = lazyNamedComponent(() => import("@/app/router/ProfilePage"), "ProfilePage");
+const StratPage = lazyNamedComponent(() => import("@/app/router/StratPage"), "StratPage");
 const PrivacyPolicyPage = lazyNamedComponent(
   () => import("@/app/router/PrivacyPolicyPage"),
   "PrivacyPolicyPage",
@@ -124,6 +137,9 @@ const adminChildRoutes = [
   { path: "history", element: <HistoryPage /> },
   { path: "results", element: <ResultsPage /> },
   { path: "db", element: <AdminDatabasePage /> },
+  { path: "strategies", element: <AdminStrategiesPage /> },
+  { path: "empire-npcs", element: <AdminEmpireNpcsPage /> },
+  { path: "trader-npcs", element: <AdminTraderNpcsPage /> },
   { path: "balance", element: <BalancePage /> },
   { path: "users", element: <AdminUsersPage /> },
 ] as const;
@@ -160,6 +176,11 @@ const router = createBrowserRouter([
     children: [{ index: true, element: <ProfilePage /> }],
   },
   {
+    path: "/strat",
+    element: <UserAreaLayout />,
+    children: [{ index: true, element: <StratPage /> }],
+  },
+  {
     path: "/legals/privacy",
     element: <PrivacyPolicyPage />,
   },
@@ -180,6 +201,7 @@ const router = createBrowserRouter([
   {
     path: "/game/:gameId",
     element: <GameRoutePage />,
+    children: [...playerChildRoutes],
   },
   {
     path: "/admin",

@@ -3,7 +3,7 @@ import { Card } from "@/components/ui/card";
 import { GalaxyViewport } from "@/features/galaxy/components/GalaxyViewport";
 import { GalaxyMapNavProvider } from "@/features/galaxy/context/GalaxyMapNavContext";
 import { EmpirePanel } from "@/features/empire/components/EmpirePanel";
-import { usePlayerEmpireId, usePlayerPreview } from "@/features/player/PlayerPreviewContext";
+import { usePlayerEmpireId, usePlayerGameMembership } from "@/features/player/PlayerPreviewContext";
 
 function focusFleetIdFromState(state: unknown): string | null {
   if (state === null || typeof state !== "object") return null;
@@ -13,8 +13,8 @@ function focusFleetIdFromState(state: unknown): string | null {
 
 export function PlayerHomePage() {
   const location = useLocation();
-  const { empireName } = usePlayerPreview();
   const empireId = usePlayerEmpireId();
+  const membership = usePlayerGameMembership();
   const focusFleetId = focusFleetIdFromState(location.state);
 
   const aside =
@@ -26,8 +26,17 @@ export function PlayerHomePage() {
           Empire Snapshot
         </h2>
         <p className="mt-3 text-sm text-st-muted">
-          No empire named <span className="font-medium text-st-fg">{empireName}</span> appears in
-          the active game. Seed a map that includes this faction or choose another game from Lobby.
+          {membership.isSpectator ? (
+            <>
+              You joined this game as <span className="font-medium text-st-fg">{membership.label}</span>.
+              Spectators can inspect the map, but they do not have an empire snapshot.
+            </>
+          ) : (
+            <>
+              No empire named <span className="font-medium text-st-fg">{membership.label}</span> appears in
+              the active game. Seed a map that includes this faction or choose another game from Lobby.
+            </>
+          )}
         </p>
       </Card>
     );

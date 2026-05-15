@@ -3,7 +3,9 @@ export const IRON_DOMINION_EMPIRE_NAME = "Iron Dominion";
 
 export type PlayerPreviewRouteConfig = {
   basePath: string;
-  empireName: string;
+  empireName: string | null;
+  resolveMembershipFromActiveGame?: boolean;
+  spectatorLabel?: string;
 };
 
 export const PLAYER_PREVIEW_BY_PATH: Record<

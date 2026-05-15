@@ -111,6 +111,44 @@ export const listMyRoles = query({
   },
 });
 
+export const getMyGameMembership = query({
+  args: { gameId: v.id("sim_games") },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (userId === null) {
+      return null;
+    }
+
+    const role = await ctx.db
+      .query("usr_game_roles")
+      .withIndex("by_gameId_and_userId", (q) =>
+        q.eq("gameId", args.gameId).eq("userId", userId),
+      )
+      .unique();
+
+    if (role === null || !role.isActive) {
+      return {
+        role: null,
+        empireId: null,
+        empireName: null,
+        isEmpirePlayer: false,
+        isSpectator: true,
+      };
+    }
+
+    const empire = role.empireId === null ? null : await ctx.db.get("emp_states", role.empireId);
+    const isEmpirePlayer = role.role === "empire" && empire !== null;
+
+    return {
+      role: role.role,
+      empireId: empire?._id ?? null,
+      empireName: empire?.name ?? null,
+      isEmpirePlayer,
+      isSpectator: role.role === "observer" || !isEmpirePlayer,
+    };
+  },
+});
+
 export const listGamePlayersForAdmin = query({
   args: { gameId: v.id("sim_games"), limit: v.number() },
   handler: async (ctx, args) => {

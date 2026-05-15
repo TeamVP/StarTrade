@@ -18,6 +18,24 @@ const liveLinks = [
 const adminLinks = [
   { to: "/admin/db", label: "Database", description: "Database health, cleanup backlog, and maintenance actions." },
   { to: "/admin/users", label: "Users", description: "View auth users and create new user records." },
+  {
+    to: "/admin/strategies",
+    label: "Strategies",
+    description:
+      "Manage the strategy library, edit strategy JSON, and control availability for NPCs and human users.",
+  },
+  {
+    to: "/admin/empire-npcs",
+    label: "Empire NPCs",
+    description:
+      "Manage NPC empire players, edit their metadata, and choose strategies from the library.",
+  },
+  {
+    to: "/admin/trader-npcs",
+    label: "Trader NPCs",
+    description:
+      "Manage NPC trader players, edit their metadata, and assign strategies from the library.",
+  },
 ] as const;
 
 function AdminLinkCard(props: { to: string; label: string; description: string }) {

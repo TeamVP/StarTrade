@@ -39,9 +39,9 @@ export function LobbyPage() {
     });
   }, [ensureMyStarterGames]);
 
-  function selectGame(gameId: typeof selectedGameId) {
+  function selectGame(gameId: typeof selectedGameId, routeKey?: string | null) {
     setSelectedGameId(gameId);
-    void navigate(`/game/${gameId}`);
+    void navigate(`/game/${routeKey ?? gameId}`);
   }
 
   async function onScenarioAction(entry: NonNullable<typeof lobbyState>["games"][number]) {
@@ -54,7 +54,7 @@ export function LobbyPage() {
     try {
       if (entry.game.status === "lobby") {
         await startGame({ gameId: entry.game._id });
-        selectGame(entry.game._id);
+        selectGame(entry.game._id, entry.game.urlCode);
         return;
       }
 
@@ -65,7 +65,7 @@ export function LobbyPage() {
         return;
       }
 
-      selectGame(entry.game._id);
+      selectGame(entry.game._id, entry.game.urlCode);
     } catch (mutationError) {
       const message = mutationError instanceof Error ? mutationError.message : String(mutationError);
       setError(message.replace(/^[\s\S]*?Error:\s*/g, "").trim());

@@ -3,19 +3,20 @@ import { Navigate, NavLink, Outlet } from "react-router-dom";
 import { AppShell } from "@/app/layout/AppShell";
 import { ActiveGameProvider } from "@/features/galaxy/context/ActiveGameContext";
 import { api } from "../../../convex/_generated/api";
-import { SignOutButton } from "@/features/usr/components/SignOutButton";
+import { UserHeaderActions } from "@/features/usr/components/UserHeaderActions";
 import { cn } from "@/lib/utils";
 
 const links = [
   { to: "/lobby", label: "Lobby", end: true },
   { to: "/profile", label: "Profile", end: true },
+  { to: "/strat", label: "Strategies", end: true },
 ] as const;
 
 export function UserAreaLayout() {
   const account = useQuery(api.usr.queries.getMyAccount, {});
 
   return (
-    <AppShell nav={<UserNav />} headerTrailing={<SignOutButton />}>
+    <AppShell nav={<UserNav />} headerTrailing={<UserHeaderActions />}>
       <Authenticated>
         <ActiveGameProvider
           key={account?.user._id ?? "user-area"}

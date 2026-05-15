@@ -1,6 +1,8 @@
-import { useQuery } from "convex/react";
+import { useEffect, useState } from "react";
+import { useMutation, useQuery } from "convex/react";
 import { api } from "../../../convex/_generated/api";
 import { Card } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
 import { SignOutButton } from "@/features/usr/components/SignOutButton";
 
 function initialsFromName(name: string | null | undefined, email: string | null | undefined): string {
@@ -14,6 +16,23 @@ function initialsFromName(name: string | null | undefined, email: string | null 
 
 export function ProfilePage() {
   const account = useQuery(api.usr.queries.getMyAccount, {});
+  const upsertMyProfile = useMutation(api.usr.mutations.upsertMyProfile);
+  const [displayNameInput, setDisplayNameInput] = useState("");
+  const [avatarUrlInput, setAvatarUrlInput] = useState("");
+  const [timezoneInput, setTimezoneInput] = useState("");
+  const [analyticsConsent, setAnalyticsConsent] = useState(false);
+  const [saveState, setSaveState] = useState<"idle" | "saving" | "saved">("idle");
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (account === undefined || account === null) {
+      return;
+    }
+    setDisplayNameInput(account.profile?.displayName ?? account.user.name ?? "");
+    setAvatarUrlInput(account.profile?.avatarUrl ?? account.user.image ?? "");
+    setTimezoneInput(account.profile?.timezone ?? "");
+    setAnalyticsConsent(account.profile?.analyticsConsent ?? false);
+  }, [account]);
 
   const displayName = account?.profile?.displayName ?? account?.user.name ?? "Gamer profile";
   const email = account?.user.email ?? "No email on file";
@@ -22,6 +41,25 @@ export function ProfilePage() {
     account?.profile?.displayName ?? account?.user.name,
     account?.user.email,
   );
+
+  async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setError(null);
+    setSaveState("saving");
+    try {
+      await upsertMyProfile({
+        displayName: displayNameInput,
+        avatarUrl: avatarUrlInput.trim().length > 0 ? avatarUrlInput.trim() : null,
+        timezone: timezoneInput.trim().length > 0 ? timezoneInput.trim() : null,
+        analyticsConsent,
+      });
+      setSaveState("saved");
+    } catch (mutationError) {
+      const message = mutationError instanceof Error ? mutationError.message : String(mutationError);
+      setError(message.replace(/^[\s\S]*?Error:\s*/g, "").trim());
+      setSaveState("idle");
+    }
+  }
 
   return (
     <div className="w-full px-4 py-4 sm:px-6">
@@ -53,7 +91,76 @@ export function ProfilePage() {
         </Card>
 
         <Card>
-          <h2 className="text-sm font-semibold uppercase tracking-wide text-st-muted">Account</h2>
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <h2 className="text-sm font-semibold uppercase tracking-wide text-st-muted">Account</h2>
+              <p className="mt-2 text-sm text-st-muted">
+                Update the profile details shown across lobbies, scoreboards, and player seats.
+              </p>
+            </div>
+            {saveState === "saved" ? (
+              <span className="rounded border border-emerald-500/40 bg-emerald-950/30 px-2 py-1 text-xs font-medium text-emerald-200">
+                Saved
+              </span>
+            ) : null}
+          </div>
+          <form className="mt-4 grid gap-4" onSubmit={handleSubmit}>
+            <label className="grid gap-2 text-sm text-st-muted">
+              <span className="text-xs uppercase tracking-wide">Display name</span>
+              <input
+                value={displayNameInput}
+                onChange={(event) => {
+                  setDisplayNameInput(event.target.value);
+                  setSaveState("idle");
+                }}
+                className="rounded-md border border-st-border bg-st-bg px-3 py-2 text-sm text-st-fg outline-none transition-colors focus:border-st-accent"
+                placeholder="Enter your display name"
+              />
+            </label>
+            <label className="grid gap-2 text-sm text-st-muted">
+              <span className="text-xs uppercase tracking-wide">Avatar URL</span>
+              <input
+                value={avatarUrlInput}
+                onChange={(event) => {
+                  setAvatarUrlInput(event.target.value);
+                  setSaveState("idle");
+                }}
+                className="rounded-md border border-st-border bg-st-bg px-3 py-2 text-sm text-st-fg outline-none transition-colors focus:border-st-accent"
+                placeholder="https://example.com/avatar.png"
+              />
+            </label>
+            <label className="grid gap-2 text-sm text-st-muted">
+              <span className="text-xs uppercase tracking-wide">Timezone</span>
+              <input
+                value={timezoneInput}
+                onChange={(event) => {
+                  setTimezoneInput(event.target.value);
+                  setSaveState("idle");
+                }}
+                className="rounded-md border border-st-border bg-st-bg px-3 py-2 text-sm text-st-fg outline-none transition-colors focus:border-st-accent"
+                placeholder="America/New_York"
+              />
+            </label>
+            <label className="flex items-center gap-3 rounded border border-st-border bg-st-bg px-3 py-3 text-sm text-st-muted">
+              <input
+                type="checkbox"
+                checked={analyticsConsent}
+                onChange={(event) => {
+                  setAnalyticsConsent(event.target.checked);
+                  setSaveState("idle");
+                }}
+                className="accent-cyan-400"
+              />
+              Allow analytics for improving the game experience.
+            </label>
+            {error ? <p className="text-sm text-red-300">{error}</p> : null}
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-sm text-st-muted">Email is managed by your sign-in provider.</p>
+              <Button type="submit" disabled={saveState === "saving" || account === undefined || account === null}>
+                {saveState === "saving" ? "Saving..." : "Save profile"}
+              </Button>
+            </div>
+          </form>
           <dl className="mt-4 grid gap-4 text-sm text-st-muted sm:grid-cols-2">
             <div className="rounded border border-st-border bg-st-bg p-3">
               <dt className="text-xs uppercase tracking-wide">Display name</dt>

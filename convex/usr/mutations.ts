@@ -2,6 +2,7 @@ import { mutation } from "../_generated/server";
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { api } from "../_generated/api";
+import { assignStarterOwnerEmpireSeat } from "../sim/mutations";
 import { getStarterLobbyScenario, STARTER_LOBBY_SCENARIOS } from "./lobbyScenarios";
 import {
   buildStrategyFromBaseAndOverrides,
@@ -108,6 +109,7 @@ export const createCustomAutomationProfile = mutation({
       userId,
       name: normalizeProfileName(args.name),
       description: normalizeOptionalDescription(args.description),
+      isActive: true,
       sourceKind: "custom",
       strategyJson: canonicalizeStrategyJson(args.strategyJson),
       createdAt: now,
@@ -139,6 +141,7 @@ export const createAutomationProfileFromLibrary = mutation({
       userId,
       name: normalizeProfileName(args.name),
       description: normalizeOptionalDescription(args.description),
+      isActive: true,
       sourceKind: "library",
       sourceLibraryKey: libraryStrategy.key,
       overridesJson: built.normalizedOverridesJson ?? undefined,
@@ -154,6 +157,7 @@ export const updateCustomAutomationProfile = mutation({
     profileId: v.id("usr_automation_profiles"),
     name: v.optional(v.string()),
     description: v.optional(v.union(v.string(), v.null())),
+    isActive: v.optional(v.boolean()),
     strategyJson: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -166,6 +170,7 @@ export const updateCustomAutomationProfile = mutation({
     const patch: {
       name?: string;
       description?: string | undefined;
+      isActive?: boolean;
       strategyJson?: string;
       updatedAt: number;
     } = { updatedAt: Date.now() };
@@ -175,6 +180,9 @@ export const updateCustomAutomationProfile = mutation({
     }
     if (args.description !== undefined) {
       patch.description = normalizeOptionalDescription(args.description);
+    }
+    if (args.isActive !== undefined) {
+      patch.isActive = args.isActive;
     }
     if (args.strategyJson !== undefined) {
       patch.strategyJson = canonicalizeStrategyJson(args.strategyJson);
@@ -190,6 +198,7 @@ export const updateLibraryAutomationProfile = mutation({
     profileId: v.id("usr_automation_profiles"),
     name: v.optional(v.string()),
     description: v.optional(v.union(v.string(), v.null())),
+    isActive: v.optional(v.boolean()),
     overridesJson: v.optional(v.union(v.string(), v.null())),
   },
   handler: async (ctx, args) => {
@@ -215,6 +224,7 @@ export const updateLibraryAutomationProfile = mutation({
     const patch: {
       name?: string;
       description?: string | undefined;
+      isActive?: boolean;
       overridesJson?: string | undefined;
       strategyJson: string;
       updatedAt: number;
@@ -230,8 +240,27 @@ export const updateLibraryAutomationProfile = mutation({
     if (args.description !== undefined) {
       patch.description = normalizeOptionalDescription(args.description);
     }
+    if (args.isActive !== undefined) {
+      patch.isActive = args.isActive;
+    }
 
     await ctx.db.patch("usr_automation_profiles", profile._id, patch);
+    return profile._id;
+  },
+});
+
+export const setAutomationProfileActive = mutation({
+  args: {
+    profileId: v.id("usr_automation_profiles"),
+    isActive: v.boolean(),
+  },
+  handler: async (ctx, args) => {
+    const userId = await requireAuthUserId(ctx);
+    const profile = await getOwnedAutomationProfileOrThrow(ctx, userId, args.profileId);
+    await ctx.db.patch("usr_automation_profiles", profile._id, {
+      isActive: args.isActive,
+      updatedAt: Date.now(),
+    });
     return profile._id;
   },
 });
@@ -252,6 +281,7 @@ export const duplicateMyAutomationProfile = mutation({
           ? normalizeProfileName(args.name)
           : `${profile.name} Copy`,
       description: profile.description,
+      isActive: profile.isActive ?? true,
       sourceKind: profile.sourceKind,
       sourceLibraryKey: profile.sourceLibraryKey,
       overridesJson: profile.overridesJson,
@@ -297,6 +327,7 @@ export const saveMyEmpireAutomationProfile = mutation({
       userId,
       name: normalizeProfileName(args.name),
       description: normalizeOptionalDescription(args.description),
+      isActive: true,
       sourceKind: "custom",
       strategyJson: canonicalizeStrategyJson(empire.strategyJson),
       createdAt: now,
@@ -352,6 +383,7 @@ export const ensureMyStarterGames = mutation({
         )
         .take(1);
       if (existing.length > 0) {
+        await assignStarterOwnerEmpireSeat(ctx, { gameId: existing[0]!._id, userId });
         continue;
       }
 

@@ -16,6 +16,103 @@ import { normalizeNpcEmpireKeys } from "../seed/npcEmpirePlayers";
 import { DEFAULT_TURN_DURATION_MS } from "./turnTiming";
 import { touchGameMeaningfulActivity } from "./helpers";
 
+const GAME_URL_CODE_LENGTH = 16;
+
+function generateGameUrlCode(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(GAME_URL_CODE_LENGTH));
+  return Array.from(bytes, (byte) => (byte % 36).toString(36)).join("");
+}
+
+async function createUniqueGameUrlCode(ctx: MutationCtx): Promise<string> {
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const urlCode = generateGameUrlCode();
+    const existing = await ctx.db
+      .query("sim_games")
+      .withIndex("by_urlCode", (q) => q.eq("urlCode", urlCode))
+      .unique();
+    if (existing === null) {
+      return urlCode;
+    }
+  }
+
+  throw new Error("Unable to allocate a unique game URL code.");
+}
+
+async function resolveStarterOwnerDisplayName(
+  ctx: MutationCtx,
+  userId: Id<"users">,
+): Promise<string> {
+  const profile = await ctx.db
+    .query("usr_profiles")
+    .withIndex("by_userId", (q) => q.eq("userId", userId))
+    .unique();
+  if (profile !== null && profile.displayName.trim().length > 0) {
+    return profile.displayName.trim();
+  }
+
+  const user = await ctx.db.get("users", userId);
+  const userName = user?.name?.trim();
+  if (userName && userName.length > 0) {
+    return userName;
+  }
+
+  const email = user?.email?.trim();
+  if (email && email.length > 0) {
+    return email;
+  }
+
+  return "Player";
+}
+
+export async function assignStarterOwnerEmpireSeat(
+  ctx: MutationCtx,
+  params: { gameId: Id<"sim_games">; userId: Id<"users"> },
+): Promise<void> {
+  const auroraEmpire = await ctx.db
+    .query("emp_states")
+    .withIndex("by_gameId", (q) => q.eq("gameId", params.gameId))
+    .collect()
+    .then((rows) => rows.find((row) => row.empireKey === "aurora") ?? null);
+
+  if (auroraEmpire === null) {
+    throw new Error("Starter games require the Aurora empire to be seeded.");
+  }
+
+  const playerName = await resolveStarterOwnerDisplayName(ctx, params.userId);
+  const existingRole = await ctx.db
+    .query("usr_game_roles")
+    .withIndex("by_gameId_and_userId", (q) =>
+      q.eq("gameId", params.gameId).eq("userId", params.userId),
+    )
+    .unique();
+
+  if (existingRole === null) {
+    await ctx.db.insert("usr_game_roles", {
+      gameId: params.gameId,
+      userId: params.userId,
+      role: "empire",
+      empireId: auroraEmpire._id,
+      joinedAt: Date.now(),
+      isActive: true,
+    });
+  } else if (
+    existingRole.role !== "empire" ||
+    existingRole.empireId !== auroraEmpire._id ||
+    !existingRole.isActive
+  ) {
+    await ctx.db.patch("usr_game_roles", existingRole._id, {
+      role: "empire",
+      empireId: auroraEmpire._id,
+      isActive: true,
+    });
+  }
+
+  await ctx.db.patch("emp_states", auroraEmpire._id, {
+    controller: "human",
+    playerName,
+  });
+}
+
 export const createGame = mutation({
   args: {
     name: v.string(),
@@ -47,8 +144,10 @@ export const createGame = mutation({
     }
 
     const now = Date.now();
+    const urlCode = await createUniqueGameUrlCode(ctx);
     const gameId = await ctx.db.insert("sim_games", {
       name: args.name,
+      urlCode,
       status: "lobby",
       mapKey: args.mapKey,
       turnDurationMs: DEFAULT_TURN_DURATION_MS,
@@ -107,6 +206,10 @@ export const createGame = mutation({
           });
         }
       }
+
+      if (args.lobbyScenarioKey !== undefined) {
+        await assignStarterOwnerEmpireSeat(ctx, { gameId, userId });
+      }
     }
 
     return gameId;
@@ -120,11 +223,14 @@ export const startGame = mutation({
     if (userId === null) {
       throw new Error("Authentication required.");
     }
-    await assertGameAdmin(ctx, args.gameId, userId);
 
     const game = await ctx.db.get("sim_games", args.gameId);
     if (game === null) {
       throw new Error("Game not found.");
+    }
+    const isStarterOwner = game.ownerUserId !== null && game.ownerUserId === userId;
+    if (!isStarterOwner) {
+      await assertGameAdmin(ctx, args.gameId, userId);
     }
     if (game.status !== "lobby") {
       throw new Error("Game has already started or finished.");

@@ -2,9 +2,9 @@ import { Navigate, Outlet } from "react-router-dom";
 import { Authenticated, Unauthenticated } from "convex/react";
 import { AppShell } from "@/app/layout/AppShell";
 import { PlayerTopNav } from "@/app/layout/PlayerTopNav";
-import { SignOutButton } from "@/features/usr/components/SignOutButton";
 import { ActiveGameProvider } from "@/features/galaxy/context/ActiveGameContext";
 import { PlayerPreviewProvider } from "@/features/player/PlayerPreviewContext";
+import { UserHeaderActions } from "@/features/usr/components/UserHeaderActions";
 import type { PlayerPreviewRouteConfig } from "@/features/player/playerPreviewConfig";
 import type { Id } from "../../../convex/_generated/dataModel";
 
@@ -26,7 +26,7 @@ export function PlayerGameLayout({
           <PlayerPreviewProvider value={config}>
             <AppShell
               nav={<PlayerTopNav />}
-              headerTrailing={<SignOutButton />}
+              headerTrailing={<UserHeaderActions />}
               showProductTitle={false}
               rootClassName="flex h-dvh min-h-0 flex-col bg-st-bg text-st-fg"
               headerClassName="shrink-0 border-b border-st-border px-6 py-px"
