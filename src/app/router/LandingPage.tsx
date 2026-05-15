@@ -14,7 +14,16 @@ const authenticatedLinks = [
 
 export function LandingPage() {
   return (
-    <main className="min-h-dvh bg-[radial-gradient(circle_at_top,rgba(52,211,153,0.16),transparent_38%),linear-gradient(180deg,#07111f_0%,#040814_100%)] text-st-fg">
+    <main
+      className="min-h-dvh text-st-fg"
+      style={{
+        backgroundImage:
+          'radial-gradient(circle at top, rgba(52, 211, 153, 0.16), transparent 38%), linear-gradient(180deg, #07111f 0%, #040814 100%), url("/starry-background.jpg")',
+        backgroundPosition: "center top, center, center",
+        backgroundRepeat: "no-repeat, no-repeat, no-repeat",
+        backgroundSize: "auto, auto, cover",
+      }}
+    >
       <div className="mx-auto flex min-h-dvh w-full max-w-4xl flex-col items-center justify-center px-6 py-16 text-center">
         <img
           src="/starstrat1.png"
