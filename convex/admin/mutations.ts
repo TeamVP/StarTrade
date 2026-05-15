@@ -12,6 +12,11 @@ import {
   DEFAULT_GAME_SETTINGS,
   loadGameSettings,
 } from "../sim/economy/gameSettings";
+import { canonicalizeStrategyJson } from "../usr/automationStrategyLibrary";
+import {
+  getAutomationStrategyByKey,
+} from "../usr/automationStrategyCatalog";
+import { BUILT_IN_AUTOMATION_STRATEGY_SEED_ROWS } from "../usr/automationStrategyLibrary";
 
 const LEGACY_GAME_CLEANUP_SCAN_MULTIPLIER = 4;
 const PASSWORD_PROVIDER_ID = "password";
@@ -33,6 +38,24 @@ function normalizeOptionalPassword(value: string | null | undefined): string | u
     throw new Error("Password must be at least 8 characters.");
   }
   return password;
+}
+
+function normalizeStrategyKey(key: string): string {
+  const normalized = key.trim();
+  if (normalized.length === 0) {
+    throw new Error("Strategy key is required.");
+  }
+  return normalized;
+}
+
+function normalizeStrategyTags(tags: string[]): string[] {
+  return tags
+    .map((tag) => tag.trim())
+    .filter((tag) => tag.length > 0);
+}
+
+function normalizeStrategyDescription(description: string): string {
+  return description.trim();
 }
 
 async function findPasswordAccountByEmail(ctx: MutationCtx, email: string) {
@@ -691,5 +714,135 @@ export const backfillGameUrlCodes = mutation({
       updated,
       updatedGameIds,
     };
+  },
+});
+
+export const createAutomationStrategy = mutation({
+  args: {
+    key: v.string(),
+    name: v.string(),
+    description: v.string(),
+    tags: v.array(v.string()),
+    strategyJson: v.string(),
+    availableForHumans: v.boolean(),
+    availableForNpcs: v.boolean(),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (userId === null) {
+      throw new Error("Authentication required.");
+    }
+
+    const key = normalizeStrategyKey(args.key);
+    const existing = await getAutomationStrategyByKey(ctx, key);
+    if (existing !== null) {
+      throw new Error("That strategy key already exists.");
+    }
+
+    const now = Date.now();
+    return await ctx.db.insert("usr_automation_strategies", {
+      key,
+      name: args.name.trim(),
+      description: normalizeStrategyDescription(args.description),
+      tags: normalizeStrategyTags(args.tags),
+      strategyJson: canonicalizeStrategyJson(args.strategyJson),
+      availableForHumans: args.availableForHumans,
+      availableForNpcs: args.availableForNpcs,
+      createdAt: now,
+      updatedAt: now,
+    });
+  },
+});
+
+export const updateAutomationStrategy = mutation({
+  args: {
+    key: v.string(),
+    name: v.optional(v.string()),
+    description: v.optional(v.string()),
+    tags: v.optional(v.array(v.string())),
+    strategyJson: v.optional(v.string()),
+    availableForHumans: v.optional(v.boolean()),
+    availableForNpcs: v.optional(v.boolean()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (userId === null) {
+      throw new Error("Authentication required.");
+    }
+
+    const key = normalizeStrategyKey(args.key);
+    const existing = await getAutomationStrategyByKey(ctx, key);
+    if (existing === null) {
+      throw new Error("Strategy not found.");
+    }
+
+    const patch: {
+      name?: string;
+      description?: string;
+      tags?: string[];
+      strategyJson?: string;
+      availableForHumans?: boolean;
+      availableForNpcs?: boolean;
+      updatedAt: number;
+    } = { updatedAt: Date.now() };
+
+    if (args.name !== undefined) {
+      patch.name = args.name.trim();
+    }
+    if (args.description !== undefined) {
+      patch.description = normalizeStrategyDescription(args.description);
+    }
+    if (args.tags !== undefined) {
+      patch.tags = normalizeStrategyTags(args.tags);
+    }
+    if (args.strategyJson !== undefined) {
+      patch.strategyJson = canonicalizeStrategyJson(args.strategyJson);
+    }
+    if (args.availableForHumans !== undefined) {
+      patch.availableForHumans = args.availableForHumans;
+    }
+    if (args.availableForNpcs !== undefined) {
+      patch.availableForNpcs = args.availableForNpcs;
+    }
+
+    await ctx.db.patch("usr_automation_strategies", existing._id, patch);
+    return { key };
+  },
+});
+
+export const seedMissingAutomationStrategies = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const userId = await getAuthUserId(ctx);
+    if (userId === null) {
+      throw new Error("Authentication required.");
+    }
+
+    let inserted = 0;
+    let skipped = 0;
+
+    for (const strategy of BUILT_IN_AUTOMATION_STRATEGY_SEED_ROWS) {
+      const existing = await getAutomationStrategyByKey(ctx, strategy.key);
+      if (existing !== null) {
+        skipped += 1;
+        continue;
+      }
+
+      const now = Date.now();
+      await ctx.db.insert("usr_automation_strategies", {
+        key: strategy.key,
+        name: strategy.name,
+        description: strategy.description,
+        tags: strategy.tags,
+        strategyJson: strategy.strategyJson,
+        availableForHumans: strategy.availableForHumans,
+        availableForNpcs: strategy.availableForNpcs,
+        createdAt: now,
+        updatedAt: now,
+      });
+      inserted += 1;
+    }
+
+    return { inserted, skipped };
   },
 });

@@ -45,7 +45,7 @@ function normalizeLegacyStrategyShape(strategy: JsonObject): JsonObject {
     typeof economyValue === "object" &&
     economyValue !== null &&
     !Array.isArray(economyValue)
-      ? { ...(economyValue as JsonObject) }
+      ? { ...economyValue }
       : {};
 
   if (economy.foodShortageResponse === undefined) {
@@ -129,7 +129,7 @@ function mergeJsonValues(base: JsonValue | undefined, override: JsonValue): Json
     override !== null &&
     !Array.isArray(override)
   ) {
-    const merged: JsonObject = { ...(base as JsonObject) };
+    const merged: JsonObject = { ...base };
     for (const [key, value] of Object.entries(override)) {
       merged[key] = mergeJsonValues(merged[key], value);
     }
@@ -334,6 +334,18 @@ export const PUBLIC_AUTOMATION_STRATEGIES: PublicAutomationStrategy[] =
       preview: previewFromStrategyJson(strategyJson),
     };
   });
+
+export type AutomationStrategyCatalogSeedRow = PublicAutomationStrategy & {
+  availableForHumans: boolean;
+  availableForNpcs: boolean;
+};
+
+export const BUILT_IN_AUTOMATION_STRATEGY_SEED_ROWS: AutomationStrategyCatalogSeedRow[] =
+  PUBLIC_AUTOMATION_STRATEGIES.map((strategy) => ({
+    ...strategy,
+    availableForHumans: true,
+    availableForNpcs: true,
+  }));
 
 const PUBLIC_AUTOMATION_STRATEGY_BY_KEY = new Map(
   PUBLIC_AUTOMATION_STRATEGIES.map((strategy) => [strategy.key, strategy]),

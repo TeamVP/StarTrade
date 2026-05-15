@@ -1,6 +1,7 @@
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { v } from "convex/values";
 import { query } from "../_generated/server";
+import { toAutomationStrategyCatalogRow } from "../usr/automationStrategyCatalog";
 
 export const listUsers = query({
   args: {
@@ -270,6 +271,28 @@ export const getDatabaseHealth = query({
         cleanupCandidates,
         cleanupCandidateCount: cleanupCandidates.length,
       },
+    };
+  },
+});
+
+export const listAutomationStrategies = query({
+  args: {
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (userId === null) {
+      return { authorized: false as const, strategies: [] as const };
+    }
+
+    const limit = Math.min(Math.max(Math.floor(args.limit ?? 128), 1), 256);
+    const strategies = await ctx.db.query("usr_automation_strategies").take(limit);
+
+    return {
+      authorized: true as const,
+      strategies: strategies
+        .map((row) => toAutomationStrategyCatalogRow(row))
+        .sort((left, right) => left.name.localeCompare(right.name)),
     };
   },
 });
