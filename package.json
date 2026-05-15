@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "convex dev --start \"vite\"",
     "predev": "convex init && node setup.mjs --once",
+    "prebuild": "convex codegen",
     "setup:auth": "npx @convex-dev/auth --skip-git-check --web-server-url http://localhost:5173",
     "build": "tsc -b && vite build",
     "lint": "tsc && eslint .  --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
