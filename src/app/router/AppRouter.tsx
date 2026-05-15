@@ -1,24 +1,77 @@
 import { createBrowserRouter, RouterProvider } from "react-router-dom";
-import { AuthenticatedGameLayout } from "@/app/router/AuthenticatedGameLayout";
-import { GalaxyPage } from "@/app/router/GalaxyPage";
-import { GamesPage } from "@/app/router/GamesPage";
-import { FleetPage } from "@/app/router/FleetPage";
-import { CombatPage } from "@/app/router/CombatPage";
-import { EconomyPage } from "@/app/router/EconomyPage";
-import { EmpiresPage } from "@/app/router/EmpiresPage";
-import { TradersPage } from "@/app/router/TradersPage";
-import { HistoryPage } from "@/app/router/HistoryPage";
-import { BalancePage } from "@/app/router/BalancePage";
-import { SignInPage } from "@/app/router/SignInPage";
-import { PlayerGameLayout } from "@/app/router/PlayerGameLayout";
-import { PlayerHomePage } from "@/app/router/PlayerHomePage";
-import { PlayerLobbyPage } from "@/app/router/PlayerLobbyPage";
-import { PlayerEmpirePage } from "@/app/router/PlayerEmpirePage";
-import { PlayerEconomyPage } from "@/app/router/PlayerEconomyPage";
-import { PlayerFleetPage } from "@/app/router/PlayerFleetPage";
-import { PlayerCombatPage } from "@/app/router/PlayerCombatPage";
-import { PlayerHistoryPage } from "@/app/router/PlayerHistoryPage";
+import { lazy, Suspense, type ComponentType } from "react";
 import { PLAYER_PREVIEW_BY_PATH } from "@/features/player/playerPreviewConfig";
+
+function lazyNamedComponent<TProps>(
+  loader: () => Promise<Record<string, ComponentType<TProps>>>,
+  exportName: string,
+) {
+  return lazy(async () => {
+    const module = await loader();
+    const Component = module[exportName];
+
+    if (!Component) {
+      throw new Error(`Failed to load lazy route component: ${exportName}`);
+    }
+
+    return { default: Component };
+  });
+}
+
+const AuthenticatedGameLayout = lazyNamedComponent(
+  () => import("@/app/router/AuthenticatedGameLayout"),
+  "AuthenticatedGameLayout",
+);
+const GalaxyPage = lazyNamedComponent(() => import("@/app/router/GalaxyPage"), "GalaxyPage");
+const GamesPage = lazyNamedComponent(() => import("@/app/router/GamesPage"), "GamesPage");
+const FleetPage = lazyNamedComponent(() => import("@/app/router/FleetPage"), "FleetPage");
+const CombatPage = lazyNamedComponent(() => import("@/app/router/CombatPage"), "CombatPage");
+const EconomyPage = lazyNamedComponent(() => import("@/app/router/EconomyPage"), "EconomyPage");
+const EmpiresPage = lazyNamedComponent(() => import("@/app/router/EmpiresPage"), "EmpiresPage");
+const TradersPage = lazyNamedComponent(() => import("@/app/router/TradersPage"), "TradersPage");
+const HistoryPage = lazyNamedComponent(() => import("@/app/router/HistoryPage"), "HistoryPage");
+const BalancePage = lazyNamedComponent(() => import("@/app/router/BalancePage"), "BalancePage");
+const SignInPage = lazyNamedComponent(() => import("@/app/router/SignInPage"), "SignInPage");
+const PrivacyPolicyPage = lazyNamedComponent(
+  () => import("@/app/router/PrivacyPolicyPage"),
+  "PrivacyPolicyPage",
+);
+const TermsOfServicePage = lazyNamedComponent(
+  () => import("@/app/router/TermsOfServicePage"),
+  "TermsOfServicePage",
+);
+const PlayerGameLayout = lazyNamedComponent(
+  () => import("@/app/router/PlayerGameLayout"),
+  "PlayerGameLayout",
+);
+const PlayerHomePage = lazyNamedComponent(
+  () => import("@/app/router/PlayerHomePage"),
+  "PlayerHomePage",
+);
+const PlayerLobbyPage = lazyNamedComponent(
+  () => import("@/app/router/PlayerLobbyPage"),
+  "PlayerLobbyPage",
+);
+const PlayerEmpirePage = lazyNamedComponent(
+  () => import("@/app/router/PlayerEmpirePage"),
+  "PlayerEmpirePage",
+);
+const PlayerEconomyPage = lazyNamedComponent(
+  () => import("@/app/router/PlayerEconomyPage"),
+  "PlayerEconomyPage",
+);
+const PlayerFleetPage = lazyNamedComponent(
+  () => import("@/app/router/PlayerFleetPage"),
+  "PlayerFleetPage",
+);
+const PlayerCombatPage = lazyNamedComponent(
+  () => import("@/app/router/PlayerCombatPage"),
+  "PlayerCombatPage",
+);
+const PlayerHistoryPage = lazyNamedComponent(
+  () => import("@/app/router/PlayerHistoryPage"),
+  "PlayerHistoryPage",
+);
 
 const playerChildRoutes = [
   { index: true, element: <PlayerHomePage /> },
@@ -34,6 +87,14 @@ const router = createBrowserRouter([
   {
     path: "/sign-in",
     element: <SignInPage />,
+  },
+  {
+    path: "/legals/privacy",
+    element: <PrivacyPolicyPage />,
+  },
+  {
+    path: "/legals/tos",
+    element: <TermsOfServicePage />,
   },
   {
     path: "/eplayer1",
@@ -63,5 +124,15 @@ const router = createBrowserRouter([
 ]);
 
 export function AppRouter() {
-  return <RouterProvider router={router} />;
+  return (
+    <Suspense
+      fallback={
+        <div className="flex min-h-dvh items-center justify-center bg-st-bg text-sm text-st-muted">
+          Loading...
+        </div>
+      }
+    >
+      <RouterProvider router={router} />
+    </Suspense>
+  );
 }
