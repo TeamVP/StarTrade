@@ -1,13 +1,15 @@
 import { mutation, query } from "../_generated/server";
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
-import { createAccount } from "@convex-dev/auth/server";
 import { internal } from "../_generated/api";
+import type { Id } from "../_generated/dataModel";
+import { Scrypt } from "lucia";
 import { assertGameAdmin } from "../sim/helpers";
 import {
   DEFAULT_GAME_SETTINGS,
   loadGameSettings,
 } from "../sim/economy/gameSettings";
+import { evaluateGameFinalization, queueFinishedGameCleanup } from "../sim/finalization";
 
 function normalizeAdminCreatedEmail(email: string): string {
   const normalized = email.trim().toLowerCase();
@@ -24,6 +26,11 @@ function normalizeOptionalUserText(value: string | null | undefined): string | u
   const normalized = value.trim();
   return normalized.length > 0 ? normalized : undefined;
 }
+
+type CreatedAuthUserResult = {
+  userId: Id<"users">;
+  image: string | null;
+};
 
 export const reseedGame = mutation({
   args: {
@@ -241,14 +248,66 @@ export const killGame = mutation({
     await ctx.db.patch("sim_games", args.gameId, {
       status: "finished",
       endedAt: Date.now(),
+      retentionClass: "discarded",
+      finishReason: "admin_terminated_discarded",
+      finalizationState: "pending_cleanup",
     });
 
-    await ctx.scheduler.runAfter(0, internal.admin.internal.continueWipeGame, {
-      gameId: args.gameId,
-      phaseIndex: 0,
-    });
+    await queueFinishedGameCleanup(ctx, args.gameId);
 
     return { deleting: true as const };
+  },
+});
+
+export const finalizeGameByScore = mutation({
+  args: { gameId: v.id("sim_games") },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (userId === null) {
+      throw new Error("Authentication required.");
+    }
+    await assertGameAdmin(ctx, args.gameId, userId);
+
+    if ((await ctx.db.get("sim_games", args.gameId)) === null) {
+      throw new Error("Game not found.");
+    }
+
+    return await evaluateGameFinalization(ctx, {
+      gameId: args.gameId,
+      forceFinishReason: "admin_terminated_scored",
+    });
+  },
+});
+
+export const setGameRetentionClass = mutation({
+  args: {
+    gameId: v.id("sim_games"),
+    retentionClass: v.union(
+      v.literal("discarded"),
+      v.literal("official"),
+      v.literal("archived_debug"),
+    ),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (userId === null) {
+      throw new Error("Authentication required.");
+    }
+    await assertGameAdmin(ctx, args.gameId, userId);
+
+    const game = await ctx.db.get("sim_games", args.gameId);
+    if (game === null) {
+      throw new Error("Game not found.");
+    }
+    if (game.finalizationState === "pending_cleanup" || game.finalizationState === "cleaned") {
+      throw new Error("Retention class can no longer be changed for a game already in cleanup.");
+    }
+
+    await ctx.db.patch("sim_games", args.gameId, {
+      retentionClass: args.retentionClass,
+    });
+
+    return { retentionClass: args.retentionClass } as const;
   },
 });
 
@@ -292,7 +351,7 @@ export const createUser = mutation({
     name: v.optional(v.union(v.string(), v.null())),
     displayName: v.optional(v.union(v.string(), v.null())),
   },
-  handler: async (ctx, args) => {
+  handler: async (ctx, args): Promise<{ userId: Id<"users"> }> => {
     const userId = await getAuthUserId(ctx);
     if (userId === null) {
       throw new Error("Authentication required.");
@@ -307,36 +366,49 @@ export const createUser = mutation({
     const name = normalizeOptionalUserText(args.name);
     const displayName = normalizeOptionalUserText(args.displayName);
 
-    const created = await createAccount(ctx, {
-      provider: "password",
-      account: {
-        id: email,
-        secret: args.password,
-      },
-      profile: {
-        email,
-        ...(name !== undefined ? { name } : {}),
-      },
-      shouldLinkViaEmail: false,
-      shouldLinkViaPhone: false,
+    const existingAccount = await ctx.db
+      .query("authAccounts")
+      .withIndex("providerAndAccountId", (q) =>
+        q.eq("provider", "password").eq("providerAccountId", email),
+      )
+      .unique();
+    if (existingAccount !== null) {
+      throw new Error(`Account ${email} already exists.`);
+    }
+
+    const createdUserId = await ctx.db.insert("users", {
+      email,
+      ...(name !== undefined ? { name } : {}),
     });
+    const passwordHash = await new Scrypt().hash(args.password);
+    await ctx.db.insert("authAccounts", {
+      userId: createdUserId,
+      provider: "password",
+      providerAccountId: email,
+      secret: passwordHash,
+    });
+
+    const created: CreatedAuthUserResult = {
+      userId: createdUserId,
+      image: null,
+    };
 
     if (displayName !== undefined) {
       const existingProfile = await ctx.db
         .query("usr_profiles")
-        .withIndex("by_userId", (q) => q.eq("userId", created.user._id))
+        .withIndex("by_userId", (q) => q.eq("userId", created.userId))
         .unique();
 
       const profileFields = {
         displayName,
-        avatarUrl: created.user.image ?? null,
+        avatarUrl: created.image,
         timezone: null,
         analyticsConsent: false,
       };
 
       if (existingProfile === null) {
         await ctx.db.insert("usr_profiles", {
-          userId: created.user._id,
+          userId: created.userId,
           ...profileFields,
         });
       } else {
@@ -345,7 +417,7 @@ export const createUser = mutation({
     }
 
     return {
-      userId: created.user._id,
+      userId: created.userId,
     };
   },
 });

@@ -1,9 +1,22 @@
 import { FormEvent, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "../../../convex/_generated/api";
+import type { Id } from "../../../convex/_generated/dataModel";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { useActiveGame } from "@/features/galaxy/hooks/useActiveGame";
+
+type AdminUserRow = {
+  _id: Id<"users">;
+  createdAt: number;
+  email: string | null;
+  name: string | null;
+  image: string | null;
+  isAnonymous: boolean;
+  emailVerified: boolean;
+  displayName: string | null;
+  timezone: string | null;
+};
 
 function formatTimestamp(timestamp: number): string {
   return new Date(timestamp).toLocaleString();
@@ -202,7 +215,7 @@ export function AdminUsersPage() {
                 </tr>
               </thead>
               <tbody>
-                {userResult.users.map((user) => (
+                {userResult.users.map((user: AdminUserRow) => (
                   <tr key={user._id} className="align-top">
                     <td className="border-b border-st-border/60 px-3 py-2 text-st-fg">
                       <div>{user.email ?? "-"}</div>
