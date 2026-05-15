@@ -38,6 +38,7 @@ export function AdminUsersPage() {
     gameId: activeGame?._id ?? null,
     limit: 100,
   });
+  const canManageUsers = userResult?.authorized === true;
   const createUser = useMutation(api.admin.mutations.createUser);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -47,6 +48,10 @@ export function AdminUsersPage() {
     event.preventDefault();
     if (activeGame === null) {
       setError("Select an active game first.");
+      return;
+    }
+    if (!canManageUsers) {
+      setError("Select a game where your account has an active admin role before creating users.");
       return;
     }
 
@@ -122,6 +127,11 @@ export function AdminUsersPage() {
           <p className="mt-1 text-sm text-st-muted">
             Creates a password-based auth account. The user can sign in immediately with email and password.
           </p>
+          {!canManageUsers ? (
+            <p className="mt-2 text-sm text-amber-200">
+              Choose a game where you are an active admin to enable user creation.
+            </p>
+          ) : null}
         </div>
         <form className="grid gap-3 md:grid-cols-2" onSubmit={(event) => void onSubmit(event)}>
           <label className="space-y-1 text-sm text-st-muted">
@@ -162,11 +172,15 @@ export function AdminUsersPage() {
             />
           </label>
           <div className="md:col-span-2 flex items-center gap-3">
-            <Button type="submit" disabled={submitting || activeGame === null}>
+            <Button type="submit" disabled={submitting || activeGame === null || !canManageUsers}>
               {submitting ? "Creating..." : "Create user"}
             </Button>
             {activeGame !== null ? (
-              <span className="text-sm text-st-muted">Admin check runs against {activeGame.name}.</span>
+              <span className="text-sm text-st-muted">
+                {canManageUsers
+                  ? `Admin check runs against ${activeGame.name}.`
+                  : `${activeGame.name} is selected, but your account is not an active admin there.`}
+              </span>
             ) : (
               <span className="text-sm text-st-muted">No active game selected.</span>
             )}
