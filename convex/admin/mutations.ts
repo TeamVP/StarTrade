@@ -3,33 +3,19 @@ import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { internal } from "../_generated/api";
 import type { Id } from "../_generated/dataModel";
-import { Scrypt } from "lucia";
 import { assertGameAdmin } from "../sim/helpers";
 import {
   DEFAULT_GAME_SETTINGS,
   loadGameSettings,
 } from "../sim/economy/gameSettings";
 
-function normalizeAdminCreatedEmail(email: string): string {
-  const normalized = email.trim().toLowerCase();
-  if (!normalized || !normalized.includes("@")) {
-    throw new Error("A valid email address is required.");
-  }
-  return normalized;
-}
-
-function normalizeOptionalUserText(value: string | null | undefined): string | undefined {
+function normalizeOptionalUserField(value: string | null | undefined): string | undefined {
   if (value === undefined || value === null) {
     return undefined;
   }
   const normalized = value.trim();
   return normalized.length > 0 ? normalized : undefined;
 }
-
-type CreatedAuthUserResult = {
-  userId: Id<"users">;
-  image: string | null;
-};
 
 export const reseedGame = mutation({
   args: {
@@ -292,79 +278,44 @@ export const forceRetryTurnResolution = mutation({
 
 export const createUser = mutation({
   args: {
-    gameId: v.id("sim_games"),
-    email: v.string(),
-    password: v.string(),
     name: v.optional(v.union(v.string(), v.null())),
-    displayName: v.optional(v.union(v.string(), v.null())),
+    email: v.optional(v.union(v.string(), v.null())),
+    phone: v.optional(v.union(v.string(), v.null())),
+    image: v.optional(v.union(v.string(), v.null())),
+    isAnonymous: v.boolean(),
+    emailVerified: v.boolean(),
+    phoneVerified: v.boolean(),
   },
   handler: async (ctx, args): Promise<{ userId: Id<"users"> }> => {
     const userId = await getAuthUserId(ctx);
     if (userId === null) {
       throw new Error("Authentication required.");
     }
-    await assertGameAdmin(ctx, args.gameId, userId);
+    const name = normalizeOptionalUserField(args.name);
+    const email = normalizeOptionalUserField(args.email)?.toLowerCase();
+    const phone = normalizeOptionalUserField(args.phone);
+    const image = normalizeOptionalUserField(args.image);
+    const now = Date.now();
 
-    const email = normalizeAdminCreatedEmail(args.email);
-    if (args.password.length < 8) {
-      throw new Error("Password must be at least 8 characters.");
+    if (args.emailVerified && email === undefined) {
+      throw new Error("Email verification requires an email address.");
     }
-
-    const name = normalizeOptionalUserText(args.name);
-    const displayName = normalizeOptionalUserText(args.displayName);
-
-    const existingAccount = await ctx.db
-      .query("authAccounts")
-      .withIndex("providerAndAccountId", (q) =>
-        q.eq("provider", "password").eq("providerAccountId", email),
-      )
-      .unique();
-    if (existingAccount !== null) {
-      throw new Error(`Account ${email} already exists.`);
+    if (args.phoneVerified && phone === undefined) {
+      throw new Error("Phone verification requires a phone number.");
     }
 
     const createdUserId = await ctx.db.insert("users", {
-      email,
       ...(name !== undefined ? { name } : {}),
+      ...(email !== undefined ? { email } : {}),
+      ...(phone !== undefined ? { phone } : {}),
+      ...(image !== undefined ? { image } : {}),
+      ...(args.emailVerified ? { emailVerificationTime: now } : {}),
+      ...(args.phoneVerified ? { phoneVerificationTime: now } : {}),
+      ...(args.isAnonymous ? { isAnonymous: true } : {}),
     });
-    const passwordHash = await new Scrypt().hash(args.password);
-    await ctx.db.insert("authAccounts", {
-      userId: createdUserId,
-      provider: "password",
-      providerAccountId: email,
-      secret: passwordHash,
-    });
-
-    const created: CreatedAuthUserResult = {
-      userId: createdUserId,
-      image: null,
-    };
-
-    if (displayName !== undefined) {
-      const existingProfile = await ctx.db
-        .query("usr_profiles")
-        .withIndex("by_userId", (q) => q.eq("userId", created.userId))
-        .unique();
-
-      const profileFields = {
-        displayName,
-        avatarUrl: created.image,
-        timezone: null,
-        analyticsConsent: false,
-      };
-
-      if (existingProfile === null) {
-        await ctx.db.insert("usr_profiles", {
-          userId: created.userId,
-          ...profileFields,
-        });
-      } else {
-        await ctx.db.patch("usr_profiles", existingProfile._id, profileFields);
-      }
-    }
 
     return {
-      userId: created.userId,
+      userId: createdUserId,
     };
   },
 });
