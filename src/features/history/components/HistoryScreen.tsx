@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { usePaginatedQuery } from "convex/react";
+import { usePaginatedQuery, useQuery } from "convex/react";
 import { api } from "../../../../convex/_generated/api";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -89,6 +89,13 @@ const EVENT_TYPE_LABEL: Record<string, string> = {
 
 function eventLabel(eventType: string): string {
   return EVENT_TYPE_LABEL[eventType] ?? eventType.replace(/_/g, " ");
+}
+
+function formatFinishReason(reason: string): string {
+  return reason
+    .split("_")
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
 }
 
 // ─── Category filter tabs ─────────────────────────────────────────────────────
@@ -215,6 +222,12 @@ export function HistoryScreen(props: { hideGamePicker?: boolean }) {
   const hideGamePicker = props.hideGamePicker === true;
   const { games, activeGame, setSelectedGameId } = useActiveGame();
   const [category, setCategory] = useState<Category>("all");
+  const durableResult = useQuery(
+    api.sim.queries.getDurableGameResult,
+    activeGame?._id !== undefined && activeGame.status === "finished"
+      ? { gameId: activeGame._id }
+      : "skip",
+  );
 
   // Derive the single eventType filter: only works for categories with exactly
   // one event type — for multi-type categories we fetch all and filter client-side.
@@ -313,7 +326,64 @@ export function HistoryScreen(props: { hideGamePicker?: boolean }) {
           </p>
         </Card>
       ) : (
-        <div className="grid grid-cols-1 gap-4 lg:grid-cols-[220px_1fr]">
+        <div className="space-y-4">
+          {activeGame.status === "finished" && durableResult !== undefined && durableResult !== null ? (
+            <Card>
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <h2 className="text-sm font-semibold uppercase tracking-wide text-st-muted">
+                    Durable Result
+                  </h2>
+                  <p className="mt-1 text-sm text-st-muted">
+                    Official outcome retained after live simulation cleanup.
+                  </p>
+                </div>
+                <div className="text-right text-xs text-st-muted">
+                  <div>{formatFinishReason(durableResult.gameResult.finishReason)}</div>
+                  <div>{new Date(durableResult.gameResult.endedAt).toLocaleString()}</div>
+                </div>
+              </div>
+
+              <div className="mt-4 grid gap-2">
+                {durableResult.placements.map((row) => (
+                  <div
+                    key={`${row.placement}:${row.empireKey}`}
+                    className="flex flex-wrap items-center justify-between gap-2 rounded border border-st-border bg-st-bg px-3 py-2 text-sm"
+                  >
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="rounded bg-st-border/40 px-1.5 py-0.5 text-xs font-mono text-st-muted">
+                          #{row.placement}
+                        </span>
+                        <span className="font-medium text-st-fg">{row.empireName}</span>
+                        <span className="text-xs text-st-muted">
+                          {row.controllerKind === "human"
+                            ? row.playerName ?? "Human"
+                            : row.playerName ?? row.npcPlayerKey ?? "NPC"}
+                        </span>
+                        {row.isWinner ? (
+                          <span className="rounded-full border border-emerald-500/40 bg-emerald-950/30 px-2 py-0.5 text-xs font-medium text-emerald-200">
+                            Winner
+                          </span>
+                        ) : null}
+                        {row.eliminated ? (
+                          <span className="rounded-full border border-red-500/40 bg-red-950/30 px-2 py-0.5 text-xs font-medium text-red-200">
+                            Eliminated
+                          </span>
+                        ) : null}
+                      </div>
+                    </div>
+                    <div className="text-right text-xs text-st-muted">
+                      <div>Score {row.scoreFinal}</div>
+                      <div>{row.starsControlledFinal} stars · {row.fleetStrengthFinal} fleet</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </Card>
+          ) : null}
+
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-[220px_1fr]">
           {/* ── Sidebar: category filter ── */}
           <div className="space-y-1">
             <Card className="p-3">
@@ -378,7 +448,9 @@ export function HistoryScreen(props: { hideGamePicker?: boolean }) {
               <Card>
                 <p className="text-sm text-st-muted text-center py-8">
                   {category === "all"
-                    ? "No events recorded yet."
+                    ? activeGame.status === "finished" && durableResult !== null
+                      ? "No live events were retained for this finished game. Use the durable result summary above."
+                      : "No events recorded yet."
                     : `No ${category} events in the loaded range.`}
                 </p>
               </Card>
@@ -402,7 +474,7 @@ export function HistoryScreen(props: { hideGamePicker?: boolean }) {
                   variant="secondary"
                   disabled={status === "LoadingMore"}
                   onClick={() => loadMore(PAGE_SIZE)}
-                  className="min-w-[160px]"
+                  className="min-w-40"
                 >
                   {status === "LoadingMore" ? "Loading…" : "Load older events"}
                 </Button>
@@ -415,6 +487,7 @@ export function HistoryScreen(props: { hideGamePicker?: boolean }) {
               </p>
             )}
           </div>
+        </div>
         </div>
       )}
     </div>

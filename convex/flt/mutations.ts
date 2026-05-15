@@ -4,7 +4,7 @@ import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import type { Id } from "../_generated/dataModel";
 import { findLinkBetweenSystems } from "../gal/linkUtils";
-import { gameAllowsPlayerActions } from "../sim/helpers";
+import { gameAllowsPlayerActions, touchGameMeaningfulActivity } from "../sim/helpers";
 
 async function assertEmpireAccessToOwnedSystem(
   ctx: MutationCtx,
@@ -265,6 +265,8 @@ export const issueFleetOrder = mutation({
       });
     }
 
+    await touchGameMeaningfulActivity(ctx, args.gameId, { humanAction: true });
+
     return orderId;
   },
 });
@@ -316,10 +318,11 @@ export const setGarrisonRoute = mutation({
     }
 
     if (args.destinationSystemId === null) {
+      await touchGameMeaningfulActivity(ctx, args.gameId, { humanAction: true });
       return null;
     }
 
-    return await replaceManualGarrisonRoute(ctx, {
+    const routeId = await replaceManualGarrisonRoute(ctx, {
       gameId: args.gameId,
       empireId,
       originSystemId: args.originSystemId,
@@ -327,5 +330,7 @@ export const setGarrisonRoute = mutation({
       dispatchPct: pct,
       enabled: args.enabled,
     });
+    await touchGameMeaningfulActivity(ctx, args.gameId, { humanAction: true });
+    return routeId;
   },
 });

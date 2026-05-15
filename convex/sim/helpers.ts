@@ -1,6 +1,13 @@
 import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx } from "../_generated/server";
 
+export { GAME_ABANDONMENT_INACTIVITY_MS } from "./finalization";
+export {
+  nextGameAbandonmentEligibleAt,
+  recordGameTurnResolved,
+  touchGameMeaningfulActivity,
+} from "./finalization";
+
 /** True when the sim is in play (turns can matter) but not in lobby or finished. */
 export function gameAllowsPlayerActions(
   status: Doc<"sim_games">["status"],

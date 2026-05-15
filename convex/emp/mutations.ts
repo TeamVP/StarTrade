@@ -3,7 +3,7 @@ import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import type { Id } from "../_generated/dataModel";
 import type { MutationCtx } from "../_generated/server";
-import { gameAllowsPlayerActions } from "../sim/helpers";
+import { gameAllowsPlayerActions, touchGameMeaningfulActivity } from "../sim/helpers";
 import type { StrategicSliderKey, StrategicSliderOverrides } from "../sim/economy/strategicSliders";
 import { canonicalizeStrategyJson } from "../usr/automationStrategyLibrary";
 
@@ -139,6 +139,9 @@ export const updateEmpireMeta = mutation({
     }
 
     await ctx.db.patch("emp_states", args.empireId, patch);
+    await touchGameMeaningfulActivity(ctx, empire.gameId, {
+      humanAction: userId !== null,
+    });
     return args.empireId;
   },
 });
@@ -186,6 +189,7 @@ export const patchStrategicSlider = mutation({
     await ctx.db.patch("emp_states", empireId, {
       strategicSliderOverrides: keys.length > 0 ? prev : undefined,
     });
+    await touchGameMeaningfulActivity(ctx, args.gameId, { humanAction: true });
     return null;
   },
 });

@@ -99,7 +99,14 @@ export const continueWipeGame = internalMutation({
     if (phase === null) {
       const game = await ctx.db.get("sim_games", args.gameId);
       if (game !== null) {
-        await ctx.db.delete("sim_games", args.gameId);
+        if (game.retentionClass === "discarded") {
+          await ctx.db.delete("sim_games", args.gameId);
+        } else {
+          await ctx.db.patch("sim_games", args.gameId, {
+            finalizationState: game.retentionClass === "archived_debug" ? "archived_debug" : "cleaned",
+            cleanupCompletedAt: Date.now(),
+          });
+        }
       }
       return { complete: true };
     }

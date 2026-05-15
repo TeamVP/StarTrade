@@ -11,4 +11,11 @@ crons.interval(
   {},
 );
 
+crons.interval(
+  "sweep inactive StarStrat games",
+  { minutes: 60 },
+  internal.sim.cron.sweepInactiveGames,
+  {},
+);
+
 export default crons;

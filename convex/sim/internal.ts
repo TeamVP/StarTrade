@@ -29,6 +29,8 @@ import { reconcileSystemHolding } from "./systemHoldings";
 import { POPULATION_MIN_INHABITED_PEOPLE } from "./economy/population";
 import { findLinkBetweenSystems } from "../gal/linkUtils";
 import { travelTurnsFromLinkCost } from "./fleetDispatch";
+import { evaluateGameFinalization } from "./finalization";
+import { recordGameTurnResolved } from "./helpers";
 import { scheduledNextTurnStartedAt, turnDurationHasElapsed } from "./turnTiming";
 
 /** Max en-route fleet rows scanned for arrivals (indexed `by_gameId_and_status`). */
@@ -156,6 +158,8 @@ async function finishGameIfSingleEmpireRemains(
     status: "finished",
     endedAt: Date.now(),
     winnerEmpireKey: winner.empireKey,
+    finishReason: "last_empire_standing",
+    finalizationState: "pending_result_write",
     turnPausedUntilMs: undefined,
     nextTurnAutoResolveDelayRatio: undefined,
   });
@@ -2045,15 +2049,19 @@ export const finalizeTurnResolution = internalMutation({
       turnNumber: t,
     });
 
+    const resolvedAt = Date.now();
     await ctx.db.patch("sim_turns", phase.turn._id, {
-      resolvedAt: Date.now(),
+      resolvedAt,
       state: "resolved",
       resolutionPhase: undefined,
       resolvingStartedAt: undefined,
     });
 
+    await recordGameTurnResolved(ctx, args.gameId, resolvedAt);
+
     const winner = await finishGameIfSingleEmpireRemains(ctx, args.gameId, t);
     if (winner !== null) {
+      await evaluateGameFinalization(ctx, { gameId: args.gameId });
       return { skipped: false, resolvedTurn: t, nextTurn: t };
     }
 
@@ -2105,6 +2113,8 @@ export const finalizeTurnResolution = internalMutation({
       summary: `Turn ${t} resolved → turn ${nextTurn}`,
       payload: JSON.stringify({ resolvedTurn: t, nextTurn }),
     });
+
+    await evaluateGameFinalization(ctx, { gameId: args.gameId });
 
     return { skipped: false, resolvedTurn: t, nextTurn };
   },

@@ -18,12 +18,18 @@ export function TurnPanel() {
   const pauseGame = useMutation(api.sim.mutations.pauseGame);
   const resumeGame = useMutation(api.sim.mutations.resumeGame);
   const killGame = useMutation(api.admin.mutations.killGame);
+  const finalizeGameByScore = useMutation(api.admin.mutations.finalizeGameByScore);
+  const setGameRetentionClass = useMutation(api.admin.mutations.setGameRetentionClass);
 
   const [startBusy, setStartBusy] = useState(false);
   const [startError, setStartError] = useState<string | null>(null);
   const [pauseBusy, setPauseBusy] = useState(false);
   const [killBusy, setKillBusy] = useState(false);
   const [killError, setKillError] = useState<string | null>(null);
+  const [finalizeBusy, setFinalizeBusy] = useState(false);
+  const [finalizeError, setFinalizeError] = useState<string | null>(null);
+  const [retentionBusy, setRetentionBusy] = useState(false);
+  const [retentionError, setRetentionError] = useState<string | null>(null);
   const [stepBusy, setStepBusy] = useState(false);
   const [stepError, setStepError] = useState<string | null>(null);
   const [rebuildModalOpen, setRebuildModalOpen] = useState(false);
@@ -47,6 +53,10 @@ export function TurnPanel() {
   const timeline = useQuery(
     api.sim.queries.getTurnTimelineForGame,
     gameId !== undefined ? { gameId } : "skip",
+  );
+  const durableResult = useQuery(
+    api.sim.queries.getDurableGameResult,
+    gameId !== undefined && activeGame?.status === "finished" ? { gameId } : "skip",
   );
   const turnResolving = timeline?.turnState === "resolving";
   const canRebuildModalActions = !turnResolving && rebuildPendingMode === null;
@@ -131,6 +141,47 @@ export function TurnPanel() {
       setKillError(message.replace(/^[\s\S]*?Error:\s*/g, "").trim());
     } finally {
       setKillBusy(false);
+    }
+  }
+
+  async function onFinalizeGameByScore() {
+    if (!gameId) return;
+    if (!isGameAdmin) {
+      setFinalizeError("Only game admins can score-finalize this game.");
+      return;
+    }
+    if (
+      !window.confirm(
+        "Finalize this game immediately using current standings and write durable results before cleanup?",
+      )
+    ) {
+      return;
+    }
+    setFinalizeBusy(true);
+    setFinalizeError(null);
+    try {
+      await finalizeGameByScore({ gameId });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setFinalizeError(message.replace(/^[\s\S]*?Error:\s*/g, "").trim());
+    } finally {
+      setFinalizeBusy(false);
+    }
+  }
+
+  async function onRetentionClassChange(
+    retentionClass: "discarded" | "official" | "archived_debug",
+  ) {
+    if (!gameId || !isGameAdmin) return;
+    setRetentionBusy(true);
+    setRetentionError(null);
+    try {
+      await setGameRetentionClass({ gameId, retentionClass });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setRetentionError(message.replace(/^[\s\S]*?Error:\s*/g, "").trim());
+    } finally {
+      setRetentionBusy(false);
     }
   }
 
@@ -264,6 +315,8 @@ export function TurnPanel() {
         <dd className="text-right capitalize">{activeGame?.status ?? "—"}</dd>
         <dt className="text-st-muted">Current turn</dt>
         <dd className="text-right">{activeGame?.currentTurn ?? "—"}</dd>
+        <dt className="text-st-muted">Retention</dt>
+        <dd className="text-right capitalize">{activeGame?.retentionClass ?? "official"}</dd>
         {turnResolving ? (
           <>
             <dt className="text-st-muted">Resolution</dt>
@@ -281,6 +334,100 @@ export function TurnPanel() {
           </>
         ) : null}
       </dl>
+      {gameId !== undefined && isGameAdmin ? (
+        <div className="mt-3">
+          <label className="block text-xs font-semibold uppercase tracking-wide text-st-muted">
+            Retention policy
+          </label>
+          <select
+            className="mt-1 w-full rounded border border-st-border bg-st-bg px-3 py-2 text-sm"
+            value={activeGame?.retentionClass ?? "official"}
+            disabled={retentionBusy || activeGame?.finalizationState === "pending_cleanup"}
+            onChange={(event) => {
+              const value = event.target.value;
+              if (
+                value === "discarded" ||
+                value === "official" ||
+                value === "archived_debug"
+              ) {
+                void onRetentionClassChange(value);
+              }
+            }}
+          >
+            <option value="official">Official results</option>
+            <option value="discarded">Discard after cleanup</option>
+            <option value="archived_debug">Archived debug</option>
+          </select>
+          {retentionError !== null ? (
+            <p className="mt-1 text-xs text-red-600 dark:text-red-400" role="alert">
+              {retentionError}
+            </p>
+          ) : null}
+        </div>
+      ) : null}
+      {activeGame?.status === "finished" && durableResult !== undefined && durableResult !== null ? (
+        <div className="mt-4 rounded-lg border border-st-border bg-st-bg/60 p-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wide text-st-muted">
+                Durable result
+              </p>
+              <p className="mt-1 text-sm text-st-fg">
+                {durableResult.gameResult.finishReason.replace(/_/g, " ")}
+              </p>
+            </div>
+            <div className="text-right text-xs text-st-muted">
+              <div>Finalization: {activeGame.finalizationState ?? "none"}</div>
+              <div>Ended: {new Date(durableResult.gameResult.endedAt).toLocaleString()}</div>
+            </div>
+          </div>
+          <div className="mt-3 space-y-2">
+            {durableResult.placements.slice(0, 5).map((row) => {
+              let strategyPreview: string | null = null;
+              if (row.strategySummaryJson !== null) {
+                try {
+                  const parsed = JSON.parse(row.strategySummaryJson) as Record<string, unknown>;
+                  strategyPreview = typeof parsed.summary === "string" ? parsed.summary : null;
+                } catch {
+                  strategyPreview = null;
+                }
+              }
+              return (
+                <div
+                  key={`${row.placement}:${row.empireKey}`}
+                  className="flex flex-wrap items-center justify-between gap-2 rounded border border-st-border/70 px-3 py-2 text-sm"
+                >
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="rounded bg-st-border/40 px-1.5 py-0.5 text-xs font-mono text-st-muted">
+                        #{row.placement}
+                      </span>
+                      <span className="font-medium text-st-fg">{row.empireName}</span>
+                      <span className="text-xs text-st-muted">
+                        {row.controllerKind === "human"
+                          ? row.playerName ?? "Human"
+                          : row.playerName ?? row.npcPlayerKey ?? "NPC"}
+                      </span>
+                      {row.isWinner ? (
+                        <span className="rounded-full border border-emerald-500/40 bg-emerald-950/30 px-2 py-0.5 text-xs font-medium text-emerald-200">
+                          Winner
+                        </span>
+                      ) : null}
+                    </div>
+                    {strategyPreview !== null ? (
+                      <p className="mt-1 text-xs text-st-muted">Strategy: {strategyPreview}</p>
+                    ) : null}
+                  </div>
+                  <div className="text-right text-xs text-st-muted">
+                    <div>{row.starsControlledFinal} stars</div>
+                    <div>{row.fleetStrengthFinal} fleet strength</div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ) : null}
       {gameId !== undefined &&
       activeGame !== null &&
       (activeGame.status === "running" || activeGame.status === "paused") ? (
@@ -415,6 +562,21 @@ export function TurnPanel() {
         </Button>
         {gameId !== undefined && isGameAdmin ? (
           <Button
+            disabled={finalizeBusy || activeGame?.finalizationState === "pending_cleanup"}
+            variant="secondary"
+            className="w-full border border-amber-500/40 text-amber-700 hover:border-amber-500/70 hover:text-amber-800 dark:text-amber-300 dark:hover:text-amber-200"
+            onClick={() => void onFinalizeGameByScore()}
+          >
+            {finalizeBusy ? "Finalizing…" : "Finalize by score"}
+          </Button>
+        ) : null}
+        {finalizeError !== null ? (
+          <p className="text-xs text-red-600 dark:text-red-400" role="alert">
+            {finalizeError}
+          </p>
+        ) : null}
+        {gameId !== undefined && isGameAdmin ? (
+          <Button
             disabled={killBusy}
             variant="secondary"
             className="w-full border border-red-500/40 text-red-600 hover:border-red-500/70 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300"
@@ -524,7 +686,7 @@ export function TurnPanel() {
                     </Button>
                     <Button
                       type="button"
-                      className="min-w-[10rem] flex-1 border border-amber-600/60 bg-amber-600 text-white hover:bg-amber-700 dark:border-amber-500/50"
+                      className="min-w-40 flex-1 border border-amber-600/60 bg-amber-600 text-white hover:bg-amber-700 dark:border-amber-500/50"
                       disabled={!canRebuildModalActions}
                       onClick={() => void runRebuildOrdersMode("rebuildAll")}
                     >

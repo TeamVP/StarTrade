@@ -26,6 +26,13 @@ function formatDurationMs(ms: number): string {
   return r === 0 ? `${m}m` : `${m}m ${r}s`;
 }
 
+function formatFinishReason(reason: string): string {
+  return reason
+    .split("_")
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
 function TurnProgressCell(props: {
   now: number;
   turnState: "open" | "resolving" | "resolved" | null;
@@ -121,6 +128,9 @@ function TurnProgressCell(props: {
 export function GamesScreen() {
   const { activeGame, setSelectedGameId } = useActiveGame();
   const running = useQuery(api.sim.queries.listRunningGamesTurnProgress);
+  const recentOfficialResults = useQuery(api.usr.queries.listRecentOfficialEmpireResults, {
+    limit: 8,
+  });
   const forceRetry = useMutation(api.admin.mutations.forceRetryTurnResolution);
   const setSimCronTurnsDisabled = useMutation(
     api.sim.mutations.setSimCronTurnsDisabled,
@@ -320,6 +330,81 @@ export function GamesScreen() {
           </table>
         )}
       </div>
+      </Card>
+
+      <Card>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 className="text-sm font-semibold uppercase tracking-wide text-st-muted">
+              Recent Official Results
+            </h2>
+            <p className="mt-1 text-sm text-st-muted">
+              Durable finished-game outcomes preserved after simulation cleanup.
+            </p>
+          </div>
+          <div className="rounded-md border border-st-border bg-st-bg px-3 py-2 text-xs text-st-muted">
+            {recentOfficialResults === undefined ? "…" : recentOfficialResults.length} results
+          </div>
+        </div>
+
+        <div className="mt-4 grid gap-3">
+          {recentOfficialResults === undefined ? (
+            <p className="rounded-lg border border-st-border bg-st-bg px-3 py-4 text-sm text-st-muted">
+              Loading recent official results…
+            </p>
+          ) : recentOfficialResults.length === 0 ? (
+            <p className="rounded-lg border border-st-border bg-st-bg px-3 py-4 text-sm text-st-muted">
+              No official finished results yet.
+            </p>
+          ) : (
+            recentOfficialResults.map((result) => {
+              const isActive = activeGame?._id === result.gameId;
+              return (
+                <div
+                  key={`${result.gameId}:${result.endedAt}`}
+                  className="flex flex-col gap-3 rounded-lg border border-st-border bg-st-bg px-4 py-3 sm:flex-row sm:items-center sm:justify-between"
+                >
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <div className="font-medium text-st-fg">{result.name}</div>
+                      <span className="rounded-full border border-st-border px-2 py-0.5 text-xs font-medium text-st-muted">
+                        {result.mapKey}
+                      </span>
+                      <span className="rounded-full border border-st-border px-2 py-0.5 text-xs font-medium text-st-muted">
+                        {formatFinishReason(result.finishReason)}
+                      </span>
+                      {isActive ? (
+                        <span className="rounded-full border border-st-accent/40 bg-st-accent/10 px-2 py-0.5 text-xs font-medium text-st-accent">
+                          Selected
+                        </span>
+                      ) : null}
+                    </div>
+                    <p className="mt-1 text-sm text-st-muted">
+                      {result.winner === null
+                        ? "No winner recorded"
+                        : `${result.winner.empireName} won${result.winner.playerName !== null ? ` as ${result.winner.playerName}` : ""}`}
+                    </p>
+                    <p className="mt-1 text-xs text-st-muted">
+                      Ended {new Date(result.endedAt).toLocaleString()} · Score{" "}
+                      {result.winner?.scoreFinal ?? "-"} · Stars{" "}
+                      {result.winner?.starsControlledFinal ?? "-"} · Fleet{" "}
+                      {result.winner?.fleetStrengthFinal ?? "-"}
+                    </p>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    className="shrink-0 whitespace-nowrap"
+                    disabled={isActive}
+                    onClick={() => setSelectedGameId(result.gameId)}
+                  >
+                    {isActive ? "Selected" : "Select game"}
+                  </Button>
+                </div>
+              );
+            })
+          )}
+        </div>
       </Card>
       <AdminPanel />
     </div>

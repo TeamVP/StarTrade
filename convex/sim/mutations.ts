@@ -14,6 +14,7 @@ import { applyNpcStrategy } from "./economy/applyNpcStrategy";
 import { findLinkBetweenSystems } from "../gal/linkUtils";
 import { normalizeNpcEmpireKeys } from "../seed/npcEmpirePlayers";
 import { DEFAULT_TURN_DURATION_MS } from "./turnTiming";
+import { touchGameMeaningfulActivity } from "./helpers";
 
 export const createGame = mutation({
   args: {
@@ -24,6 +25,13 @@ export const createGame = mutation({
     npcEmpireKeys: v.optional(v.array(v.string())),
     automatedEmpireKeys: v.optional(v.array(v.string())),
     lobbyScenarioKey: v.optional(v.string()),
+    retentionClass: v.optional(
+      v.union(
+        v.literal("discarded"),
+        v.literal("official"),
+        v.literal("archived_debug"),
+      ),
+    ),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
@@ -38,6 +46,7 @@ export const createGame = mutation({
       throw new Error("RNG seed is required.");
     }
 
+    const now = Date.now();
     const gameId = await ctx.db.insert("sim_games", {
       name: args.name,
       status: "lobby",
@@ -51,6 +60,11 @@ export const createGame = mutation({
       startedAt: null,
       endedAt: null,
       winnerEmpireKey: null,
+      finalizationState: "none",
+      retentionClass: args.retentionClass ?? "official",
+      lastMeaningfulActivityAt: now,
+      lastHumanActionAt: now,
+      abandonmentEligibleAt: now + 7 * 24 * 60 * 60 * 1000,
       npcEmpireKeys,
     });
 
@@ -139,16 +153,21 @@ export const startGame = mutation({
       });
     }
 
+    const now = Date.now();
     await ctx.db.patch("sim_games", args.gameId, {
       status: "running",
-      startedAt: Date.now(),
+      startedAt: now,
       currentTurn: 1,
+      finalizationState: "none",
+      lastMeaningfulActivityAt: now,
+      lastHumanActionAt: now,
+      abandonmentEligibleAt: now + 7 * 24 * 60 * 60 * 1000,
     });
 
     await ctx.db.insert("sim_turns", {
       gameId: args.gameId,
       turnNumber: 1,
-      startedAt: Date.now(),
+      startedAt: now,
       resolvedAt: null,
       state: "open",
     });
@@ -163,6 +182,11 @@ export const startGame = mutation({
       targetId: null,
       summary: "Game started — turn 1",
       payload: JSON.stringify({}),
+    });
+
+    await touchGameMeaningfulActivity(ctx, args.gameId, {
+      humanAction: true,
+      now,
     });
 
     return args.gameId;
@@ -203,6 +227,9 @@ export const stepTurn = mutation({
         turnNumber: begin.turnNumber,
       });
     }
+    await touchGameMeaningfulActivity(ctx, args.gameId, {
+      humanAction: true,
+    });
     return {
       accepted: begin.started || begin.alreadyResolving,
       turnNumber: begin.turnNumber,
@@ -355,11 +382,14 @@ export const rebuildStandingOrders = mutation({
         turnNumber: game.currentTurn,
       });
 
+      await touchGameMeaningfulActivity(ctx, args.gameId, { humanAction: true });
+
       return { mode: args.mode, deletedCount: deleted, createdCount: 0 } as const;
     }
 
     if (args.mode === "buildBlank") {
       const created = await buildBlankOwnedGarrisonRoutes(ctx, { gameId: args.gameId });
+      await touchGameMeaningfulActivity(ctx, args.gameId, { humanAction: true });
       return { mode: args.mode, deletedCount: 0, createdCount: created } as const;
     }
 
@@ -368,6 +398,7 @@ export const rebuildStandingOrders = mutation({
       gameId: args.gameId,
       turnNumber: game.currentTurn,
     });
+    await touchGameMeaningfulActivity(ctx, args.gameId, { humanAction: true });
     return { mode: args.mode, deletedCount: deleted, createdCount: 0 } as const;
   },
 });
@@ -418,6 +449,7 @@ export const scheduleNextTurnResolutionDelay = mutation({
     } else {
       await ctx.db.patch("sim_games", args.gameId, { nextTurnAutoResolveDelayRatio: r });
     }
+    await touchGameMeaningfulActivity(ctx, args.gameId, { humanAction: true });
     return { delayRatio: r } as const;
   },
 });
@@ -439,6 +471,7 @@ export const pauseGame = mutation({
       throw new Error("Only a running game can be paused.");
     }
     await ctx.db.patch("sim_games", args.gameId, { status: "paused" });
+    await touchGameMeaningfulActivity(ctx, args.gameId, { humanAction: true });
     return args.gameId;
   },
 });
@@ -460,6 +493,7 @@ export const resumeGame = mutation({
       throw new Error("Only a paused game can be resumed.");
     }
     await ctx.db.patch("sim_games", args.gameId, { status: "running" });
+    await touchGameMeaningfulActivity(ctx, args.gameId, { humanAction: true });
     return args.gameId;
   },
 });
@@ -491,6 +525,7 @@ export const setSimCronTurnsDisabled = mutation({
     await ctx.db.patch("sim_games", args.gameId, {
       simCronTurnsDisabled: args.disabled ? true : undefined,
     });
+    await touchGameMeaningfulActivity(ctx, args.gameId, { humanAction: true });
     return { disabled: args.disabled } as const;
   },
 });

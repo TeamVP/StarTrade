@@ -39,8 +39,15 @@ const EconomyPage = lazyNamedComponent(() => import("@/app/router/EconomyPage"),
 const EmpiresPage = lazyNamedComponent(() => import("@/app/router/EmpiresPage"), "EmpiresPage");
 const TradersPage = lazyNamedComponent(() => import("@/app/router/TradersPage"), "TradersPage");
 const HistoryPage = lazyNamedComponent(() => import("@/app/router/HistoryPage"), "HistoryPage");
+const ResultsPage = lazyNamedComponent(() => import("@/app/router/ResultsPage"), "ResultsPage");
 const BalancePage = lazyNamedComponent(() => import("@/app/router/BalancePage"), "BalancePage");
 const SignInPage = lazyNamedComponent(() => import("@/app/router/SignInPage"), "SignInPage");
+const UserAreaLayout = lazyNamedComponent(
+  () => import("@/app/router/UserAreaLayout"),
+  "UserAreaLayout",
+);
+const LobbyPage = lazyNamedComponent(() => import("@/app/router/LobbyPage"), "LobbyPage");
+const ProfilePage = lazyNamedComponent(() => import("@/app/router/ProfilePage"), "ProfilePage");
 const PrivacyPolicyPage = lazyNamedComponent(
   () => import("@/app/router/PrivacyPolicyPage"),
   "PrivacyPolicyPage",
@@ -81,6 +88,10 @@ const PlayerHistoryPage = lazyNamedComponent(
   () => import("@/app/router/PlayerHistoryPage"),
   "PlayerHistoryPage",
 );
+const PlayerResultsPage = lazyNamedComponent(
+  () => import("@/app/router/PlayerResultsPage"),
+  "PlayerResultsPage",
+);
 
 const playerChildRoutes = [
   { index: true, element: <PlayerHomePage /> },
@@ -90,6 +101,7 @@ const playerChildRoutes = [
   { path: "fleet", element: <PlayerFleetPage /> },
   { path: "combat", element: <PlayerCombatPage /> },
   { path: "history", element: <PlayerHistoryPage /> },
+  { path: "results", element: <PlayerResultsPage /> },
 ] as const;
 
 const adminChildRoutes = [
@@ -102,6 +114,7 @@ const adminChildRoutes = [
   { path: "empires", element: <EmpiresPage /> },
   { path: "traders", element: <TradersPage /> },
   { path: "history", element: <HistoryPage /> },
+  { path: "results", element: <ResultsPage /> },
   { path: "balance", element: <BalancePage /> },
   { path: "users", element: <AdminUsersPage /> },
 ] as const;
@@ -114,6 +127,7 @@ const legacyAdminRedirects = [
   { path: "/empires", to: "/admin/empires" },
   { path: "/traders", to: "/admin/traders" },
   { path: "/history", to: "/admin/history" },
+  { path: "/results", to: "/admin/results" },
   { path: "/balance", to: "/admin/balance" },
 ] as const;
 
@@ -125,6 +139,16 @@ const router = createBrowserRouter([
   {
     path: "/sign-in",
     element: <SignInPage />,
+  },
+  {
+    path: "/lobby",
+    element: <UserAreaLayout />,
+    children: [{ index: true, element: <LobbyPage /> }],
+  },
+  {
+    path: "/profile",
+    element: <UserAreaLayout />,
+    children: [{ index: true, element: <ProfilePage /> }],
   },
   {
     path: "/legals/privacy",

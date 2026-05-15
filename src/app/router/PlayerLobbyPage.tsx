@@ -24,6 +24,14 @@ function formatStatus(status: string): string {
   return status.charAt(0).toUpperCase() + status.slice(1);
 }
 
+function formatFinishReason(reason: string | null): string {
+  if (reason === null) return "No durable result yet";
+  return reason
+    .split("_")
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
 export function PlayerLobbyPage() {
   const { selectedGameId, setSelectedGameId } = useActiveGame();
   const { basePath, empireName } = usePlayerPreview();
@@ -153,9 +161,15 @@ export function PlayerLobbyPage() {
               .sort((a, b) => a.sortOrder - b.sortOrder)
               .map((entry) => {
               const game = entry.game;
+              const result = entry.result;
               const isSelected = game !== null && selectedGameId === game._id;
-              const isFinishedWin = game?.status === "finished" && game.winnerEmpireKey === "aurora";
-              const isFinishedLoss = game?.status === "finished" && game.winnerEmpireKey !== null && game.winnerEmpireKey !== "aurora";
+              const isFinishedWin = game?.status === "finished" && result?.auroraWasWinner === true;
+              const isFinishedLoss =
+                game?.status === "finished" &&
+                result !== null &&
+                result !== undefined &&
+                result.auroraPlacement !== null &&
+                !result.auroraWasWinner;
               return (
                 <Card
                   key={entry.key}
@@ -225,6 +239,39 @@ export function PlayerLobbyPage() {
                         </dd>
                       </div>
                     </dl>
+                    {game?.status === "finished" && result !== null ? (
+                      <div className="mt-3 grid gap-2 text-sm text-st-muted sm:grid-cols-4">
+                        <div>
+                          <dt className="text-xs uppercase tracking-wide">Outcome</dt>
+                          <dd className="mt-0.5 text-st-fg">
+                            {result.auroraPlacement === null
+                              ? "No Aurora result"
+                              : `Placed #${result.auroraPlacement}`}
+                          </dd>
+                        </div>
+                        <div>
+                          <dt className="text-xs uppercase tracking-wide">Winner</dt>
+                          <dd className="mt-0.5 text-st-fg">
+                            {result.winnerEmpireName ?? "No winner"}
+                          </dd>
+                        </div>
+                        <div>
+                          <dt className="text-xs uppercase tracking-wide">Finished</dt>
+                          <dd className="mt-0.5 text-st-fg">{formatDateTime(result.endedAt)}</dd>
+                        </div>
+                        <div>
+                          <dt className="text-xs uppercase tracking-wide">Reason</dt>
+                          <dd className="mt-0.5 text-st-fg">
+                            {formatFinishReason(result.finishReason)}
+                          </dd>
+                        </div>
+                      </div>
+                    ) : null}
+                    {game?.status === "finished" && result !== null && result.auroraPlacement !== null ? (
+                      <p className="mt-3 text-xs text-st-muted">
+                        Aurora finished with {result.auroraStarsControlledFinal ?? 0} stars, {result.auroraFleetStrengthFinal ?? 0} fleet strength, and score {result.auroraScoreFinal ?? 0}.
+                      </p>
+                    ) : null}
                     {!entry.unlocked ? (
                       <p className="mt-3 text-xs text-st-muted">
                         This scenario unlocks after you reach {entry.requiredSmallWins} small-map wins.

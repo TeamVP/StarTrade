@@ -40,11 +40,18 @@ export function AdminPanel() {
     const formData = new FormData(form);
     const nameValue = formData.get("name");
     const mapKeyValue = formData.get("mapKey");
+    const retentionClassValue = formData.get("retentionClass");
     const npcEmpireKeys = formData
       .getAll("npcEmpireKeys")
       .filter((value): value is string => typeof value === "string");
     const name = typeof nameValue === "string" ? nameValue.trim() : "";
     const mapKey = typeof mapKeyValue === "string" ? mapKeyValue.trim() : "";
+    const retentionClass =
+      retentionClassValue === "discarded" ||
+      retentionClassValue === "official" ||
+      retentionClassValue === "archived_debug"
+        ? retentionClassValue
+        : "official";
 
     if (!name || !mapKey) return;
 
@@ -56,6 +63,7 @@ export function AdminPanel() {
         mapKey,
         seed: crypto.randomUUID(),
         npcEmpireKeys,
+        retentionClass,
       });
       setSelectedGameId(newGameId);
       form.reset();
@@ -105,6 +113,20 @@ export function AdminPanel() {
             <option value="v1-twenty">Small game - 20 stars</option>
             <option value="v1-medium">Medium game - 120 stars</option>
             <option value="v1-spiral">Large game - 200 stars (sparse spirals)</option>
+          </select>
+        </label>
+        <label className="block">
+          <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-st-muted">
+            Retention policy
+          </span>
+          <select
+            name="retentionClass"
+            defaultValue="official"
+            className="w-full rounded border border-st-border bg-st-bg px-3 py-2 text-sm"
+          >
+            <option value="official">Official results and cleanup</option>
+            <option value="discarded">Discard after playtest cleanup</option>
+            <option value="archived_debug">Archive debug transcript</option>
           </select>
         </label>
         <fieldset className="rounded border border-st-border bg-st-bg/40 p-3">
@@ -180,7 +202,7 @@ export function AdminPanel() {
               <div>
                 <p className="font-medium">{game.name}</p>
                 <p className="text-xs text-st-muted">
-                  {game.mapKey} - {game.npcEmpireKeys?.length ?? 0} NPC empires
+                  {game.mapKey} - {game.npcEmpireKeys?.length ?? 0} NPC empires - {game.retentionClass ?? "official"}
                 </p>
               </div>
               <Button

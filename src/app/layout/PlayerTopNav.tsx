@@ -9,6 +9,7 @@ const subPaths = [
   { segment: "fleet", label: "Fleet" },
   { segment: "combat", label: "Combat" },
   { segment: "history", label: "History" },
+  { segment: "results", label: "Results" },
 ] as const;
 
 export function PlayerTopNav() {

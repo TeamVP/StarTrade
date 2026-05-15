@@ -18,6 +18,45 @@ export const getGame = query({
   },
 });
 
+export const getDurableGameResult = query({
+  args: { gameId: v.id("sim_games") },
+  handler: async (ctx, args) => {
+    const gameResult = await ctx.db
+      .query("sim_game_results")
+      .withIndex("by_gameId", (q) => q.eq("gameId", args.gameId))
+      .unique();
+    if (gameResult === null) {
+      return null;
+    }
+
+    const empireResults = await ctx.db
+      .query("emp_results")
+      .withIndex("by_gameResultId", (q) => q.eq("gameResultId", gameResult._id))
+      .collect();
+    empireResults.sort((a, b) => a.placement - b.placement);
+
+    return {
+      gameResult,
+      placements: empireResults.map((row) => ({
+        empireKey: row.empireKey,
+        empireName: row.empireName,
+        placement: row.placement,
+        isWinner: row.isWinner,
+        controllerKind: row.controllerKind,
+        playerName: row.playerName,
+        npcPlayerKey: row.npcPlayerKey,
+        userId: row.userId,
+        scoreFinal: row.scoreFinal,
+        starsControlledFinal: row.starsControlledFinal,
+        fleetStrengthFinal: row.fleetStrengthFinal,
+        eliminated: row.eliminated,
+        eliminationReason: row.eliminationReason,
+        strategySummaryJson: row.strategySummaryJson,
+      })),
+    };
+  },
+});
+
 /**
  * Running games with current-turn resolution status for the /games dashboard.
  * Uses only stored timestamps; the client compares `resolvingStartedAt` to `Date.now()`

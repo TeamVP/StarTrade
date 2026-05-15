@@ -3,7 +3,11 @@ import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import type { Id } from "../_generated/dataModel";
 import type { MutationCtx } from "../_generated/server";
-import { assertMayAdjustGalaxySystemEmphasis, gameAllowsPlayerActions } from "../sim/helpers";
+import {
+  assertMayAdjustGalaxySystemEmphasis,
+  gameAllowsPlayerActions,
+  touchGameMeaningfulActivity,
+} from "../sim/helpers";
 
 async function resolvePriorityStarEmpireId(
   ctx: MutationCtx,
@@ -77,6 +81,7 @@ export const setEmphasis = mutation({
       emphasisShips: ships,
       emphasisFood: food,
     });
+    await touchGameMeaningfulActivity(ctx, args.gameId, { humanAction: true });
     return null;
   },
 });
@@ -113,6 +118,7 @@ export const adjustFoodImportSubsidy = mutation({
     await ctx.db.patch("gal_systems", args.systemId, {
       foodImportSubsidyPerUnit: next,
     });
+    await touchGameMeaningfulActivity(ctx, args.gameId, { humanAction: true });
     return null;
   },
 });
@@ -156,6 +162,7 @@ export const setPriorityStar = mutation({
       if (existing !== null) {
         await ctx.db.delete("emp_priority_stars", existing._id);
       }
+      await touchGameMeaningfulActivity(ctx, args.gameId, { humanAction: true });
       return null;
     }
 
@@ -168,6 +175,7 @@ export const setPriorityStar = mutation({
         createdAt: Date.now(),
       });
     }
+    await touchGameMeaningfulActivity(ctx, args.gameId, { humanAction: true });
     return null;
   },
 });

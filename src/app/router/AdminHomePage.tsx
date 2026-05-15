@@ -11,6 +11,7 @@ const liveLinks = [
   { to: "/admin/empires", label: "Empires", description: "Empire status, holdings, and systems." },
   { to: "/admin/traders", label: "Traders", description: "Trader activity and logistics." },
   { to: "/admin/history", label: "History", description: "Timeline and recorded events." },
+  { to: "/admin/results", label: "Results", description: "Durable finished-game outcomes and leaderboards." },
   { to: "/admin/balance", label: "Balance", description: "Tune live game parameters." },
 ] as const;
 

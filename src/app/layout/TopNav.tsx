@@ -11,6 +11,7 @@ const links = [
   { to: "/admin/empires", label: "Empires", end: false },
   { to: "/admin/traders", label: "Traders", end: false },
   { to: "/admin/history", label: "History", end: false },
+  { to: "/admin/results", label: "Results", end: false },
   { to: "/admin/balance", label: "Balance", end: false },
   { to: "/admin/users", label: "Users", end: false },
 ] as const;
