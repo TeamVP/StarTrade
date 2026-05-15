@@ -3,12 +3,13 @@ import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { api } from "../_generated/api";
 import { assignStarterOwnerEmpireSeat } from "../sim/mutations";
+import { gameAllowsPlayerActions, touchGameMeaningfulActivity } from "../sim/helpers";
 import { getStarterLobbyScenario, STARTER_LOBBY_SCENARIOS } from "./lobbyScenarios";
 import {
   buildStrategyFromBaseAndOverrides,
   canonicalizeStrategyJson,
-  getPublicAutomationStrategy,
 } from "./automationStrategyLibrary";
+import { getAutomationStrategyByKey, getPublicAutomationStrategyByKey } from "./automationStrategyCatalog";
 import type { Id } from "../_generated/dataModel";
 import type { MutationCtx } from "../_generated/server";
 
@@ -127,7 +128,7 @@ export const createAutomationProfileFromLibrary = mutation({
   },
   handler: async (ctx, args) => {
     const userId = await requireAuthUserId(ctx);
-    const libraryStrategy = getPublicAutomationStrategy(args.libraryKey);
+    const libraryStrategy = await getPublicAutomationStrategyByKey(ctx, args.libraryKey);
     if (libraryStrategy === null) {
       throw new Error("Public automation strategy not found.");
     }
@@ -208,7 +209,7 @@ export const updateLibraryAutomationProfile = mutation({
       throw new Error("This automation profile is custom. Update its strategy JSON instead.");
     }
 
-    const libraryStrategy = getPublicAutomationStrategy(profile.sourceLibraryKey);
+    const libraryStrategy = await getAutomationStrategyByKey(ctx, profile.sourceLibraryKey);
     if (libraryStrategy === null) {
       throw new Error("The source public automation strategy no longer exists.");
     }
@@ -363,6 +364,85 @@ export const applyAutomationProfileToMyEmpire = mutation({
       updatedAt: now,
     });
     return empireId;
+  },
+});
+
+export const clearMyEmpireAutomationStrategy = mutation({
+  args: {
+    gameId: v.id("sim_games"),
+  },
+  handler: async (ctx, args) => {
+    const userId = await requireAuthUserId(ctx);
+    const empireId = await assertEmpireSeatForGame(ctx, {
+      gameId: args.gameId,
+      userId,
+    });
+    const empire = await ctx.db.get("emp_states", empireId);
+    if (empire === null || empire.gameId !== args.gameId) {
+      throw new Error("Empire not found.");
+    }
+
+    await ctx.db.patch("emp_states", empireId, {
+      strategyJson: undefined,
+    });
+    await touchGameMeaningfulActivity(ctx, args.gameId, { humanAction: true });
+    return empireId;
+  },
+});
+
+export const queueMyEmpireStandingOrdersRefresh = mutation({
+  args: {
+    gameId: v.id("sim_games"),
+  },
+  handler: async (ctx, args) => {
+    const userId = await requireAuthUserId(ctx);
+    const empireId = await assertEmpireSeatForGame(ctx, {
+      gameId: args.gameId,
+      userId,
+    });
+    const empire = await ctx.db.get("emp_states", empireId);
+    if (empire === null || empire.gameId !== args.gameId) {
+      throw new Error("Empire not found.");
+    }
+
+    const game = await ctx.db.get("sim_games", args.gameId);
+    if (game === null) {
+      throw new Error("Game not found.");
+    }
+    if (!gameAllowsPlayerActions(game.status)) {
+      throw new Error("Standing orders can only be changed while the game is running or paused.");
+    }
+
+    const turnRow = await ctx.db
+      .query("sim_turns")
+      .withIndex("by_gameId_and_turnNumber", (q) =>
+        q.eq("gameId", args.gameId).eq("turnNumber", game.currentTurn),
+      )
+      .unique();
+
+    if (turnRow?.state !== "resolving") {
+      const existingRoutes = await ctx.db
+        .query("flt_garrison_routes")
+        .withIndex("by_gameId_and_empireId", (q) =>
+          q.eq("gameId", args.gameId).eq("empireId", empireId),
+        )
+        .take(256);
+
+      for (const route of existingRoutes) {
+        await ctx.db.delete("flt_garrison_routes", route._id);
+      }
+    }
+
+    const requestedAt = Date.now();
+    await ctx.db.patch("emp_states", empireId, {
+      standingOrdersRefreshRequestedAt: requestedAt,
+    });
+    await touchGameMeaningfulActivity(ctx, args.gameId, { humanAction: true });
+    return {
+      empireId,
+      queuedAt: requestedAt,
+      turnResolving: turnRow?.state === "resolving",
+    };
   },
 });
 

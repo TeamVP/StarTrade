@@ -271,6 +271,25 @@ export default defineSchema({
     .index("by_userId_and_name", ["userId", "name"]),
 
   /**
+   * Shared automation strategy catalog. Built-in strategies are seeded here from
+   * `convex/usr/automationStrategyLibrary.ts` and can then be edited in-place by admins.
+   */
+  usr_automation_strategies: defineTable({
+    key: v.string(),
+    name: v.string(),
+    description: v.string(),
+    tags: v.array(v.string()),
+    strategyJson: v.string(),
+    availableForHumans: v.boolean(),
+    availableForNpcs: v.boolean(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_key", ["key"])
+    .index("by_availableForHumans", ["availableForHumans"])
+    .index("by_availableForNpcs", ["availableForNpcs"]),
+
+  /**
    * Per-user default colors for empire roster slots. Keys match `emp_states.empireKey` for
    * scripted empires (e.g. aurora, iron) or `emp_states.npcPlayerKey` for catalog NPCs (e.g.
    * tomas-varek). Applied when that user creates or starts a game that runs map seeding.
@@ -439,6 +458,8 @@ export default defineSchema({
     playerName: v.optional(v.string()),
     /** Editable automation brain for NPCs or humans that opt into scripted empire management. */
     strategyJson: v.optional(v.string()),
+    /** Timestamp when this empire asked for its standing orders to be cleared and replanned. */
+    standingOrdersRefreshRequestedAt: v.optional(v.number()),
     /**
      * When set and `currentTurn < traderBoycottUntilTurn`, background NPC traders refuse to
      * deliver or spawn voyages to systems owned by this empire (they previously could not pay).

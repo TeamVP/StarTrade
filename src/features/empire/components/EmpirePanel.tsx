@@ -1,8 +1,10 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
+import { Repeat2 } from "lucide-react";
 import { api } from "../../../../convex/_generated/api";
 import type { Id } from "../../../../convex/_generated/dataModel";
 import { Card } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
 import { useGalaxyMapNav } from "@/features/galaxy/context/GalaxyMapNavContext";
 import { useActiveGame } from "@/features/galaxy/hooks/useActiveGame";
 import { formatPopulationPeople } from "@/lib/populationFormat";
@@ -125,6 +127,191 @@ function StrategicSlidersBlock(props: { gameId: Id<"sim_games"> }) {
           </div>
         );
       })}
+    </div>
+  );
+}
+
+type AutomationProfileRow = {
+  _id: Id<"usr_automation_profiles">;
+  name: string;
+  isActive?: boolean;
+  strategyJson: string;
+};
+
+type EmpireAutomationState = {
+  empireId: Id<"emp_states">;
+  empireKey: string;
+  empireName: string;
+  strategyJson: string | null;
+  standingOrdersRefreshRequestedAt: number | null;
+};
+
+function mutationErrorMessage(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.replace(/^[\s\S]*?Error:\s*/g, "").trim();
+}
+
+function EmpireAutomationPicker(props: { gameId: Id<"sim_games"> }) {
+  const profilesQuery = useQuery(api.usr.queries.listMyAutomationProfiles, {});
+  const empireAutomationQuery = useQuery(api.usr.queries.getMyEmpireAutomationStrategy, {
+    gameId: props.gameId,
+  });
+  const applyAutomationProfileToMyEmpire = useMutation(
+    api.usr.mutations.applyAutomationProfileToMyEmpire,
+  );
+  const clearMyEmpireAutomationStrategy = useMutation(
+    api.usr.mutations.clearMyEmpireAutomationStrategy,
+  );
+  const queueMyEmpireStandingOrdersRefresh = useMutation(
+    api.usr.mutations.queueMyEmpireStandingOrdersRefresh,
+  );
+
+  const [selectedValue, setSelectedValue] = useState("manual");
+  const [selectionBusy, setSelectionBusy] = useState(false);
+  const [rerunBusy, setRerunBusy] = useState(false);
+  const [status, setStatus] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const activeProfiles = useMemo(
+    () =>
+      ((profilesQuery ?? []) as AutomationProfileRow[]).filter((profile) => profile.isActive ?? true),
+    [profilesQuery],
+  );
+  const empireAutomation = (empireAutomationQuery ?? null) as EmpireAutomationState | null;
+
+  const derivedSelectionValue = useMemo(() => {
+    if (empireAutomation === null || empireAutomation.strategyJson === null) {
+      return "manual";
+    }
+    const matchedProfile = activeProfiles.find(
+      (profile) => profile.strategyJson === empireAutomation.strategyJson,
+    );
+    return matchedProfile?._id ?? "current-live";
+  }, [activeProfiles, empireAutomation]);
+
+  useEffect(() => {
+    if (profilesQuery === undefined || empireAutomationQuery === undefined) {
+      return;
+    }
+    setSelectedValue(derivedSelectionValue);
+  }, [derivedSelectionValue, empireAutomationQuery, profilesQuery]);
+
+  if (profilesQuery === undefined || empireAutomationQuery === undefined) {
+    return (
+      <div className="mt-3 border-t border-st-border pt-3 text-xs text-st-muted">
+        Loading strategy controls…
+      </div>
+    );
+  }
+
+  if (empireAutomation === null) {
+    return null;
+  }
+
+  async function handleSelectionChange(nextValue: string) {
+    if (nextValue === selectedValue || nextValue === "current-live") {
+      return;
+    }
+
+    setSelectedValue(nextValue);
+    setSelectionBusy(true);
+    setStatus(null);
+    setError(null);
+    try {
+      if (nextValue === "manual") {
+        await clearMyEmpireAutomationStrategy({ gameId: props.gameId });
+        setStatus("Manual mode selected. Existing standing orders stay until you rerun them.");
+      } else {
+        await applyAutomationProfileToMyEmpire({
+          gameId: props.gameId,
+          profileId: nextValue as Id<"usr_automation_profiles">,
+        });
+        const profileName =
+          activeProfiles.find((profile) => profile._id === nextValue)?.name ?? "strategy";
+        setStatus(`${profileName} is now your active empire strategy.`);
+      }
+    } catch (selectionError) {
+      setSelectedValue(derivedSelectionValue);
+      setError(mutationErrorMessage(selectionError));
+    } finally {
+      setSelectionBusy(false);
+    }
+  }
+
+  async function handleQueueRefresh() {
+    setRerunBusy(true);
+    setStatus(null);
+    setError(null);
+    try {
+      const result = await queueMyEmpireStandingOrdersRefresh({ gameId: props.gameId });
+      setStatus(
+        result.turnResolving
+          ? "Standing-order reset queued. It will apply after the current turn finishes resolving."
+          : "Standing orders cleared and queued to rebuild from the selected strategy on the next planning pass.",
+      );
+    } catch (queueError) {
+      setError(mutationErrorMessage(queueError));
+    } finally {
+      setRerunBusy(false);
+    }
+  }
+
+  const hasUnmatchedLiveStrategy = derivedSelectionValue === "current-live";
+
+  return (
+    <div className="mt-3 space-y-2 border-t border-st-border pt-3">
+      <div className="flex items-center gap-2">
+        <label className="min-w-0 flex-1 space-y-1 text-xs text-st-muted">
+          <span className="block font-semibold uppercase tracking-wide">Standing orders strategy</span>
+          <select
+            value={selectedValue}
+            disabled={selectionBusy || rerunBusy}
+            onChange={(event) => {
+              void handleSelectionChange(event.target.value);
+            }}
+            className="w-full rounded-md border border-st-border bg-st-panel px-3 py-2 text-sm text-st-fg outline-none focus:border-st-accent"
+          >
+            <option value="manual">Manual</option>
+            {hasUnmatchedLiveStrategy ? (
+              <option value="current-live">Current live strategy (not in active roster)</option>
+            ) : null}
+            {activeProfiles.map((profile) => (
+              <option key={profile._id} value={profile._id}>
+                {profile.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <Button
+          type="button"
+          variant="secondary"
+          className="mt-5 size-10 shrink-0 px-0"
+          disabled={selectionBusy || rerunBusy}
+          title="Clear this empire's standing orders and rebuild from the selected strategy when planning runs next"
+          aria-label="Rerun standing orders from selected strategy"
+          onClick={() => {
+            void handleQueueRefresh();
+          }}
+        >
+          <Repeat2 className="size-4" aria-hidden />
+        </Button>
+      </div>
+      <p className="text-[11px] text-st-muted">
+        Choose one of your active roster strategies or Manual. The rerun button clears this empire&apos;s
+        standing orders and rebuilds automation routes from the selected strategy on the next eligible pass.
+      </p>
+      {activeProfiles.length === 0 ? (
+        <p className="text-[11px] text-amber-200/90">
+          No active strategy profiles are in your roster right now, so only Manual is available here.
+        </p>
+      ) : null}
+      {empireAutomation.standingOrdersRefreshRequestedAt !== null ? (
+        <p className="text-[11px] text-cyan-200/90">
+          A standing-order reset is already queued for this empire.
+        </p>
+      ) : null}
+      {status !== null ? <p className="text-[11px] text-emerald-300">{status}</p> : null}
+      {error !== null ? <p className="text-[11px] text-red-300">{error}</p> : null}
     </div>
   );
 }
@@ -315,6 +502,9 @@ export function EmpirePanel(props: { focusEmpireId?: Id<"emp_states"> | null }) 
         <p className="mt-3 text-xs text-amber-300/90">
           This game has no empire matching your assigned faction. Check the active game or seed.
         </p>
+      ) : null}
+      {activeGame !== null && snapshotEmpire !== null ? (
+        <EmpireAutomationPicker gameId={activeGame._id} />
       ) : null}
       {focusEmpireId !== null &&
       (snapshotEmpire !== null || otherHumanEmpires.length > 0 || npcEmpires.length > 0) ? (

@@ -3,11 +3,8 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { v } from "convex/values";
 import type { Doc, Id } from "../_generated/dataModel";
 import { STARTER_LOBBY_SCENARIOS, mapTierFromMapKey } from "./lobbyScenarios";
-import {
-  getPublicAutomationStrategy,
-  PUBLIC_AUTOMATION_STRATEGIES,
-  summarizeAutomationStrategy,
-} from "./automationStrategyLibrary";
+import { getAutomationStrategyByKey, toPublicAutomationStrategy } from "./automationStrategyCatalog";
+import { summarizeAutomationStrategy } from "./automationStrategyLibrary";
 
 type EmpireResultWithGame = Doc<"emp_results"> & {
   gameResult: Doc<"sim_game_results">;
@@ -311,8 +308,12 @@ export const getMyLobbyState = query({
 
 export const listPublicAutomationStrategies = query({
   args: {},
-  handler: async () => {
-    return PUBLIC_AUTOMATION_STRATEGIES;
+  handler: async (ctx) => {
+    const rows = await ctx.db.query("usr_automation_strategies").take(128);
+    return rows
+      .filter((row) => row.availableForHumans)
+      .map((row) => toPublicAutomationStrategy(row))
+      .sort((left, right) => left.name.localeCompare(right.name));
   },
 });
 
@@ -329,16 +330,22 @@ export const listMyAutomationProfiles = query({
       .withIndex("by_userId", (q) => q.eq("userId", userId))
       .take(128);
 
-    return rows
-      .sort((a, b) => b.updatedAt - a.updatedAt)
-      .map((row) => ({
-        ...row,
-        sourceLibrary:
-          row.sourceLibraryKey !== undefined
-            ? getPublicAutomationStrategy(row.sourceLibraryKey)
-            : null,
-        automationPreview: summarizeAutomationStrategy(row.strategyJson),
-      }));
+    return await Promise.all(
+      rows
+        .sort((a, b) => b.updatedAt - a.updatedAt)
+        .map(async (row) => {
+          const sourceLibrary =
+            row.sourceLibraryKey !== undefined
+              ? await getAutomationStrategyByKey(ctx, row.sourceLibraryKey)
+              : null;
+
+          return {
+            ...row,
+            sourceLibrary: sourceLibrary === null ? null : toPublicAutomationStrategy(sourceLibrary),
+            automationPreview: summarizeAutomationStrategy(row.strategyJson),
+          };
+        }),
+    );
   },
 });
 
@@ -355,12 +362,14 @@ export const getMyAutomationProfile = query({
       return null;
     }
 
+    const sourceLibrary =
+      profile.sourceLibraryKey !== undefined
+        ? await getAutomationStrategyByKey(ctx, profile.sourceLibraryKey)
+        : null;
+
     return {
       ...profile,
-      sourceLibrary:
-        profile.sourceLibraryKey !== undefined
-          ? getPublicAutomationStrategy(profile.sourceLibraryKey)
-          : null,
+      sourceLibrary: sourceLibrary === null ? null : toPublicAutomationStrategy(sourceLibrary),
       automationPreview: summarizeAutomationStrategy(profile.strategyJson),
     };
   },
@@ -405,6 +414,7 @@ export const getMyEmpireAutomationStrategy = query({
           ? summarizeAutomationStrategy(empire.strategyJson)
           : null,
       strategicSliderOverrides: empire.strategicSliderOverrides ?? null,
+      standingOrdersRefreshRequestedAt: empire.standingOrdersRefreshRequestedAt ?? null,
     };
   },
 });

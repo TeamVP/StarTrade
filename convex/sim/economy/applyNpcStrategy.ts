@@ -1340,6 +1340,17 @@ export async function applyNpcStrategy(
   }
 
   for (const empire of empires) {
+    let existingRoutes = routesByEmpire.get(empire._id) ?? [];
+    if (empire.standingOrdersRefreshRequestedAt !== undefined) {
+      for (const route of existingRoutes) {
+        await ctx.db.delete("flt_garrison_routes", route._id);
+      }
+      await ctx.db.patch("emp_states", empire._id, {
+        standingOrdersRefreshRequestedAt: undefined,
+      });
+      existingRoutes = [];
+    }
+
     if (empire.isCollapsed || empire.strategyJson === undefined) {
       continue;
     }
@@ -1393,7 +1404,7 @@ export async function applyNpcStrategy(
         priorityRows: empirePriorityRows,
         adjacency,
         strengthBySystem,
-        existingRoutes: routesByEmpire.get(empire._id) ?? [],
+        existingRoutes,
         manualOrderOriginKeys,
       });
     }
