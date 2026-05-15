@@ -9,7 +9,6 @@ import {
   DEFAULT_GAME_SETTINGS,
   loadGameSettings,
 } from "../sim/economy/gameSettings";
-import { evaluateGameFinalization, queueFinishedGameCleanup } from "../sim/finalization";
 
 function normalizeAdminCreatedEmail(email: string): string {
   const normalized = email.trim().toLowerCase();
@@ -248,66 +247,14 @@ export const killGame = mutation({
     await ctx.db.patch("sim_games", args.gameId, {
       status: "finished",
       endedAt: Date.now(),
-      retentionClass: "discarded",
-      finishReason: "admin_terminated_discarded",
-      finalizationState: "pending_cleanup",
     });
 
-    await queueFinishedGameCleanup(ctx, args.gameId);
+    await ctx.scheduler.runAfter(0, internal.admin.internal.continueWipeGame, {
+      gameId: args.gameId,
+      phaseIndex: 0,
+    });
 
     return { deleting: true as const };
-  },
-});
-
-export const finalizeGameByScore = mutation({
-  args: { gameId: v.id("sim_games") },
-  handler: async (ctx, args) => {
-    const userId = await getAuthUserId(ctx);
-    if (userId === null) {
-      throw new Error("Authentication required.");
-    }
-    await assertGameAdmin(ctx, args.gameId, userId);
-
-    if ((await ctx.db.get("sim_games", args.gameId)) === null) {
-      throw new Error("Game not found.");
-    }
-
-    return await evaluateGameFinalization(ctx, {
-      gameId: args.gameId,
-      forceFinishReason: "admin_terminated_scored",
-    });
-  },
-});
-
-export const setGameRetentionClass = mutation({
-  args: {
-    gameId: v.id("sim_games"),
-    retentionClass: v.union(
-      v.literal("discarded"),
-      v.literal("official"),
-      v.literal("archived_debug"),
-    ),
-  },
-  handler: async (ctx, args) => {
-    const userId = await getAuthUserId(ctx);
-    if (userId === null) {
-      throw new Error("Authentication required.");
-    }
-    await assertGameAdmin(ctx, args.gameId, userId);
-
-    const game = await ctx.db.get("sim_games", args.gameId);
-    if (game === null) {
-      throw new Error("Game not found.");
-    }
-    if (game.finalizationState === "pending_cleanup" || game.finalizationState === "cleaned") {
-      throw new Error("Retention class can no longer be changed for a game already in cleanup.");
-    }
-
-    await ctx.db.patch("sim_games", args.gameId, {
-      retentionClass: args.retentionClass,
-    });
-
-    return { retentionClass: args.retentionClass } as const;
   },
 });
 

@@ -12,11 +12,12 @@ export const listUsers = query({
     if (userId === null || args.gameId === null) {
       return { authorized: false, users: [] };
     }
+    const gameId = args.gameId;
 
     const binding = await ctx.db
       .query("usr_game_roles")
       .withIndex("by_gameId_and_userId", (q) =>
-        q.eq("gameId", args.gameId).eq("userId", userId),
+        q.eq("gameId", gameId).eq("userId", userId),
       )
       .unique();
 
