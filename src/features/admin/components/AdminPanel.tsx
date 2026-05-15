@@ -27,12 +27,15 @@ export function AdminPanel() {
   const createGame = useMutation(api.sim.mutations.createGame);
   const reseedGame = useMutation(api.admin.mutations.reseedGame);
   const repairGameEconomy = useMutation(api.admin.mutations.repairGameEconomy);
+  const runLegacyGameCleanupBatch = useMutation(api.admin.mutations.runLegacyGameCleanupBatch);
   const [creating, setCreating] = useState(false);
   const [seedingGameId, setSeedingGameId] = useState<Id<"sim_games"> | null>(null);
   const [seedError, setSeedError] = useState<string | null>(null);
   const [godModeOpen, setGodModeOpen] = useState(false);
   const [repairing, setRepairing] = useState(false);
   const [repairResult, setRepairResult] = useState<string | null>(null);
+  const [cleaningLegacyGames, setCleaningLegacyGames] = useState(false);
+  const [legacyCleanupResult, setLegacyCleanupResult] = useState<string | null>(null);
 
   async function onCreateGame(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -220,6 +223,37 @@ export function AdminPanel() {
 
       {activeGame != null && (
         <div className="mt-4 border-t border-st-border pt-4 space-y-3">
+          <div>
+            <p className="text-xs text-st-muted mb-1">
+              Compacts older finished or abandoned games through the new durable-results pipeline.
+              Run this repeatedly until it reports 0 processed if you already have a large backlog.
+            </p>
+            <Button
+              type="button"
+              disabled={cleaningLegacyGames}
+              className="w-full text-xs"
+              onClick={() => {
+                setLegacyCleanupResult(null);
+                setCleaningLegacyGames(true);
+                void runLegacyGameCleanupBatch({ limit: 16, defaultRetentionClass: "official" })
+                  .then((result) => {
+                    setLegacyCleanupResult(
+                      `Processed ${result.processed} games, finalized ${result.finalized}.`,
+                    );
+                  })
+                  .catch((e: unknown) => {
+                    setLegacyCleanupResult(mutationErrorMessage(e));
+                  })
+                  .finally(() => setCleaningLegacyGames(false));
+              }}
+            >
+              {cleaningLegacyGames ? "Compacting backlog…" : "Compact Existing Games"}
+            </Button>
+            {legacyCleanupResult !== null && (
+              <p className="mt-1 text-xs text-emerald-400">{legacyCleanupResult}</p>
+            )}
+          </div>
+
           <div>
             <p className="text-xs text-st-muted mb-1">
               Restores food stockpiles, minimum population, and clears battle-damage

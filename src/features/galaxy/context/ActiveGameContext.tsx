@@ -32,12 +32,14 @@ function readStoredGameId(storageKey: string): Id<"sim_games"> | null {
 export function ActiveGameProvider({
   children,
   storageKey = DEFAULT_STORAGE_KEY,
+  initialSelectedGameId = null,
 }: {
   children: ReactNode;
   storageKey?: string;
+  initialSelectedGameId?: Id<"sim_games"> | null;
 }) {
   const [selectedGameId, setSelectedGameIdState] = useState<Id<"sim_games"> | null>(
-    () => readStoredGameId(storageKey),
+    () => initialSelectedGameId ?? readStoredGameId(storageKey),
   );
 
   const setSelectedGameId = useCallback((id: Id<"sim_games"> | null) => {

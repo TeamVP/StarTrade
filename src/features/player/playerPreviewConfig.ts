@@ -2,7 +2,7 @@ export const AURORA_COMBINE_EMPIRE_NAME = "Aurora Combine";
 export const IRON_DOMINION_EMPIRE_NAME = "Iron Dominion";
 
 export type PlayerPreviewRouteConfig = {
-  basePath: "/eplayer1" | "/eplayer2";
+  basePath: string;
   empireName: string;
 };
 

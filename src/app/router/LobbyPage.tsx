@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
+import { useNavigate } from "react-router-dom";
 import { api } from "../../../convex/_generated/api";
 import { Card } from "@/components/ui/card";
 import { useActiveGame } from "@/features/galaxy/hooks/useActiveGame";
@@ -23,6 +24,7 @@ function formatStatus(status: string): string {
 
 export function LobbyPage() {
   const { selectedGameId, setSelectedGameId } = useActiveGame();
+  const navigate = useNavigate();
   const account = useQuery(api.usr.queries.getMyAccount, {});
   const lobbyState = useQuery(api.usr.queries.getMyLobbyState, {});
   const ensureMyStarterGames = useMutation(api.usr.mutations.ensureMyStarterGames);
@@ -39,6 +41,7 @@ export function LobbyPage() {
 
   function selectGame(gameId: typeof selectedGameId) {
     setSelectedGameId(gameId);
+    void navigate(`/game/${gameId}`);
   }
 
   async function onScenarioAction(entry: NonNullable<typeof lobbyState>["games"][number]) {
@@ -58,6 +61,7 @@ export function LobbyPage() {
       if (entry.game.status === "finished") {
         const result = await resetMyStarterGame({ scenarioKey: entry.key });
         setSelectedGameId(result.gameId as typeof selectedGameId);
+        void navigate(`/game/${result.gameId}`);
         return;
       }
 

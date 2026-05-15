@@ -6,14 +6,22 @@ import { SignOutButton } from "@/features/usr/components/SignOutButton";
 import { ActiveGameProvider } from "@/features/galaxy/context/ActiveGameContext";
 import { PlayerPreviewProvider } from "@/features/player/PlayerPreviewContext";
 import type { PlayerPreviewRouteConfig } from "@/features/player/playerPreviewConfig";
+import type { Id } from "../../../convex/_generated/dataModel";
 
-export function PlayerGameLayout({ config }: { config: PlayerPreviewRouteConfig }) {
+export function PlayerGameLayout({
+  config,
+  initialSelectedGameId = null,
+}: {
+  config: PlayerPreviewRouteConfig;
+  initialSelectedGameId?: Id<"sim_games"> | null;
+}) {
   return (
     <>
       <Authenticated>
         <ActiveGameProvider
           key={config.basePath}
           storageKey={`starstrat:activeGameId:${config.basePath}`}
+          initialSelectedGameId={initialSelectedGameId}
         >
           <PlayerPreviewProvider value={config}>
             <AppShell

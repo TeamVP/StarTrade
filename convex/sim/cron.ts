@@ -85,6 +85,25 @@ export const sweepInactiveGames = internalMutation({
       }
     }
 
+    const finishedGames = await ctx.db
+      .query("sim_games")
+      .withIndex("by_status", (q) => q.eq("status", "finished"))
+      .take(32);
+    for (const game of finishedGames) {
+      if (
+        game.finalizationState === "pending_cleanup" ||
+        game.finalizationState === "cleaned" ||
+        game.finalizationState === "archived_debug"
+      ) {
+        continue;
+      }
+      checked += 1;
+      const result = await evaluateGameFinalization(ctx, { gameId: game._id });
+      if (result.finalized) {
+        finalized += 1;
+      }
+    }
+
     return { checked, finalized };
   },
 });

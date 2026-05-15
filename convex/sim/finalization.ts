@@ -338,7 +338,7 @@ export async function evaluateGameFinalization(
     if (alive.length <= 1 && standings.length > 0) {
       finishReason = "last_empire_standing";
     } else if (game.status === "finished") {
-      finishReason = game.finishReason ?? null;
+      finishReason = game.finishReason ?? "abandoned_scored";
     } else if (
       (game.status === "running" || game.status === "paused") &&
       alive.length > 1 &&

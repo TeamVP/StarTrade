@@ -32,6 +32,10 @@ const AdminUsersPage = lazyNamedComponent(
   () => import("@/app/router/AdminUsersPage"),
   "AdminUsersPage",
 );
+const AdminDatabasePage = lazyNamedComponent(
+  () => import("@/app/router/AdminDatabasePage"),
+  "AdminDatabasePage",
+);
 const GamesPage = lazyNamedComponent(() => import("@/app/router/GamesPage"), "GamesPage");
 const FleetPage = lazyNamedComponent(() => import("@/app/router/FleetPage"), "FleetPage");
 const CombatPage = lazyNamedComponent(() => import("@/app/router/CombatPage"), "CombatPage");
@@ -67,6 +71,10 @@ const PlayerHomePage = lazyNamedComponent(
 const PlayerLobbyPage = lazyNamedComponent(
   () => import("@/app/router/PlayerLobbyPage"),
   "PlayerLobbyPage",
+);
+const GameRoutePage = lazyNamedComponent(
+  () => import("@/app/router/GameRoutePage"),
+  "GameRoutePage",
 );
 const PlayerEmpirePage = lazyNamedComponent(
   () => import("@/app/router/PlayerEmpirePage"),
@@ -115,6 +123,7 @@ const adminChildRoutes = [
   { path: "traders", element: <TradersPage /> },
   { path: "history", element: <HistoryPage /> },
   { path: "results", element: <ResultsPage /> },
+  { path: "db", element: <AdminDatabasePage /> },
   { path: "balance", element: <BalancePage /> },
   { path: "users", element: <AdminUsersPage /> },
 ] as const;
@@ -167,6 +176,10 @@ const router = createBrowserRouter([
     path: "/eplayer2",
     element: <PlayerGameLayout config={PLAYER_PREVIEW_BY_PATH["/eplayer2"]} />,
     children: [...playerChildRoutes],
+  },
+  {
+    path: "/game/:gameId",
+    element: <GameRoutePage />,
   },
   {
     path: "/admin",
