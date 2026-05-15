@@ -11,12 +11,31 @@ export function SignInCard() {
   return (
     <Card className="mx-auto mt-16 w-full max-w-md p-6">
       <h2 className="text-lg font-semibold">Sign in to StarTrade</h2>
+      <Button
+        type="button"
+        variant="secondary"
+        className="mt-4 w-full"
+        onClick={() => {
+          setError(null);
+          void signIn("google").catch((signInError: Error) => {
+            setError(signInError.message);
+          });
+        }}
+      >
+        Continue with Google
+      </Button>
+      <div className="my-4 flex items-center gap-3 text-xs text-st-muted">
+        <div className="h-px flex-1 bg-st-border" />
+        <span>or use email</span>
+        <div className="h-px flex-1 bg-st-border" />
+      </div>
       <form
         className="mt-4 space-y-2"
         onSubmit={(event) => {
           event.preventDefault();
           const formData = new FormData(event.currentTarget);
           formData.set("flow", flow);
+          setError(null);
           void signIn("password", formData).catch((signInError: Error) => {
             setError(signInError.message);
           });
