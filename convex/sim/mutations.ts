@@ -12,7 +12,7 @@ import {
 } from "./helpers";
 import { applyNpcStrategy } from "./economy/applyNpcStrategy";
 import { findLinkBetweenSystems } from "../gal/linkUtils";
-import { normalizeNpcEmpireKeys } from "../seed/npcEmpirePlayers";
+import { getNpcEmpirePlayerByKey, normalizeNpcEmpireKeys } from "../seed/npcEmpirePlayers";
 import { getAutomationStrategyByKey } from "../usr/automationStrategyCatalog";
 import { getMissionByKey } from "../usr/missionCatalog";
 import { DEFAULT_TURN_DURATION_MS } from "./turnTiming";
@@ -149,6 +149,7 @@ async function applyMissionScenarioIfNeeded(
 
     const empirePatch: {
       controller?: "human" | "npc";
+      npcPlayerKey?: string;
       strategyJson?: string;
       strategyStartMode?: "turn" | "attacked";
       strategyStartTurn?: number;
@@ -158,13 +159,26 @@ async function applyMissionScenarioIfNeeded(
       treasury?: number;
     } = {};
 
+    const npcPlayer =
+      config.targetNpcPlayerKey === null
+        ? null
+        : await getNpcEmpirePlayerByKey(ctx, config.targetNpcPlayerKey);
+
     if (config.controller !== null) {
       empirePatch.controller = config.controller;
     }
-    if (config.strategyLibraryKey !== null) {
-      const strategy = await getAutomationStrategyByKey(ctx, config.strategyLibraryKey);
+    if (npcPlayer !== null) {
+      empirePatch.npcPlayerKey = npcPlayer.key;
+      if (config.playerNameOverride === null) {
+        empirePatch.playerName = npcPlayer.playerName;
+      }
+    }
+
+    const strategyLibraryKey = config.strategyLibraryKey ?? npcPlayer?.strategyLibraryKey ?? null;
+    if (strategyLibraryKey !== null) {
+      const strategy = await getAutomationStrategyByKey(ctx, strategyLibraryKey);
       if (strategy === null) {
-        throw new Error(`Mission strategy ${config.strategyLibraryKey} was not found.`);
+        throw new Error(`Mission strategy ${strategyLibraryKey} was not found.`);
       }
       empirePatch.strategyJson = strategy.strategyJson;
     }

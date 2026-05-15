@@ -43,6 +43,30 @@ type EmpireNpcRow = {
   isActive: boolean;
 };
 
+type MissionEmpireConfig = {
+  targetEmpireKey: string | null;
+  targetNpcPlayerKey: string | null;
+  controller: "human" | "npc" | null;
+  strategyLibraryKey: string | null;
+  strategyStartMode: "turn" | "attacked" | null;
+  strategyStartTurn: number | null;
+  treasuryDelta: number;
+  homeworldPopulationDelta: number;
+  homeworldStockFoodDelta: number;
+  homeworldStockWeaponsDelta: number;
+  homeworldStockResearchDelta: number;
+  homeworldLocalTreasuryDelta: number;
+  empireNameOverride: string | null;
+  playerNameOverride: string | null;
+};
+
+type MissionScenario = {
+  playerEmpireKey: string;
+  npcEmpireKeys: string[];
+  automatedEmpireKeys: string[];
+  empireConfigs: MissionEmpireConfig[];
+};
+
 function mutationErrorMessage(error: unknown): string {
   const raw = error instanceof Error ? error.message : String(error);
   return raw.replace(/^[\s\S]*?Error:\s*/g, "").trim() || "Something went wrong.";
@@ -64,6 +88,705 @@ function parseCsv(text: string): string[] {
 
 function formatCsv(values: string[]): string {
   return values.join(", ");
+}
+
+function normalizeNullableString(value: string): string | null {
+  const normalized = value.trim();
+  return normalized.length === 0 ? null : normalized;
+}
+
+function normalizeNullableInteger(value: string): number | null {
+  const normalized = value.trim();
+  if (normalized.length === 0) {
+    return null;
+  }
+  const parsed = Number(normalized);
+  if (!Number.isFinite(parsed)) {
+    return null;
+  }
+  return Math.max(1, Math.floor(parsed));
+}
+
+function normalizeNumber(value: string): number {
+  const normalized = value.trim();
+  if (normalized.length === 0) {
+    return 0;
+  }
+  const parsed = Number(normalized);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function toMissionScenarioJson(scenario: MissionScenario): string {
+  return JSON.stringify(scenario, null, 2);
+}
+
+function parseMissionScenarioJson(text: string): { scenario: MissionScenario | null; error: string | null } {
+  const trimmed = text.trim();
+  if (trimmed.length === 0) {
+    return { scenario: null, error: "Scenario JSON cannot be empty." };
+  }
+
+  try {
+    const parsed = JSON.parse(trimmed) as Partial<MissionScenario>;
+    const scenario: MissionScenario = {
+      playerEmpireKey:
+        typeof parsed.playerEmpireKey === "string" && parsed.playerEmpireKey.trim().length > 0
+          ? parsed.playerEmpireKey.trim()
+          : "aurora",
+      npcEmpireKeys: Array.isArray(parsed.npcEmpireKeys)
+        ? parsed.npcEmpireKeys
+            .filter((value): value is string => typeof value === "string")
+            .map((value) => value.trim())
+            .filter((value) => value.length > 0)
+        : [],
+      automatedEmpireKeys: Array.isArray(parsed.automatedEmpireKeys)
+        ? parsed.automatedEmpireKeys
+            .filter((value): value is string => typeof value === "string")
+            .map((value) => value.trim())
+            .filter((value) => value.length > 0)
+        : [],
+      empireConfigs: Array.isArray(parsed.empireConfigs)
+        ? parsed.empireConfigs.map((config) => {
+            const row = (config ?? {}) as Partial<MissionEmpireConfig>;
+            return {
+              targetEmpireKey:
+                typeof row.targetEmpireKey === "string" && row.targetEmpireKey.trim().length > 0
+                  ? row.targetEmpireKey.trim()
+                  : null,
+              targetNpcPlayerKey:
+                typeof row.targetNpcPlayerKey === "string" && row.targetNpcPlayerKey.trim().length > 0
+                  ? row.targetNpcPlayerKey.trim()
+                  : null,
+              controller: row.controller === "human" || row.controller === "npc" ? row.controller : null,
+              strategyLibraryKey:
+                typeof row.strategyLibraryKey === "string" && row.strategyLibraryKey.trim().length > 0
+                  ? row.strategyLibraryKey.trim()
+                  : null,
+              strategyStartMode:
+                row.strategyStartMode === "turn" || row.strategyStartMode === "attacked"
+                  ? row.strategyStartMode
+                  : null,
+              strategyStartTurn:
+                typeof row.strategyStartTurn === "number" && Number.isFinite(row.strategyStartTurn)
+                  ? Math.max(1, Math.floor(row.strategyStartTurn))
+                  : null,
+              treasuryDelta:
+                typeof row.treasuryDelta === "number" && Number.isFinite(row.treasuryDelta)
+                  ? row.treasuryDelta
+                  : 0,
+              homeworldPopulationDelta:
+                typeof row.homeworldPopulationDelta === "number" && Number.isFinite(row.homeworldPopulationDelta)
+                  ? row.homeworldPopulationDelta
+                  : 0,
+              homeworldStockFoodDelta:
+                typeof row.homeworldStockFoodDelta === "number" && Number.isFinite(row.homeworldStockFoodDelta)
+                  ? row.homeworldStockFoodDelta
+                  : 0,
+              homeworldStockWeaponsDelta:
+                typeof row.homeworldStockWeaponsDelta === "number" && Number.isFinite(row.homeworldStockWeaponsDelta)
+                  ? row.homeworldStockWeaponsDelta
+                  : 0,
+              homeworldStockResearchDelta:
+                typeof row.homeworldStockResearchDelta === "number" && Number.isFinite(row.homeworldStockResearchDelta)
+                  ? row.homeworldStockResearchDelta
+                  : 0,
+              homeworldLocalTreasuryDelta:
+                typeof row.homeworldLocalTreasuryDelta === "number" && Number.isFinite(row.homeworldLocalTreasuryDelta)
+                  ? row.homeworldLocalTreasuryDelta
+                  : 0,
+              empireNameOverride:
+                typeof row.empireNameOverride === "string" && row.empireNameOverride.trim().length > 0
+                  ? row.empireNameOverride.trim()
+                  : null,
+              playerNameOverride:
+                typeof row.playerNameOverride === "string" && row.playerNameOverride.trim().length > 0
+                  ? row.playerNameOverride.trim()
+                  : null,
+            };
+          })
+        : [],
+    };
+    return { scenario, error: null };
+  } catch (error) {
+    return {
+      scenario: null,
+      error: error instanceof Error ? error.message : "Scenario JSON must be valid JSON.",
+    };
+  }
+}
+
+function MissionScenarioEditor(props: {
+  scenarioJson: string;
+  onScenarioJsonChange: (value: string) => void;
+  empireNpcs: EmpireNpcRow[];
+  strategies: StrategyOption[];
+}) {
+  const parsed = useMemo(() => parseMissionScenarioJson(props.scenarioJson), [props.scenarioJson]);
+  const [presetEmpireKey, setPresetEmpireKey] = useState("iron");
+  const [presetNpcKey, setPresetNpcKey] = useState("");
+
+  function updateScenario(updater: (scenario: MissionScenario) => MissionScenario) {
+    if (parsed.scenario === null) {
+      return;
+    }
+    props.onScenarioJsonChange(toMissionScenarioJson(updater(parsed.scenario)));
+  }
+
+  function updateConfig(index: number, updater: (config: MissionEmpireConfig) => MissionEmpireConfig) {
+    updateScenario((scenario) => ({
+      ...scenario,
+      empireConfigs: scenario.empireConfigs.map((config, configIndex) =>
+        configIndex === index ? updater(config) : config,
+      ),
+    }));
+  }
+
+  function upsertConfig(
+    matcher: (config: MissionEmpireConfig) => boolean,
+    create: () => MissionEmpireConfig,
+    updater: (config: MissionEmpireConfig) => MissionEmpireConfig,
+  ) {
+    updateScenario((scenario) => {
+      const existingIndex = scenario.empireConfigs.findIndex(matcher);
+      if (existingIndex === -1) {
+        return {
+          ...scenario,
+          empireConfigs: [...scenario.empireConfigs, updater(create())],
+        };
+      }
+      return {
+        ...scenario,
+        empireConfigs: scenario.empireConfigs.map((config, index) =>
+          index === existingIndex ? updater(config) : config,
+        ),
+      };
+    });
+  }
+
+  function createEmptyConfig(): MissionEmpireConfig {
+    return {
+      targetEmpireKey: null,
+      targetNpcPlayerKey: null,
+      controller: null,
+      strategyLibraryKey: null,
+      strategyStartMode: null,
+      strategyStartTurn: null,
+      treasuryDelta: 0,
+      homeworldPopulationDelta: 0,
+      homeworldStockFoodDelta: 0,
+      homeworldStockWeaponsDelta: 0,
+      homeworldStockResearchDelta: 0,
+      homeworldLocalTreasuryDelta: 0,
+      empireNameOverride: null,
+      playerNameOverride: null,
+    };
+  }
+
+  function addCommanderPreset() {
+    const empireKey = presetEmpireKey.trim();
+    const npcKey = presetNpcKey.trim();
+    if (empireKey.length === 0 || npcKey.length === 0) {
+      return;
+    }
+    upsertConfig(
+      (config) => config.targetEmpireKey === empireKey,
+      () => ({ ...createEmptyConfig(), targetEmpireKey: empireKey }),
+      (config) => ({
+        ...config,
+        targetEmpireKey: empireKey,
+        targetNpcPlayerKey: npcKey,
+        controller: "npc",
+      }),
+    );
+  }
+
+  function addSeededRivalPreset() {
+    const npcKey = presetNpcKey.trim();
+    if (npcKey.length === 0) {
+      return;
+    }
+    const seededEmpireKey = `npc-${npcKey}`;
+    updateScenario((scenario) => {
+      const npcEmpireKeys = scenario.npcEmpireKeys.includes(npcKey)
+        ? scenario.npcEmpireKeys
+        : [...scenario.npcEmpireKeys, npcKey];
+      const automatedEmpireKeys = scenario.automatedEmpireKeys.includes(seededEmpireKey)
+        ? scenario.automatedEmpireKeys
+        : [...scenario.automatedEmpireKeys, seededEmpireKey];
+      const existingIndex = scenario.empireConfigs.findIndex(
+        (config) => config.targetEmpireKey === seededEmpireKey,
+      );
+      const nextConfig = {
+        ...(existingIndex === -1 ? createEmptyConfig() : scenario.empireConfigs[existingIndex]!),
+        targetEmpireKey: seededEmpireKey,
+        targetNpcPlayerKey: npcKey,
+        controller: "npc" as const,
+      };
+      const empireConfigs =
+        existingIndex === -1
+          ? [...scenario.empireConfigs, nextConfig]
+          : scenario.empireConfigs.map((config, index) =>
+              index === existingIndex ? nextConfig : config,
+            );
+      return {
+        ...scenario,
+        npcEmpireKeys,
+        automatedEmpireKeys,
+        empireConfigs,
+      };
+    });
+  }
+
+  function addDelayPreset() {
+    const empireKey = presetEmpireKey.trim();
+    if (empireKey.length === 0) {
+      return;
+    }
+    upsertConfig(
+      (config) => config.targetEmpireKey === empireKey,
+      () => ({ ...createEmptyConfig(), targetEmpireKey: empireKey }),
+      (config) => ({
+        ...config,
+        targetEmpireKey: empireKey,
+        controller: config.controller ?? "npc",
+        strategyStartMode: "turn",
+        strategyStartTurn: config.strategyStartTurn ?? 2,
+      }),
+    );
+  }
+
+  function addHandicapPreset() {
+    const empireKey = presetEmpireKey.trim();
+    if (empireKey.length === 0) {
+      return;
+    }
+    upsertConfig(
+      (config) => config.targetEmpireKey === empireKey,
+      () => ({ ...createEmptyConfig(), targetEmpireKey: empireKey }),
+      (config) => ({
+        ...config,
+        targetEmpireKey: empireKey,
+        treasuryDelta: config.treasuryDelta !== 0 ? config.treasuryDelta : -150,
+        homeworldPopulationDelta:
+          config.homeworldPopulationDelta !== 0 ? config.homeworldPopulationDelta : -5000000,
+        homeworldStockFoodDelta: config.homeworldStockFoodDelta !== 0 ? config.homeworldStockFoodDelta : -400,
+        homeworldStockWeaponsDelta:
+          config.homeworldStockWeaponsDelta !== 0 ? config.homeworldStockWeaponsDelta : -20,
+        homeworldStockResearchDelta:
+          config.homeworldStockResearchDelta !== 0 ? config.homeworldStockResearchDelta : -10,
+        homeworldLocalTreasuryDelta:
+          config.homeworldLocalTreasuryDelta !== 0 ? config.homeworldLocalTreasuryDelta : -100,
+      }),
+    );
+  }
+
+  return (
+    <div className="space-y-4 rounded-lg border border-st-border bg-st-bg/40 p-4">
+      <div>
+        <h4 className="text-sm font-semibold text-st-fg">Scenario Builder</h4>
+        <p className="mt-1 text-xs text-st-muted">
+          Use the structured controls for common mission setup, then fine-tune the raw JSON if needed.
+        </p>
+      </div>
+
+      {parsed.error !== null ? (
+        <p className="rounded border border-red-900/50 bg-red-950/30 px-3 py-2 text-xs text-red-200">
+          Fix the raw scenario JSON to continue using the structured editor: {parsed.error}
+        </p>
+      ) : null}
+
+      <div className="grid gap-3 md:grid-cols-3">
+        <label className="grid gap-1 text-xs text-st-muted">
+          <span>Player empire key</span>
+          <input
+            value={parsed.scenario?.playerEmpireKey ?? ""}
+            disabled={parsed.scenario === null}
+            onChange={(event) => {
+              updateScenario((scenario) => ({
+                ...scenario,
+                playerEmpireKey: event.target.value.trim() || "aurora",
+              }));
+            }}
+            className="rounded border border-st-border bg-st-bg px-3 py-2 text-sm text-st-fg outline-none focus:border-st-accent disabled:opacity-60"
+          />
+        </label>
+        <label className="grid gap-1 text-xs text-st-muted md:col-span-2">
+          <span>Seeded NPC empire keys</span>
+          <input
+            value={parsed.scenario ? formatCsv(parsed.scenario.npcEmpireKeys) : ""}
+            disabled={parsed.scenario === null}
+            placeholder="maia-solenne, tomas-varek"
+            onChange={(event) => {
+              updateScenario((scenario) => ({
+                ...scenario,
+                npcEmpireKeys: parseCsv(event.target.value),
+              }));
+            }}
+            className="rounded border border-st-border bg-st-bg px-3 py-2 text-sm text-st-fg outline-none focus:border-st-accent disabled:opacity-60"
+          />
+        </label>
+      </div>
+
+      <label className="grid gap-1 text-xs text-st-muted">
+        <span>Automated empire keys</span>
+        <input
+          value={parsed.scenario ? formatCsv(parsed.scenario.automatedEmpireKeys) : ""}
+          disabled={parsed.scenario === null}
+          placeholder="iron, npc-maia-solenne"
+          onChange={(event) => {
+            updateScenario((scenario) => ({
+              ...scenario,
+              automatedEmpireKeys: parseCsv(event.target.value),
+            }));
+          }}
+          className="rounded border border-st-border bg-st-bg px-3 py-2 text-sm text-st-fg outline-none focus:border-st-accent disabled:opacity-60"
+        />
+      </label>
+
+      <div className="space-y-3 rounded border border-st-border bg-st-panel px-3 py-3">
+        <div>
+          <h5 className="text-xs font-semibold uppercase tracking-wide text-st-muted">Quick Presets</h5>
+          <p className="mt-1 text-xs text-st-muted">
+            Use these shortcuts to generate the most common mission edits without touching the raw JSON.
+          </p>
+        </div>
+
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-[minmax(0,1fr),minmax(0,1fr),auto,auto]">
+          <label className="grid gap-1 text-xs text-st-muted">
+            <span>Existing empire key</span>
+            <input
+              value={presetEmpireKey}
+              disabled={parsed.scenario === null}
+              onChange={(event) => setPresetEmpireKey(event.target.value)}
+              placeholder="iron"
+              className="rounded border border-st-border bg-st-bg px-3 py-2 text-sm text-st-fg outline-none focus:border-st-accent disabled:opacity-60"
+            />
+          </label>
+          <label className="grid gap-1 text-xs text-st-muted">
+            <span>NPC persona</span>
+            <select
+              value={presetNpcKey}
+              disabled={parsed.scenario === null}
+              onChange={(event) => setPresetNpcKey(event.target.value)}
+              className="rounded border border-st-border bg-st-bg px-3 py-2 text-sm text-st-fg outline-none focus:border-st-accent disabled:opacity-60"
+            >
+              <option value="">Choose NPC persona</option>
+              {props.empireNpcs.map((npc) => (
+                <option key={npc.key} value={npc.key}>
+                  {npc.playerName} ({npc.key})
+                </option>
+              ))}
+            </select>
+          </label>
+          <div className="flex items-end">
+            <Button type="button" variant="secondary" disabled={parsed.scenario === null || presetNpcKey.trim().length === 0} onClick={addCommanderPreset}>
+              Assign commander
+            </Button>
+          </div>
+          <div className="flex items-end">
+            <Button type="button" variant="secondary" disabled={parsed.scenario === null || presetNpcKey.trim().length === 0} onClick={addSeededRivalPreset}>
+              Add seeded rival
+            </Button>
+          </div>
+        </div>
+
+        <div className="flex flex-wrap gap-2">
+          <Button type="button" variant="secondary" disabled={parsed.scenario === null || presetEmpireKey.trim().length === 0} onClick={addDelayPreset}>
+            Delay AI start
+          </Button>
+          <Button type="button" variant="secondary" disabled={parsed.scenario === null || presetEmpireKey.trim().length === 0} onClick={addHandicapPreset}>
+            Apply light handicap
+          </Button>
+        </div>
+      </div>
+
+      <div className="space-y-3">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <h5 className="text-xs font-semibold uppercase tracking-wide text-st-muted">Empire Overrides</h5>
+            <p className="mt-1 text-xs text-st-muted">
+              Assign commanders, delays, strategies, and handicap adjustments to specific empires.
+            </p>
+          </div>
+          <Button
+            type="button"
+            variant="secondary"
+            disabled={parsed.scenario === null}
+            onClick={() => {
+              updateScenario((scenario) => ({
+                ...scenario,
+                empireConfigs: [
+                  ...scenario.empireConfigs,
+                  createEmptyConfig(),
+                ],
+              }));
+            }}
+          >
+            Add override
+          </Button>
+        </div>
+
+        {parsed.scenario !== null && parsed.scenario.empireConfigs.length === 0 ? (
+          <p className="rounded border border-st-border bg-st-bg px-3 py-2 text-xs text-st-muted">
+            No empire overrides yet. Add one to assign a commanding NPC, automation timing, or mission handicap.
+          </p>
+        ) : null}
+
+        {parsed.scenario?.empireConfigs.map((config, index) => (
+          <div key={`${config.targetEmpireKey ?? "empire"}-${index}`} className="space-y-3 rounded border border-st-border bg-st-panel px-3 py-3">
+            <div className="flex items-center justify-between gap-3">
+              <div className="text-xs text-st-muted">
+                Override {index + 1}
+              </div>
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={() => {
+                  updateScenario((scenario) => ({
+                    ...scenario,
+                    empireConfigs: scenario.empireConfigs.filter((_, configIndex) => configIndex !== index),
+                  }));
+                }}
+              >
+                Remove
+              </Button>
+            </div>
+
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+              <label className="grid gap-1 text-xs text-st-muted">
+                <span>Target empire key</span>
+                <input
+                  value={config.targetEmpireKey ?? ""}
+                  onChange={(event) => {
+                    updateConfig(index, (current) => ({
+                      ...current,
+                      targetEmpireKey: normalizeNullableString(event.target.value),
+                    }));
+                  }}
+                  placeholder="iron"
+                  className="rounded border border-st-border bg-st-bg px-3 py-2 text-sm text-st-fg outline-none focus:border-st-accent"
+                />
+              </label>
+              <label className="grid gap-1 text-xs text-st-muted">
+                <span>Commanding NPC</span>
+                <select
+                  value={config.targetNpcPlayerKey ?? ""}
+                  onChange={(event) => {
+                    updateConfig(index, (current) => ({
+                      ...current,
+                      targetNpcPlayerKey: normalizeNullableString(event.target.value),
+                    }));
+                  }}
+                  className="rounded border border-st-border bg-st-bg px-3 py-2 text-sm text-st-fg outline-none focus:border-st-accent"
+                >
+                  <option value="">No NPC persona</option>
+                  {props.empireNpcs.map((npc) => (
+                    <option key={npc.key} value={npc.key}>
+                      {npc.playerName} ({npc.key})
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="grid gap-1 text-xs text-st-muted">
+                <span>Controller</span>
+                <select
+                  value={config.controller ?? ""}
+                  onChange={(event) => {
+                    const value = event.target.value;
+                    updateConfig(index, (current) => ({
+                      ...current,
+                      controller: value === "human" || value === "npc" ? value : null,
+                    }));
+                  }}
+                  className="rounded border border-st-border bg-st-bg px-3 py-2 text-sm text-st-fg outline-none focus:border-st-accent"
+                >
+                  <option value="">No override</option>
+                  <option value="human">human</option>
+                  <option value="npc">npc</option>
+                </select>
+              </label>
+              <label className="grid gap-1 text-xs text-st-muted">
+                <span>Strategy</span>
+                <select
+                  value={config.strategyLibraryKey ?? ""}
+                  onChange={(event) => {
+                    updateConfig(index, (current) => ({
+                      ...current,
+                      strategyLibraryKey: normalizeNullableString(event.target.value),
+                    }));
+                  }}
+                  className="rounded border border-st-border bg-st-bg px-3 py-2 text-sm text-st-fg outline-none focus:border-st-accent"
+                >
+                  <option value="">Use NPC default / none</option>
+                  {props.strategies.map((strategy) => (
+                    <option key={strategy.key} value={strategy.key}>
+                      {strategy.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+              <label className="grid gap-1 text-xs text-st-muted">
+                <span>Strategy start mode</span>
+                <select
+                  value={config.strategyStartMode ?? ""}
+                  onChange={(event) => {
+                    const value = event.target.value;
+                    updateConfig(index, (current) => ({
+                      ...current,
+                      strategyStartMode: value === "turn" || value === "attacked" ? value : null,
+                    }));
+                  }}
+                  className="rounded border border-st-border bg-st-bg px-3 py-2 text-sm text-st-fg outline-none focus:border-st-accent"
+                >
+                  <option value="">No delay</option>
+                  <option value="turn">turn</option>
+                  <option value="attacked">attacked</option>
+                </select>
+              </label>
+              <label className="grid gap-1 text-xs text-st-muted">
+                <span>Strategy start turn</span>
+                <input
+                  type="number"
+                  min={1}
+                  step={1}
+                  value={config.strategyStartTurn ?? ""}
+                  onChange={(event) => {
+                    updateConfig(index, (current) => ({
+                      ...current,
+                      strategyStartTurn: normalizeNullableInteger(event.target.value),
+                    }));
+                  }}
+                  className="rounded border border-st-border bg-st-bg px-3 py-2 text-sm text-st-fg outline-none focus:border-st-accent"
+                />
+              </label>
+              <label className="grid gap-1 text-xs text-st-muted">
+                <span>Empire name override</span>
+                <input
+                  value={config.empireNameOverride ?? ""}
+                  onChange={(event) => {
+                    updateConfig(index, (current) => ({
+                      ...current,
+                      empireNameOverride: normalizeNullableString(event.target.value),
+                    }));
+                  }}
+                  className="rounded border border-st-border bg-st-bg px-3 py-2 text-sm text-st-fg outline-none focus:border-st-accent"
+                />
+              </label>
+              <label className="grid gap-1 text-xs text-st-muted">
+                <span>Player name override</span>
+                <input
+                  value={config.playerNameOverride ?? ""}
+                  onChange={(event) => {
+                    updateConfig(index, (current) => ({
+                      ...current,
+                      playerNameOverride: normalizeNullableString(event.target.value),
+                    }));
+                  }}
+                  className="rounded border border-st-border bg-st-bg px-3 py-2 text-sm text-st-fg outline-none focus:border-st-accent"
+                />
+              </label>
+            </div>
+
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+              <label className="grid gap-1 text-xs text-st-muted">
+                <span>Treasury delta</span>
+                <input
+                  type="number"
+                  step={1}
+                  value={config.treasuryDelta}
+                  onChange={(event) => {
+                    updateConfig(index, (current) => ({
+                      ...current,
+                      treasuryDelta: normalizeNumber(event.target.value),
+                    }));
+                  }}
+                  className="rounded border border-st-border bg-st-bg px-3 py-2 text-sm text-st-fg outline-none focus:border-st-accent"
+                />
+              </label>
+              <label className="grid gap-1 text-xs text-st-muted">
+                <span>Homeworld population delta</span>
+                <input
+                  type="number"
+                  step={1}
+                  value={config.homeworldPopulationDelta}
+                  onChange={(event) => {
+                    updateConfig(index, (current) => ({
+                      ...current,
+                      homeworldPopulationDelta: normalizeNumber(event.target.value),
+                    }));
+                  }}
+                  className="rounded border border-st-border bg-st-bg px-3 py-2 text-sm text-st-fg outline-none focus:border-st-accent"
+                />
+              </label>
+              <label className="grid gap-1 text-xs text-st-muted">
+                <span>Homeworld food delta</span>
+                <input
+                  type="number"
+                  step={1}
+                  value={config.homeworldStockFoodDelta}
+                  onChange={(event) => {
+                    updateConfig(index, (current) => ({
+                      ...current,
+                      homeworldStockFoodDelta: normalizeNumber(event.target.value),
+                    }));
+                  }}
+                  className="rounded border border-st-border bg-st-bg px-3 py-2 text-sm text-st-fg outline-none focus:border-st-accent"
+                />
+              </label>
+              <label className="grid gap-1 text-xs text-st-muted">
+                <span>Homeworld weapons delta</span>
+                <input
+                  type="number"
+                  step={1}
+                  value={config.homeworldStockWeaponsDelta}
+                  onChange={(event) => {
+                    updateConfig(index, (current) => ({
+                      ...current,
+                      homeworldStockWeaponsDelta: normalizeNumber(event.target.value),
+                    }));
+                  }}
+                  className="rounded border border-st-border bg-st-bg px-3 py-2 text-sm text-st-fg outline-none focus:border-st-accent"
+                />
+              </label>
+              <label className="grid gap-1 text-xs text-st-muted">
+                <span>Homeworld research delta</span>
+                <input
+                  type="number"
+                  step={1}
+                  value={config.homeworldStockResearchDelta}
+                  onChange={(event) => {
+                    updateConfig(index, (current) => ({
+                      ...current,
+                      homeworldStockResearchDelta: normalizeNumber(event.target.value),
+                    }));
+                  }}
+                  className="rounded border border-st-border bg-st-bg px-3 py-2 text-sm text-st-fg outline-none focus:border-st-accent"
+                />
+              </label>
+              <label className="grid gap-1 text-xs text-st-muted">
+                <span>Homeworld local treasury delta</span>
+                <input
+                  type="number"
+                  step={1}
+                  value={config.homeworldLocalTreasuryDelta}
+                  onChange={(event) => {
+                    updateConfig(index, (current) => ({
+                      ...current,
+                      homeworldLocalTreasuryDelta: normalizeNumber(event.target.value),
+                    }));
+                  }}
+                  className="rounded border border-st-border bg-st-bg px-3 py-2 text-sm text-st-fg outline-none focus:border-st-accent"
+                />
+              </label>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 function MissionSummary(props: { preview: MissionPreview }) {
@@ -90,6 +813,8 @@ function MissionSummary(props: { preview: MissionPreview }) {
 
 function MissionCard(props: {
   mission: MissionRow;
+  empireNpcs: EmpireNpcRow[];
+  strategies: StrategyOption[];
   onSave: (args: {
     key: string;
     name: string;
@@ -268,6 +993,16 @@ function MissionCard(props: {
       </label>
 
       <label className="grid gap-1 text-xs text-st-muted">
+        <span>Scenario Builder</span>
+        <MissionScenarioEditor
+          scenarioJson={scenarioJson}
+          onScenarioJsonChange={setScenarioJson}
+          empireNpcs={props.empireNpcs}
+          strategies={props.strategies}
+        />
+      </label>
+
+      <label className="grid gap-1 text-xs text-st-muted">
         <span>Scenario JSON</span>
         <textarea
           value={scenarioJson}
@@ -291,6 +1026,8 @@ function MissionCard(props: {
 }
 
 function CreateMissionCard(props: {
+  empireNpcs: EmpireNpcRow[];
+  strategies: StrategyOption[];
   onCreate: (args: {
     key: string;
     name: string;
@@ -496,6 +1233,16 @@ function CreateMissionCard(props: {
         </label>
 
         <label className="grid gap-1 text-xs text-st-muted">
+          <span>Scenario Builder</span>
+          <MissionScenarioEditor
+            scenarioJson={scenarioJson}
+            onScenarioJsonChange={setScenarioJson}
+            empireNpcs={props.empireNpcs}
+            strategies={props.strategies}
+          />
+        </label>
+
+        <label className="grid gap-1 text-xs text-st-muted">
           <span>Scenario JSON</span>
           <textarea
             value={scenarioJson}
@@ -607,6 +1354,8 @@ export function AdminMissionsPage() {
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr),320px]">
         <div className="space-y-4">
           <CreateMissionCard
+            empireNpcs={empireNpcs}
+            strategies={strategies}
             onCreate={async (args) => {
               await createMission(args);
             }}
@@ -623,6 +1372,8 @@ export function AdminMissionsPage() {
                 <MissionCard
                   key={mission.key}
                   mission={mission}
+                  empireNpcs={empireNpcs}
+                  strategies={strategies}
                   onSave={async (args) => {
                     await updateMission(args);
                   }}
