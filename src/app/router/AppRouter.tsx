@@ -1,4 +1,4 @@
-import { createBrowserRouter, RouterProvider } from "react-router-dom";
+import { Navigate, createBrowserRouter, RouterProvider } from "react-router-dom";
 import { lazy, Suspense, type ComponentType } from "react";
 import { PLAYER_PREVIEW_BY_PATH } from "@/features/player/playerPreviewConfig";
 
@@ -22,6 +22,7 @@ const AuthenticatedGameLayout = lazyNamedComponent(
   () => import("@/app/router/AuthenticatedGameLayout"),
   "AuthenticatedGameLayout",
 );
+const LandingPage = lazyNamedComponent(() => import("@/app/router/LandingPage"), "LandingPage");
 const GalaxyPage = lazyNamedComponent(() => import("@/app/router/GalaxyPage"), "GalaxyPage");
 const GamesPage = lazyNamedComponent(() => import("@/app/router/GamesPage"), "GamesPage");
 const FleetPage = lazyNamedComponent(() => import("@/app/router/FleetPage"), "FleetPage");
@@ -83,7 +84,34 @@ const playerChildRoutes = [
   { path: "history", element: <PlayerHistoryPage /> },
 ] as const;
 
+const adminChildRoutes = [
+  { index: true, element: <GalaxyPage /> },
+  { path: "games", element: <GamesPage /> },
+  { path: "fleet", element: <FleetPage /> },
+  { path: "combat", element: <CombatPage /> },
+  { path: "economy", element: <EconomyPage /> },
+  { path: "empires", element: <EmpiresPage /> },
+  { path: "traders", element: <TradersPage /> },
+  { path: "history", element: <HistoryPage /> },
+  { path: "balance", element: <BalancePage /> },
+] as const;
+
+const legacyAdminRedirects = [
+  { path: "/games", to: "/admin/games" },
+  { path: "/fleet", to: "/admin/fleet" },
+  { path: "/combat", to: "/admin/combat" },
+  { path: "/economy", to: "/admin/economy" },
+  { path: "/empires", to: "/admin/empires" },
+  { path: "/traders", to: "/admin/traders" },
+  { path: "/history", to: "/admin/history" },
+  { path: "/balance", to: "/admin/balance" },
+] as const;
+
 const router = createBrowserRouter([
+  {
+    path: "/",
+    element: <LandingPage />,
+  },
   {
     path: "/sign-in",
     element: <SignInPage />,
@@ -107,19 +135,16 @@ const router = createBrowserRouter([
     children: [...playerChildRoutes],
   },
   {
-    path: "/",
+    path: "/admin",
     element: <AuthenticatedGameLayout />,
-    children: [
-      { index: true, element: <GalaxyPage /> },
-      { path: "games", element: <GamesPage /> },
-      { path: "fleet", element: <FleetPage /> },
-      { path: "combat", element: <CombatPage /> },
-      { path: "economy", element: <EconomyPage /> },
-      { path: "empires", element: <EmpiresPage /> },
-      { path: "traders", element: <TradersPage /> },
-      { path: "history", element: <HistoryPage /> },
-      { path: "balance", element: <BalancePage /> },
-    ],
+    children: [...adminChildRoutes],
+  },
+  {
+    path: "/",
+    children: legacyAdminRedirects.map(({ path, to }) => ({
+      path,
+      element: <Navigate to={to} replace />,
+    })),
   },
 ]);
 
