@@ -24,6 +24,14 @@ const AuthenticatedGameLayout = lazyNamedComponent(
 );
 const LandingPage = lazyNamedComponent(() => import("@/app/router/LandingPage"), "LandingPage");
 const GalaxyPage = lazyNamedComponent(() => import("@/app/router/GalaxyPage"), "GalaxyPage");
+const AdminHomePage = lazyNamedComponent(
+  () => import("@/app/router/AdminHomePage"),
+  "AdminHomePage",
+);
+const AdminUsersPage = lazyNamedComponent(
+  () => import("@/app/router/AdminUsersPage"),
+  "AdminUsersPage",
+);
 const GamesPage = lazyNamedComponent(() => import("@/app/router/GamesPage"), "GamesPage");
 const FleetPage = lazyNamedComponent(() => import("@/app/router/FleetPage"), "FleetPage");
 const CombatPage = lazyNamedComponent(() => import("@/app/router/CombatPage"), "CombatPage");
@@ -85,7 +93,8 @@ const playerChildRoutes = [
 ] as const;
 
 const adminChildRoutes = [
-  { index: true, element: <GalaxyPage /> },
+  { index: true, element: <AdminHomePage /> },
+  { path: "map", element: <GalaxyPage /> },
   { path: "games", element: <GamesPage /> },
   { path: "fleet", element: <FleetPage /> },
   { path: "combat", element: <CombatPage /> },
@@ -94,6 +103,7 @@ const adminChildRoutes = [
   { path: "traders", element: <TradersPage /> },
   { path: "history", element: <HistoryPage /> },
   { path: "balance", element: <BalancePage /> },
+  { path: "users", element: <AdminUsersPage /> },
 ] as const;
 
 const legacyAdminRedirects = [

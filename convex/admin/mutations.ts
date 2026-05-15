@@ -1,12 +1,29 @@
 import { mutation, query } from "../_generated/server";
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
+import { createAccount } from "@convex-dev/auth/server";
 import { internal } from "../_generated/api";
 import { assertGameAdmin } from "../sim/helpers";
 import {
   DEFAULT_GAME_SETTINGS,
   loadGameSettings,
 } from "../sim/economy/gameSettings";
+
+function normalizeAdminCreatedEmail(email: string): string {
+  const normalized = email.trim().toLowerCase();
+  if (!normalized || !normalized.includes("@")) {
+    throw new Error("A valid email address is required.");
+  }
+  return normalized;
+}
+
+function normalizeOptionalUserText(value: string | null | undefined): string | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  const normalized = value.trim();
+  return normalized.length > 0 ? normalized : undefined;
+}
 
 export const reseedGame = mutation({
   args: {
@@ -264,5 +281,71 @@ export const forceRetryTurnResolution = mutation({
     }
 
     return begin;
+  },
+});
+
+export const createUser = mutation({
+  args: {
+    gameId: v.id("sim_games"),
+    email: v.string(),
+    password: v.string(),
+    name: v.optional(v.union(v.string(), v.null())),
+    displayName: v.optional(v.union(v.string(), v.null())),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (userId === null) {
+      throw new Error("Authentication required.");
+    }
+    await assertGameAdmin(ctx, args.gameId, userId);
+
+    const email = normalizeAdminCreatedEmail(args.email);
+    if (args.password.length < 8) {
+      throw new Error("Password must be at least 8 characters.");
+    }
+
+    const name = normalizeOptionalUserText(args.name);
+    const displayName = normalizeOptionalUserText(args.displayName);
+
+    const created = await createAccount(ctx, {
+      provider: "password",
+      account: {
+        id: email,
+        secret: args.password,
+      },
+      profile: {
+        email,
+        ...(name !== undefined ? { name } : {}),
+      },
+      shouldLinkViaEmail: false,
+      shouldLinkViaPhone: false,
+    });
+
+    if (displayName !== undefined) {
+      const existingProfile = await ctx.db
+        .query("usr_profiles")
+        .withIndex("by_userId", (q) => q.eq("userId", created.user._id))
+        .unique();
+
+      const profileFields = {
+        displayName,
+        avatarUrl: created.user.image ?? null,
+        timezone: null,
+        analyticsConsent: false,
+      };
+
+      if (existingProfile === null) {
+        await ctx.db.insert("usr_profiles", {
+          userId: created.user._id,
+          ...profileFields,
+        });
+      } else {
+        await ctx.db.patch("usr_profiles", existingProfile._id, profileFields);
+      }
+    }
+
+    return {
+      userId: created.user._id,
+    };
   },
 });

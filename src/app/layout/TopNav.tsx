@@ -2,7 +2,8 @@ import { NavLink } from "react-router-dom";
 import { cn } from "@/lib/utils";
 
 const links = [
-  { to: "/admin", label: "Galaxy", end: true },
+  { to: "/admin", label: "Admin", end: true },
+  { to: "/admin/map", label: "Map", end: false },
   { to: "/admin/games", label: "Games", end: false },
   { to: "/admin/fleet", label: "Fleet", end: false },
   { to: "/admin/combat", label: "Combat", end: false },
@@ -11,6 +12,7 @@ const links = [
   { to: "/admin/traders", label: "Traders", end: false },
   { to: "/admin/history", label: "History", end: false },
   { to: "/admin/balance", label: "Balance", end: false },
+  { to: "/admin/users", label: "Users", end: false },
 ] as const;
 
 export function TopNav() {
