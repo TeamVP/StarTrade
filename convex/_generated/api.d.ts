@@ -71,6 +71,7 @@ import type * as sim_economy_npcTraderRuntime from "../sim/economy/npcTraderRunt
 import type * as sim_economy_population from "../sim/economy/population.js";
 import type * as sim_economy_strategicSliders from "../sim/economy/strategicSliders.js";
 import type * as sim_eventLog from "../sim/eventLog.js";
+import type * as sim_finalization from "../sim/finalization.js";
 import type * as sim_fleetDispatch from "../sim/fleetDispatch.js";
 import type * as sim_fleetOrders from "../sim/fleetOrders.js";
 import type * as sim_garrisonRoutes from "../sim/garrisonRoutes.js";
@@ -160,6 +161,7 @@ declare const fullApi: ApiFromModules<{
   "sim/economy/population": typeof sim_economy_population;
   "sim/economy/strategicSliders": typeof sim_economy_strategicSliders;
   "sim/eventLog": typeof sim_eventLog;
+  "sim/finalization": typeof sim_finalization;
   "sim/fleetDispatch": typeof sim_fleetDispatch;
   "sim/fleetOrders": typeof sim_fleetOrders;
   "sim/garrisonRoutes": typeof sim_garrisonRoutes;

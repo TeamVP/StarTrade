@@ -22,6 +22,38 @@ export default defineSchema({
     startedAt: v.union(v.number(), v.null()),
     endedAt: v.union(v.number(), v.null()),
     winnerEmpireKey: v.union(v.string(), v.null()),
+    finalizationState: v.optional(
+      v.union(
+        v.literal("none"),
+        v.literal("pending_result_write"),
+        v.literal("results_written"),
+        v.literal("pending_cleanup"),
+        v.literal("cleaned"),
+        v.literal("archived_debug"),
+      ),
+    ),
+    retentionClass: v.optional(
+      v.union(
+        v.literal("discarded"),
+        v.literal("official"),
+        v.literal("archived_debug"),
+      ),
+    ),
+    finishReason: v.optional(
+      v.union(
+        v.literal("last_empire_standing"),
+        v.literal("abandoned_scored"),
+        v.literal("admin_terminated_discarded"),
+        v.literal("admin_terminated_scored"),
+      ),
+    ),
+    lastMeaningfulActivityAt: v.optional(v.number()),
+    lastHumanActionAt: v.optional(v.number()),
+    lastResolvedTurnAt: v.optional(v.number()),
+    abandonmentEligibleAt: v.optional(v.number()),
+    abandonedAt: v.optional(v.number()),
+    cleanupQueuedAt: v.optional(v.number()),
+    cleanupCompletedAt: v.optional(v.number()),
     /** Global turn timer pause (real-time ms); cron skips resolve while Date.now() < this. */
     turnPausedUntilMs: v.optional(v.number()),
     /**
@@ -41,7 +73,101 @@ export default defineSchema({
     .index("by_status", ["status"])
     .index("by_createdByUserId", ["createdByUserId"])
     .index("by_ownerUserId", ["ownerUserId"])
+    .index("by_finalizationState", ["finalizationState"])
+    .index("by_status_and_lastMeaningfulActivityAt", ["status", "lastMeaningfulActivityAt"])
     .index("by_ownerUserId_and_lobbyScenarioKey", ["ownerUserId", "lobbyScenarioKey"]),
+
+  sim_game_results: defineTable({
+    gameId: v.id("sim_games"),
+    name: v.string(),
+    mapKey: v.string(),
+    lobbyScenarioKey: v.union(v.string(), v.null()),
+    seed: v.string(),
+    startedAt: v.union(v.number(), v.null()),
+    endedAt: v.number(),
+    lastResolvedTurnNumber: v.number(),
+    retentionClass: v.union(
+      v.literal("discarded"),
+      v.literal("official"),
+      v.literal("archived_debug"),
+    ),
+    isOfficial: v.boolean(),
+    finishReason: v.union(
+      v.literal("last_empire_standing"),
+      v.literal("abandoned_scored"),
+      v.literal("admin_terminated_discarded"),
+      v.literal("admin_terminated_scored"),
+    ),
+    winnerEmpireKey: v.union(v.string(), v.null()),
+    winnerEmpireResultId: v.union(v.id("emp_results"), v.null()),
+    winnerControllerKind: v.union(
+      v.literal("human"),
+      v.literal("npc"),
+      v.null(),
+    ),
+    winnerUserId: v.union(v.id("users"), v.null()),
+    winnerNpcPlayerKey: v.union(v.string(), v.null()),
+    winningStarsControlled: v.optional(v.number()),
+    winningFleetStrength: v.optional(v.number()),
+    empireCount: v.number(),
+    humanEmpireCount: v.number(),
+    npcEmpireCount: v.number(),
+    summaryJson: v.optional(v.string()),
+  })
+    .index("by_gameId", ["gameId"])
+    .index("by_isOfficial_and_endedAt", ["isOfficial", "endedAt"])
+    .index("by_winnerUserId", ["winnerUserId"])
+    .index("by_winnerNpcPlayerKey", ["winnerNpcPlayerKey"]),
+
+  emp_results: defineTable({
+    gameResultId: v.id("sim_game_results"),
+    gameId: v.id("sim_games"),
+    empireId: v.union(v.id("emp_states"), v.null()),
+    empireKey: v.string(),
+    empireName: v.string(),
+    colorHex: v.string(),
+    controllerKind: v.union(v.literal("human"), v.literal("npc")),
+    userId: v.union(v.id("users"), v.null()),
+    npcPlayerKey: v.union(v.string(), v.null()),
+    playerName: v.union(v.string(), v.null()),
+    strategyJson: v.union(v.string(), v.null()),
+    strategySummaryJson: v.union(v.string(), v.null()),
+    strategyFingerprint: v.union(v.string(), v.null()),
+    strategyLibraryKey: v.union(v.string(), v.null()),
+    strategySourceKind: v.union(
+      v.literal("manual"),
+      v.literal("library"),
+      v.literal("custom"),
+      v.literal("npc_default"),
+      v.null(),
+    ),
+    placement: v.number(),
+    isWinner: v.boolean(),
+    eliminated: v.boolean(),
+    eliminatedAtTurn: v.union(v.number(), v.null()),
+    eliminationReason: v.union(
+      v.literal("destroyed"),
+      v.literal("collapsed"),
+      v.literal("abandoned"),
+      v.literal("survived_to_score"),
+      v.null(),
+    ),
+    starsControlledFinal: v.number(),
+    populationFinal: v.number(),
+    fleetCountFinal: v.number(),
+    fleetStrengthFinal: v.number(),
+    treasuryFinal: v.number(),
+    researchPoolFinal: v.number(),
+    homeSystemSurvived: v.boolean(),
+    scoreFinal: v.number(),
+    scoreBreakdownJson: v.optional(v.string()),
+  })
+    .index("by_gameResultId", ["gameResultId"])
+    .index("by_gameId", ["gameId"])
+    .index("by_userId_and_isWinner", ["userId", "isWinner"])
+    .index("by_npcPlayerKey_and_isWinner", ["npcPlayerKey", "isWinner"])
+    .index("by_strategyFingerprint_and_isWinner", ["strategyFingerprint", "isWinner"])
+    .index("by_strategyLibraryKey_and_isWinner", ["strategyLibraryKey", "isWinner"]),
 
   sim_turns: defineTable({
     gameId: v.id("sim_games"),
@@ -167,6 +293,7 @@ export default defineSchema({
     joinedAt: v.number(),
     isActive: v.boolean(),
   })
+    .index("by_userId", ["userId"])
     .index("by_gameId_and_userId", ["gameId", "userId"])
     .index("by_gameId_and_role", ["gameId", "role"]),
 

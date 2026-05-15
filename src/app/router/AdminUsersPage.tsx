@@ -38,7 +38,9 @@ function stringFromFormData(formData: FormData, key: string): string {
 export function AdminUsersPage() {
   const userResult = useQuery(api.admin.queries.listUsers, { limit: 100 });
   const createUser = useMutation(api.admin.mutations.createUser);
+  const deleteUser = useMutation(api.admin.mutations.deleteUser);
   const [submitting, setSubmitting] = useState(false);
+  const [deletingUserId, setDeletingUserId] = useState<Id<"users"> | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
@@ -78,6 +80,25 @@ export function AdminUsersPage() {
       setError(mutationErrorMessage(createError));
     } finally {
       setSubmitting(false);
+    }
+  }
+
+  async function onDeleteUser(user: AdminUserRow) {
+    const label = user.email ?? user.name ?? user._id;
+    if (!window.confirm(`Delete user ${label}? This removes the users row and linked auth/profile records.`)) {
+      return;
+    }
+
+    setDeletingUserId(user._id);
+    setError(null);
+    setSuccess(null);
+    try {
+      await deleteUser({ userId: user._id });
+      setSuccess(`Deleted user ${label}.`);
+    } catch (deleteError) {
+      setError(mutationErrorMessage(deleteError));
+    } finally {
+      setDeletingUserId(null);
     }
   }
 
@@ -195,6 +216,7 @@ export function AdminUsersPage() {
                   <th className="border-b border-st-border px-3 py-2 font-medium">Phone Verified</th>
                   <th className="border-b border-st-border px-3 py-2 font-medium">Anonymous</th>
                   <th className="border-b border-st-border px-3 py-2 font-medium">Image</th>
+                  <th className="border-b border-st-border px-3 py-2 font-medium">Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -228,6 +250,17 @@ export function AdminUsersPage() {
                     </td>
                     <td className="border-b border-st-border/60 px-3 py-2 text-st-fg">
                       {user.image ?? "-"}
+                    </td>
+                    <td className="border-b border-st-border/60 px-3 py-2">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="px-2 py-1 text-xs text-red-200 hover:border-red-400 hover:text-red-100"
+                        disabled={deletingUserId === user._id}
+                        onClick={() => void onDeleteUser(user)}
+                      >
+                        {deletingUserId === user._id ? "Deleting..." : "Delete"}
+                      </Button>
                     </td>
                   </tr>
                 ))}

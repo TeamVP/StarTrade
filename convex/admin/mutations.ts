@@ -319,3 +319,88 @@ export const createUser = mutation({
     };
   },
 });
+
+export const deleteUser = mutation({
+  args: {
+    userId: v.id("users"),
+  },
+  handler: async (ctx, args): Promise<{ deletedUserId: Id<"users"> }> => {
+    const viewerUserId = await getAuthUserId(ctx);
+    if (viewerUserId === null) {
+      throw new Error("Authentication required.");
+    }
+
+    const user = await ctx.db.get("users", args.userId);
+    if (user === null) {
+      throw new Error("User not found.");
+    }
+
+    const profile = await ctx.db
+      .query("usr_profiles")
+      .withIndex("by_userId", (q) => q.eq("userId", args.userId))
+      .unique();
+    if (profile !== null) {
+      await ctx.db.delete("usr_profiles", profile._id);
+    }
+
+    const automationProfiles = await ctx.db
+      .query("usr_automation_profiles")
+      .withIndex("by_userId", (q) => q.eq("userId", args.userId))
+      .take(128);
+    for (const automationProfile of automationProfiles) {
+      await ctx.db.delete("usr_automation_profiles", automationProfile._id);
+    }
+
+    const colorPrefs = await ctx.db
+      .query("usr_empire_color_prefs")
+      .withIndex("by_userId", (q) => q.eq("userId", args.userId))
+      .take(128);
+    for (const colorPref of colorPrefs) {
+      await ctx.db.delete("usr_empire_color_prefs", colorPref._id);
+    }
+
+    const authAccounts = await ctx.db
+      .query("authAccounts")
+      .withIndex("userIdAndProvider", (q) => q.eq("userId", args.userId))
+      .take(32);
+    for (const authAccount of authAccounts) {
+      const verificationCodes = await ctx.db
+        .query("authVerificationCodes")
+        .withIndex("accountId", (q) => q.eq("accountId", authAccount._id))
+        .take(64);
+      for (const verificationCode of verificationCodes) {
+        await ctx.db.delete("authVerificationCodes", verificationCode._id);
+      }
+      await ctx.db.delete("authAccounts", authAccount._id);
+    }
+
+    const authSessions = await ctx.db
+      .query("authSessions")
+      .withIndex("userId", (q) => q.eq("userId", args.userId))
+      .take(64);
+    for (const authSession of authSessions) {
+      const refreshTokens = await ctx.db
+        .query("authRefreshTokens")
+        .withIndex("sessionId", (q) => q.eq("sessionId", authSession._id))
+        .take(128);
+      for (const refreshToken of refreshTokens) {
+        await ctx.db.delete("authRefreshTokens", refreshToken._id);
+      }
+      await ctx.db.delete("authSessions", authSession._id);
+    }
+
+    const gameRoles = await ctx.db
+      .query("usr_game_roles")
+      .withIndex("by_userId", (q) => q.eq("userId", args.userId))
+      .take(128);
+    for (const gameRole of gameRoles) {
+      await ctx.db.delete("usr_game_roles", gameRole._id);
+    }
+
+    await ctx.db.delete("users", args.userId);
+
+    return {
+      deletedUserId: args.userId,
+    };
+  },
+});
