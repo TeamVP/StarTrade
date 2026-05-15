@@ -8,7 +8,7 @@ import {
 } from "react";
 import type { Id } from "../../../../convex/_generated/dataModel";
 
-const DEFAULT_STORAGE_KEY = "startrade:activeGameId";
+const DEFAULT_STORAGE_KEY = "starstrat:activeGameId";
 
 export type ActiveGameContextValue = {
   selectedGameId: Id<"sim_games"> | null;

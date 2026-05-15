@@ -10,7 +10,7 @@ The schema defines typed Convex tables using `defineSchema` and `defineTable`, w
 
 ## Why this structure works
 
-Grouping by domain prefix is a good fit here because StarTrade has several overlapping subsystems and the table list will get long fast. With this layout, someone scanning the schema can immediately tell whether a table belongs to simulation flow, galaxy state, empires, fleets, economy, or traders without reading every field name.[^2][^8]
+Grouping by domain prefix is a good fit here because StarStrat has several overlapping subsystems and the table list will get long fast. With this layout, someone scanning the schema can immediately tell whether a table belongs to simulation flow, galaxy state, empires, fleets, economy, or traders without reading every field name.[^2][^8]
 
 ## Recommended next step
 

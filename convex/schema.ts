@@ -21,7 +21,7 @@ export default defineSchema({
     /** Global turn timer pause (real-time ms); cron skips resolve while Date.now() < this. */
     turnPausedUntilMs: v.optional(v.number()),
     /**
-     * When true, the StarTrade cron does not auto-start turn resolution for this game.
+    * When true, the StarStrat cron does not auto-start turn resolution for this game.
      * Status stays `running`; manual “Step turn” still works. Use to isolate a broken sim.
      */
     simCronTurnsDisabled: v.optional(v.boolean()),

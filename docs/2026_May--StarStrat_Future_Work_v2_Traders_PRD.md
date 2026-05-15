@@ -1,4 +1,4 @@
-# StarTrade v2 PRD
+# StarStrat v2 PRD
 
 This is a document that should only be used once V1 is fully built, play tested and accepted as complete.
 
@@ -6,17 +6,17 @@ This is a document that should only be used once V1 is fully built, play tested 
 
 | Field | Value |
 |---|---|
-| Product | StarTrade v2 |
-| Release focus | Trader gameplay on top of the live StarTrade v1 empire simulation |
+| Product | StarStrat v2 |
+| Release focus | Trader gameplay on top of the live StarStrat v1 empire simulation |
 | Genre | Real-time market-and-logistics strategy game inside a persistent galactic war |
 | Platform | Web first, mobile-capable web app |
-| Depends on | StarTrade v1 final ruleset |
+| Depends on | StarStrat v1 final ruleset |
 | Turn model | 15-second real-time turns inherited from v1 |
 | Core PRD intent | Define purpose, player needs, functional behavior, UX, assumptions, dependencies, scope, and acceptance criteria |
 
 ## Overview
 
-StarTrade v2 adds a second playable role to the galaxy: the trader. Traders do not conquer systems, command war fleets, negotiate contracts, or set prices. They make money by reading market conditions, chartering civilian shipping, buying goods where they are cheap, moving them through a war-torn galaxy, and selling them where local need and solvency make the trade profitable.
+StarStrat v2 adds a second playable role to the galaxy: the trader. Traders do not conquer systems, command war fleets, negotiate contracts, or set prices. They make money by reading market conditions, chartering civilian shipping, buying goods where they are cheap, moving them through a war-torn galaxy, and selling them where local need and solvency make the trade profitable.
 
 V2 is built directly on the final v1 simulation. That means traders operate inside a galaxy where empires earn money primarily from population taxation, lose tax income when systems are under attack, can collapse back to their homeworld after two turns of insolvency, and leave behind systems that may be damaged by war, short of food, short of weapons, or suddenly independent.
 
@@ -43,7 +43,7 @@ The trader game is therefore not a separate economy. It is a player-facing layer
 
 ## Relationship to v1
 
-StarTrade v2 inherits the following from v1 and must remain fully consistent with them:
+StarStrat v2 inherits the following from v1 and must remain fully consistent with them:
 
 - The galaxy is a fixed map of star systems linked by travel routes.
 - Empires and AI continue to play the conquest game in real time.
@@ -490,11 +490,11 @@ The UI must clearly distinguish:
 | Prototype | One-commodity trade loop, stale data, chartering, failed-sale logic |
 | Alpha | Multi-commodity markets, node establishment, waiting, automation basics |
 | Beta | Battle-damage integration, collapse-aware trading, balancing, persistence |
-| v2 Launch | Full trader role inside the live StarTrade galaxy |
+| v2 Launch | Full trader role inside the live StarStrat galaxy |
 
 ## Acceptance criteria
 
-StarTrade v2 is ready for launch when:
+StarStrat v2 is ready for launch when:
 - A trader can join a live galaxy and find a plausible first route quickly.
 - New routes require one post-arrival observation turn before first trade.
 - Established routes allow immediate business on the first post-arrival turn.

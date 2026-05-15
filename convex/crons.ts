@@ -5,7 +5,7 @@ import { DEFAULT_TURN_DURATION_SECONDS } from "./sim/turnTiming";
 const crons = cronJobs();
 
 crons.interval(
-  "advance running StarTrade games",
+  "advance running StarStrat games",
   { seconds: DEFAULT_TURN_DURATION_SECONDS },
   internal.sim.cron.tickRunningGames,
   {},

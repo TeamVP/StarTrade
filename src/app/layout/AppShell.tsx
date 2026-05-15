@@ -6,7 +6,7 @@ type AppShellProps = {
   headerTrailing?: ReactNode;
   /** Classes for the main content wrapper (width, padding). */
   mainClassName?: string;
-  /** When false, the default “StarTrade V1” product title in the header is hidden (player / embedded layouts). */
+  /** When false, the default “StarStrat” product title in the header is hidden (player / embedded layouts). */
   showProductTitle?: boolean;
   /** Override inner header flex container (width constraints). */
   headerContentClassName?: string;
@@ -32,7 +32,7 @@ export function AppShell({
         <div className={headerContentClassName}>
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-8">
             {showProductTitle ? (
-              <h1 className="text-xl font-semibold tracking-wide">StarTrade V1</h1>
+              <h1 className="text-xl font-semibold tracking-wide">StarStrat</h1>
             ) : null}
             {nav}
           </div>

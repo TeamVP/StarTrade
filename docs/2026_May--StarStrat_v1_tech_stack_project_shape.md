@@ -1,8 +1,8 @@
-# StarTrade V1 stack and project shape
+# StarStrat V1 stack and project shape
 
 ## Purpose
 
-This document sets out the recommended frontend and supporting stack for **StarTrade V1**, based on the current project structure, the confirmed gameplay direction, and the agreed library choices.
+This document sets out the recommended frontend and supporting stack for **StarStrat V1**, based on the current project structure, the confirmed gameplay direction, and the agreed library choices.
 
 The goal is to keep the stack narrow, modern, and practical: one strong renderer for the galaxy map, one consistent UI layer, one styling approach, and a small set of support tools that reduce future pain when the simulation becomes more complex.
 
@@ -46,7 +46,7 @@ That means the main need now is not a major restructure. It is to choose a clear
 
 ### PixiJS for the main map
 
-PixiJS is the right choice for the actual game surface because StarTrade needs a live, zoomable, pannable, animated star map rather than a DOM-heavy diagramming tool. The map will need system nodes, route lines, fleet travel effects, fog-of-war overlays, selection states, and likely some battlefield-style overlays later.
+PixiJS is the right choice for the actual game surface because StarStrat needs a live, zoomable, pannable, animated star map rather than a DOM-heavy diagramming tool. The map will need system nodes, route lines, fleet travel effects, fog-of-war overlays, selection states, and likely some battlefield-style overlays later.
 
 React should still own the application shell and control panels, but the galaxy itself should be treated as a rendered scene rather than as a pile of DOM nodes.
 
@@ -63,7 +63,7 @@ Why:
 
 ### Tailwind for speed and consistency
 
-Tailwind is a good fit because StarTrade will have a lot of stateful panels, mini dashboards, overlays, and utility-heavy screens. It will let you move quickly while still making it easy to define a game-wide design system for spacing, color, and typography.
+Tailwind is a good fit because StarStrat will have a lot of stateful panels, mini dashboards, overlays, and utility-heavy screens. It will let you move quickly while still making it easy to define a game-wide design system for spacing, color, and typography.
 
 ### Recharts, not a heavier data-viz stack
 
@@ -424,7 +424,7 @@ Otherwise visual language becomes inconsistent very quickly.
 - replay inspector
 - star-system mini badges
 
-The reason is simple: generic components are fine for common interactions, but the actual game surfaces should feel specific to StarTrade.
+The reason is simple: generic components are fine for common interactions, but the actual game surfaces should feel specific to StarStrat.
 
 ## Recommended Tailwind shape
 
@@ -515,7 +515,7 @@ Beyond Sentry and PostHog, keep your own structured gameplay event stream. This 
 
 ## Auth and player model
 
-Since Convex Auth is part of the chosen stack, use it as the single auth layer for StarTrade V1.
+Since Convex Auth is part of the chosen stack, use it as the single auth layer for StarStrat V1.
 
 Suggested model:
 - one authenticated `user`
@@ -611,7 +611,7 @@ Prioritize in roughly this order unless product cuts scope.
 
 ### How to use this with phased roadmap
 
-The **Recommended implementation order** section below is still the *intent*. This checklist tracks **concrete repo progress** against that intent and against **`2026_May--StarTrade_v1_PRD.md`**. Update checkboxes when merging meaningful slices, not for every small refactor.
+The **Recommended implementation order** section below is still the *intent*. This checklist tracks **concrete repo progress** against that intent and against **`2026_May--StarStrat_v1_PRD.md`**. Update checkboxes when merging meaningful slices, not for every small refactor.
 
 ## Recommended implementation order
 
@@ -656,4 +656,4 @@ If the goal is a strong V1 without drifting into framework sprawl, the best shap
 - **Recharts + Framer Motion + Lucide + Howler + Zod** as focused support tools
 - strong early investment in **deterministic RNG, replay/debug, event serialization, pathfinding cache, time sync, map seeding, balance constants, and an asset pipeline**
 
-That gives StarTrade a practical V1 foundation that is game-shaped rather than generic dashboard-shaped.
+That gives StarStrat a practical V1 foundation that is game-shaped rather than generic dashboard-shaped.

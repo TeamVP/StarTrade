@@ -1,10 +1,10 @@
-# StarTrade v1 PRD
+# StarStrat v1 PRD
 
 ## Document control
 
 | Field | Value |
 |---|---|
-| Product | StarTrade v1 |
+| Product | StarStrat v1 |
 | Release focus | Empire-builders only |
 | Genre | Real-time, semi-automatic grand strategy / 4X-lite browser game |
 | Platform | Web first, mobile-capable web app |
@@ -16,13 +16,13 @@
 
 Engineering tracks **what is built versus what remains** in a living checklist (Convex backend, frontend shell, playable loop, gaps toward full V1):
 
-- **`docs/2026_May--StarTrade_v1_tech_stack_project_shape.md`** → section **“V1 implementation checklist (living document)”**
+- **`docs/2026_May--StarStrat_v1_tech_stack_project_shape.md`** → section **“V1 implementation checklist (living document)”**
 
 Use that checklist as the authoritative bridge between this PRD’s scope and the repository; update it when shipping meaningful vertical slices.
 
 ## Overview
 
-StarTrade v1 is the empire-builder foundation of the game: players and AI opponents expand across a fixed galaxy map, build fleets, conquer star systems, defend borders, manage economic emphasis, and survive long enough to become major powers.
+StarStrat v1 is the empire-builder foundation of the game: players and AI opponents expand across a fixed galaxy map, build fleets, conquer star systems, defend borders, manage economic emphasis, and survive long enough to become major powers.
 
 The main job of v1 is to ship the conquest game in a form that already contains the economic logic needed for later trader play. That means stockpiles, prices, treasury pressure, taxation, shortages, battle damage, and background trade all exist in v1, even though live trader players do not join until v2.
 
@@ -463,7 +463,7 @@ The UI must make the following obvious:
 
 ## Out of scope for v1
 
-The following are explicitly out of scope for StarTrade v1:
+The following are explicitly out of scope for StarStrat v1:
 - Human trader role
 - Player-authored cargo route gameplay
 - Chartered ship management by traders
@@ -496,7 +496,7 @@ The following are explicitly out of scope for StarTrade v1:
 
 ## Acceptance criteria
 
-StarTrade v1 is ready for launch when:
+StarStrat v1 is ready for launch when:
 - A player can join a new or existing galaxy and control a viable empire.
 - Every empire has a meaningful homeworld advantage that supports recovery and identity.
 - Population-based taxes and market-linked spending create understandable treasury dynamics.

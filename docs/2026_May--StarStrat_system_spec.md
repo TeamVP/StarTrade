@@ -1,8 +1,8 @@
-# StarTrade System Specification
+# StarStrat System Specification
 
 ## 1. Purpose
 
-This document defines the implementation-level systems for StarTrade across:
+This document defines the implementation-level systems for StarStrat across:
 - **v1 Empire Play**: conquest, production, taxation, treasury, collapse, and battle damage
 - **v2 Trader Play**: market visibility, chartered shipping, route knowledge, automatic sale settlement, and solvency risk
 

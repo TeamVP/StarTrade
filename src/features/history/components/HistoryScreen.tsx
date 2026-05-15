@@ -308,7 +308,7 @@ export function HistoryScreen(props: { hideGamePicker?: boolean }) {
         <Card>
           <p className="text-sm text-st-muted text-center py-8">
             {hideGamePicker
-              ? "No active game is selected. Choose a game from the main StarTrade Games page, then return to this player view."
+              ? "No active game is selected. Choose a game from the main StarStrat Games page, then return to this player view."
               : "Select a game above to view its event history."}
           </p>
         </Card>

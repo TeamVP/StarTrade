@@ -10,7 +10,7 @@ export function SignInCard() {
 
   return (
     <Card className="mx-auto mt-16 w-full max-w-md p-6">
-      <h2 className="text-lg font-semibold">Sign in to StarTrade</h2>
+      <h2 className="text-lg font-semibold">Sign in to StarStrat</h2>
       <Button
         type="button"
         variant="secondary"

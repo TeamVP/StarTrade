@@ -13,7 +13,7 @@ export function PlayerGameLayout({ config }: { config: PlayerPreviewRouteConfig 
       <Authenticated>
         <ActiveGameProvider
           key={config.basePath}
-          storageKey={`startrade:activeGameId:${config.basePath}`}
+          storageKey={`starstrat:activeGameId:${config.basePath}`}
         >
           <PlayerPreviewProvider value={config}>
             <AppShell

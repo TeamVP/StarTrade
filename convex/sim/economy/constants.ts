@@ -1,4 +1,4 @@
-/** Tuning aligned with docs/2026_May--StarTrade_system_spec.md §8–13, §18. */
+/** Tuning aligned with docs/2026_May--StarStrat_system_spec.md §8–13, §18. */
 
 /**
  * Food demand per "sim population unit" per turn (sim units ≈ 1 M people).

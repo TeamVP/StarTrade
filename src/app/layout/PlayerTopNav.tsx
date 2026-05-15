@@ -20,7 +20,7 @@ export function PlayerTopNav() {
         to={basePath}
         className="rounded-md px-3 py-px text-base font-semibold tracking-wide text-st-fg transition-colors hover:bg-st-panel"
       >
-        StarTrade
+        StarStrat
       </Link>
       <Link
         to="/"
