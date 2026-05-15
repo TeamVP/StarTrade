@@ -67,6 +67,16 @@ type MissionScenario = {
   empireConfigs: MissionEmpireConfig[];
 };
 
+type MissionScenarioWarning = {
+  key: string;
+  message: string;
+  action:
+    | { kind: "addNpcSeed"; npcKey: string; label: string }
+    | { kind: "setControllerNpc"; index: number; label: string }
+    | { kind: "setControllerHuman"; index: number; label: string }
+    | null;
+};
+
 function mutationErrorMessage(error: unknown): string {
   const raw = error instanceof Error ? error.message : String(error);
   return raw.replace(/^[\s\S]*?Error:\s*/g, "").trim() || "Something went wrong.";
@@ -213,6 +223,195 @@ function parseMissionScenarioJson(text: string): { scenario: MissionScenario | n
       error: error instanceof Error ? error.message : "Scenario JSON must be valid JSON.",
     };
   }
+}
+
+function hasMissionHandicap(config: MissionEmpireConfig): boolean {
+  return (
+    config.treasuryDelta !== 0 ||
+    config.homeworldPopulationDelta !== 0 ||
+    config.homeworldStockFoodDelta !== 0 ||
+    config.homeworldStockWeaponsDelta !== 0 ||
+    config.homeworldStockResearchDelta !== 0 ||
+    config.homeworldLocalTreasuryDelta !== 0
+  );
+}
+
+function collectMissionScenarioWarnings(scenario: MissionScenario): MissionScenarioWarning[] {
+  const warnings: MissionScenarioWarning[] = [];
+  const duplicateTargets = new Set<string>();
+  const seenTargets = new Set<string>();
+
+  for (const [index, config] of scenario.empireConfigs.entries()) {
+    const targetKey = config.targetEmpireKey?.trim() ?? "";
+    if (targetKey.length > 0) {
+      if (seenTargets.has(targetKey)) {
+        duplicateTargets.add(targetKey);
+      }
+      seenTargets.add(targetKey);
+    }
+
+    if (config.targetEmpireKey === null && config.targetNpcPlayerKey === null) {
+      warnings.push({
+        key: `untargeted-${index}`,
+        message: "An override row has no target empire key or NPC persona.",
+        action: null,
+      });
+    }
+    if (config.targetEmpireKey === scenario.playerEmpireKey && config.controller === "npc") {
+      warnings.push({
+        key: `player-npc-${index}`,
+        message: `Player empire ${scenario.playerEmpireKey} is configured to be NPC-controlled.`,
+        action: { kind: "setControllerHuman", index, label: "Set controller to human" },
+      });
+    }
+    if (config.controller === "human" && config.targetNpcPlayerKey !== null) {
+      warnings.push({
+        key: `human-npc-persona-${index}`,
+        message: `Override for ${config.targetEmpireKey ?? config.targetNpcPlayerKey} assigns an NPC persona while controller is human.`,
+        action: { kind: "setControllerNpc", index, label: "Set controller to npc" },
+      });
+    }
+  }
+
+  for (const target of duplicateTargets) {
+    warnings.push({
+      key: `duplicate-target-${target}`,
+      message: `Multiple override rows target the same empire key: ${target}.`,
+      action: null,
+    });
+  }
+
+  for (const automatedEmpireKey of scenario.automatedEmpireKeys) {
+    if (automatedEmpireKey.startsWith("npc-")) {
+      const npcKey = automatedEmpireKey.slice(4);
+      if (!scenario.npcEmpireKeys.includes(npcKey)) {
+        warnings.push({
+          key: `missing-seed-${npcKey}`,
+          message: `Automated empire ${automatedEmpireKey} does not have a matching NPC seed entry in npcEmpireKeys.`,
+          action: { kind: "addNpcSeed", npcKey, label: `Add ${npcKey} to npcEmpireKeys` },
+        });
+      }
+    }
+  }
+
+  return warnings;
+}
+
+function MissionScenarioPreview(props: {
+  scenario: MissionScenario;
+  empireNpcs: EmpireNpcRow[];
+  strategies: StrategyOption[];
+  onApplyWarningFix: (warning: MissionScenarioWarning) => void;
+}) {
+  const npcByKey = useMemo(
+    () => new Map(props.empireNpcs.map((npc) => [npc.key, npc])),
+    [props.empireNpcs],
+  );
+  const strategyByKey = useMemo(
+    () => new Map(props.strategies.map((strategy) => [strategy.key, strategy])),
+    [props.strategies],
+  );
+  const warnings = useMemo(() => collectMissionScenarioWarnings(props.scenario), [props.scenario]);
+
+  return (
+    <div className="space-y-3 rounded border border-st-border bg-st-panel px-3 py-3">
+      <div>
+        <h5 className="text-xs font-semibold uppercase tracking-wide text-st-muted">Live Preview</h5>
+        <p className="mt-1 text-xs text-st-muted">
+          Review the effective scenario composition before saving.
+        </p>
+      </div>
+
+      <div className="grid gap-3 md:grid-cols-3">
+        <div className="rounded border border-st-border bg-st-bg px-3 py-2 text-xs text-st-muted">
+          <div className="font-semibold text-st-fg">Player Empire</div>
+          <div className="mt-1">{props.scenario.playerEmpireKey}</div>
+        </div>
+        <div className="rounded border border-st-border bg-st-bg px-3 py-2 text-xs text-st-muted">
+          <div className="font-semibold text-st-fg">Seeded NPC Rivals</div>
+          <div className="mt-1">
+            {props.scenario.npcEmpireKeys.length === 0
+              ? "None"
+              : props.scenario.npcEmpireKeys
+                  .map((key) => npcByKey.get(key)?.playerName ?? key)
+                  .join(", ")}
+          </div>
+        </div>
+        <div className="rounded border border-st-border bg-st-bg px-3 py-2 text-xs text-st-muted">
+          <div className="font-semibold text-st-fg">Automated Empires</div>
+          <div className="mt-1">
+            {props.scenario.automatedEmpireKeys.length === 0
+              ? "None"
+              : props.scenario.automatedEmpireKeys.join(", ")}
+          </div>
+        </div>
+      </div>
+
+      <div className="space-y-2">
+        <div className="text-xs font-semibold uppercase tracking-wide text-st-muted">Override Summary</div>
+        {props.scenario.empireConfigs.length === 0 ? (
+          <p className="rounded border border-st-border bg-st-bg px-3 py-2 text-xs text-st-muted">
+            No empire overrides configured.
+          </p>
+        ) : (
+          props.scenario.empireConfigs.map((config, index) => {
+            const npc = config.targetNpcPlayerKey === null ? null : npcByKey.get(config.targetNpcPlayerKey) ?? null;
+            const strategy =
+              config.strategyLibraryKey === null ? null : strategyByKey.get(config.strategyLibraryKey) ?? null;
+            return (
+              <div
+                key={`${config.targetEmpireKey ?? config.targetNpcPlayerKey ?? "override"}-${index}`}
+                className="rounded border border-st-border bg-st-bg px-3 py-2 text-xs text-st-muted"
+              >
+                <div className="font-semibold text-st-fg">
+                  {config.targetEmpireKey ?? config.targetNpcPlayerKey ?? `Override ${index + 1}`}
+                </div>
+                <div className="mt-1">
+                  Commander: {npc?.playerName ?? config.targetNpcPlayerKey ?? "none"} · Controller: {config.controller ?? "unchanged"}
+                </div>
+                <div className="mt-1">
+                  Strategy: {strategy?.name ?? config.strategyLibraryKey ?? "NPC default / none"}
+                  {config.strategyStartMode !== null || config.strategyStartTurn !== null
+                    ? ` · Delay ${config.strategyStartMode ?? "turn"}${config.strategyStartTurn !== null ? ` ${config.strategyStartTurn}` : ""}`
+                    : ""}
+                </div>
+                <div className="mt-1">
+                  Handicap: {hasMissionHandicap(config) ? "yes" : "none"}
+                  {config.empireNameOverride !== null ? ` · Empire name ${config.empireNameOverride}` : ""}
+                  {config.playerNameOverride !== null ? ` · Player name ${config.playerNameOverride}` : ""}
+                </div>
+              </div>
+            );
+          })
+        )}
+      </div>
+
+      {warnings.length > 0 ? (
+        <div className="space-y-2 rounded border border-amber-900/50 bg-amber-950/30 px-3 py-3 text-xs text-amber-100">
+          <div className="font-semibold text-amber-200">Authoring Warnings</div>
+          <ul className="space-y-1">
+            {warnings.map((warning) => {
+              const action = warning.action;
+              return (
+                <li key={warning.key} className="flex flex-wrap items-center justify-between gap-2">
+                  <span>{warning.message}</span>
+                  {action !== null ? (
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      onClick={() => props.onApplyWarningFix(warning)}
+                    >
+                      {action.label}
+                    </Button>
+                  ) : null}
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 function MissionScenarioEditor(props: {
@@ -380,6 +579,38 @@ function MissionScenarioEditor(props: {
     );
   }
 
+  function applyWarningFix(warning: MissionScenarioWarning) {
+    const action = warning.action;
+    if (action === null) {
+      return;
+    }
+
+    if (action.kind === "addNpcSeed") {
+      updateScenario((scenario) => ({
+        ...scenario,
+        npcEmpireKeys: scenario.npcEmpireKeys.includes(action.npcKey)
+          ? scenario.npcEmpireKeys
+          : [...scenario.npcEmpireKeys, action.npcKey],
+      }));
+      return;
+    }
+
+    if (action.kind === "setControllerNpc") {
+      updateConfig(action.index, (current) => ({
+        ...current,
+        controller: "npc",
+      }));
+      return;
+    }
+
+    if (action.kind === "setControllerHuman") {
+      updateConfig(action.index, (current) => ({
+        ...current,
+        controller: "human",
+      }));
+    }
+  }
+
   return (
     <div className="space-y-4 rounded-lg border border-st-border bg-st-bg/40 p-4">
       <div>
@@ -499,6 +730,15 @@ function MissionScenarioEditor(props: {
           </Button>
         </div>
       </div>
+
+      {parsed.scenario !== null ? (
+        <MissionScenarioPreview
+          scenario={parsed.scenario}
+          empireNpcs={props.empireNpcs}
+          strategies={props.strategies}
+          onApplyWarningFix={applyWarningFix}
+        />
+      ) : null}
 
       <div className="space-y-3">
         <div className="flex items-center justify-between gap-3">
