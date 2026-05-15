@@ -18,8 +18,8 @@ export function TurnPanel() {
   const pauseGame = useMutation(api.sim.mutations.pauseGame);
   const resumeGame = useMutation(api.sim.mutations.resumeGame);
   const killGame = useMutation(api.admin.mutations.killGame);
-  const finalizeGameByScore = useMutation(api.admin.mutations.finalizeGameByScore);
-  const setGameRetentionClass = useMutation(api.admin.mutations.setGameRetentionClass);
+  const finalizeGameByScore = useMutation(api.admin.gameFinalization.finalizeGameByScore);
+  const setGameRetentionClass = useMutation(api.admin.gameFinalization.setGameRetentionClass);
 
   const [startBusy, setStartBusy] = useState(false);
   const [startError, setStartError] = useState<string | null>(null);
