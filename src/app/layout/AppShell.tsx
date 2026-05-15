@@ -1,3 +1,4 @@
+import { Link } from "react-router-dom";
 import type { ReactNode } from "react";
 
 type AppShellProps = {
@@ -32,7 +33,9 @@ export function AppShell({
         <div className={headerContentClassName}>
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-8">
             {showProductTitle ? (
-              <h1 className="text-xl font-semibold tracking-wide">StarStrat</h1>
+              <Link to="/" className="text-xl font-semibold tracking-wide">
+                StarStrat
+              </Link>
             ) : null}
             {nav}
           </div>

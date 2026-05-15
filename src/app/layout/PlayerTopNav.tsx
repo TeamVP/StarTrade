@@ -18,7 +18,7 @@ export function PlayerTopNav() {
   return (
     <nav className="flex flex-wrap items-center gap-1 text-sm leading-none" aria-label="Player home">
       <Link
-        to={basePath}
+        to="/"
         className="rounded-md px-3 py-px text-base font-semibold tracking-wide text-st-fg transition-colors hover:bg-st-panel"
       >
         StarStrat
