@@ -30,8 +30,10 @@ export function LobbyPage() {
   const lobbyState = useQuery(api.usr.queries.getMyLobbyState, {});
   const ensureMyStarterGames = useMutation(api.usr.mutations.ensureMyStarterGames);
   const resetMyStarterGame = useMutation(api.usr.mutations.resetMyStarterGame);
+  const resignFromGame = useMutation(api.usr.mutations.resignFromGame);
   const startGame = useMutation(api.sim.mutations.startGame);
   const [busyScenarioKey, setBusyScenarioKey] = useState<string | null>(null);
+  const [resignBusyScenarioKey, setResignBusyScenarioKey] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -53,16 +55,16 @@ export function LobbyPage() {
     setError(null);
     setBusyScenarioKey(entry.key);
     try {
-      if (entry.game.status === "lobby") {
-        await startGame({ gameId: entry.game._id });
-        selectGame(entry.game._id, entry.game.urlCode);
-        return;
-      }
-
-      if (entry.game.status === "finished") {
+      if (entry.game.status === "finished" || !entry.isActiveMember) {
         const result = await resetMyStarterGame({ scenarioKey: entry.key });
         setSelectedGameId(result.gameId as typeof selectedGameId);
         void navigate(`/game/${result.gameId}`);
+        return;
+      }
+
+      if (entry.game.status === "lobby") {
+        await startGame({ gameId: entry.game._id });
+        selectGame(entry.game._id, entry.game.urlCode);
         return;
       }
 
@@ -72,6 +74,30 @@ export function LobbyPage() {
       setError(message.replace(/^[\s\S]*?Error:\s*/g, "").trim());
     } finally {
       setBusyScenarioKey(null);
+    }
+  }
+
+  async function onScenarioResign(entry: NonNullable<typeof lobbyState>["games"][number]) {
+    if (entry.game === null || !entry.isActiveMember || entry.game.status === "finished") {
+      return;
+    }
+    if (
+      !window.confirm(
+        "Resign from this game? If no human players remain, the game will end immediately, write final results, and begin cleanup.",
+      )
+    ) {
+      return;
+    }
+
+    setError(null);
+    setResignBusyScenarioKey(entry.key);
+    try {
+      await resignFromGame({ gameId: entry.game._id });
+    } catch (mutationError) {
+      const message = mutationError instanceof Error ? mutationError.message : String(mutationError);
+      setError(message.replace(/^[\s\S]*?Error:\s*/g, "").trim());
+    } finally {
+      setResignBusyScenarioKey(null);
     }
   }
 
@@ -86,11 +112,11 @@ export function LobbyPage() {
     if (entry.game === null) {
       return "Preparing...";
     }
+    if (entry.game.status === "finished" || !entry.isActiveMember) {
+      return "New game";
+    }
     if (entry.game.status === "lobby") {
       return "Start";
-    }
-    if (entry.game.status === "finished") {
-      return "Replay";
     }
     return "Play";
   }
@@ -264,6 +290,23 @@ export function LobbyPage() {
                     </div>
 
                     <div className="flex shrink-0 items-center gap-2">
+                      {game !== null && entry.isActiveMember && game.status !== "finished" ? (
+                        <button
+                          type="button"
+                          className={cn(
+                            "rounded-md border px-3 py-2 text-sm font-medium transition-colors",
+                            resignBusyScenarioKey === entry.key
+                              ? "border-st-border bg-st-bg text-st-muted"
+                              : "border-orange-500/40 bg-orange-500/10 text-orange-700 hover:bg-orange-500/20 dark:text-orange-300",
+                          )}
+                          disabled={busyScenarioKey === entry.key || resignBusyScenarioKey === entry.key}
+                          onClick={() => {
+                            void onScenarioResign(entry);
+                          }}
+                        >
+                          {resignBusyScenarioKey === entry.key ? "Resigning..." : "Resign"}
+                        </button>
+                      ) : null}
                       <button
                         type="button"
                         className={cn(
@@ -272,7 +315,12 @@ export function LobbyPage() {
                             ? "border-st-accent bg-st-accent/10 text-st-accent hover:bg-st-accent/20"
                             : "border-st-border bg-st-bg text-st-muted",
                         )}
-                        disabled={!entry.unlocked || entry.game === null || busyScenarioKey === entry.key}
+                        disabled={
+                          !entry.unlocked ||
+                          entry.game === null ||
+                          busyScenarioKey === entry.key ||
+                          resignBusyScenarioKey === entry.key
+                        }
                         onClick={() => {
                           void onScenarioAction(entry);
                         }}

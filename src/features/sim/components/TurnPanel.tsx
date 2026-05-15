@@ -20,6 +20,7 @@ export function TurnPanel() {
   const killGame = useMutation(api.admin.mutations.killGame);
   const finalizeGameByScore = useMutation(api.admin.gameFinalization.finalizeGameByScore);
   const setGameRetentionClass = useMutation(api.admin.gameFinalization.setGameRetentionClass);
+  const resignFromGame = useMutation(api.usr.mutations.resignFromGame);
 
   const [startBusy, setStartBusy] = useState(false);
   const [startError, setStartError] = useState<string | null>(null);
@@ -30,6 +31,8 @@ export function TurnPanel() {
   const [finalizeError, setFinalizeError] = useState<string | null>(null);
   const [retentionBusy, setRetentionBusy] = useState(false);
   const [retentionError, setRetentionError] = useState<string | null>(null);
+  const [resignBusy, setResignBusy] = useState(false);
+  const [resignError, setResignError] = useState<string | null>(null);
   const [stepBusy, setStepBusy] = useState(false);
   const [stepError, setStepError] = useState<string | null>(null);
   const [rebuildModalOpen, setRebuildModalOpen] = useState(false);
@@ -61,6 +64,7 @@ export function TurnPanel() {
   const turnResolving = timeline?.turnState === "resolving";
   const canRebuildModalActions = !turnResolving && rebuildPendingMode === null;
   const isGameAdmin = myRoles?.some((role) => role.role === "admin") ?? false;
+  const canResign = (myRoles?.length ?? 0) > 0 && gameId !== undefined;
   const canPauseOrResumeClock =
     myRoles?.some((role) => role.role === "admin" || role.role === "empire") ??
     false;
@@ -182,6 +186,27 @@ export function TurnPanel() {
       setRetentionError(message.replace(/^[\s\S]*?Error:\s*/g, "").trim());
     } finally {
       setRetentionBusy(false);
+    }
+  }
+
+  async function onResignFromGame() {
+    if (!gameId) return;
+    if (
+      !window.confirm(
+        "Resign from this game? If you are the last human participant, the game will end immediately, save final results, and begin cleanup.",
+      )
+    ) {
+      return;
+    }
+    setResignBusy(true);
+    setResignError(null);
+    try {
+      await resignFromGame({ gameId });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setResignError(message.replace(/^[\s\S]*?Error:\s*/g, "").trim());
+    } finally {
+      setResignBusy(false);
     }
   }
 
@@ -575,6 +600,21 @@ export function TurnPanel() {
             {finalizeError}
           </p>
         ) : null}
+        {canResign ? (
+          <Button
+            disabled={resignBusy || activeGame?.finalizationState === "pending_cleanup"}
+            variant="secondary"
+            className="w-full border border-orange-500/40 text-orange-700 hover:border-orange-500/70 hover:text-orange-800 dark:text-orange-300 dark:hover:text-orange-200"
+            onClick={() => void onResignFromGame()}
+          >
+            {resignBusy ? "Resigning…" : "Resign from game"}
+          </Button>
+        ) : null}
+        {resignError !== null ? (
+          <p className="text-xs text-red-600 dark:text-red-400" role="alert">
+            {resignError}
+          </p>
+        ) : null}
         {gameId !== undefined && isGameAdmin ? (
           <Button
             disabled={killBusy}
@@ -720,8 +760,9 @@ export function TurnPanel() {
       <p className="mt-2 text-xs text-st-muted">
         Create a game, seed the map, start, issue fleet moves for the current turn, then step.
         Pause freezes the match clock for everyone; admins and empire players can pause or resume.
-        Admins can suspend autopilot on the Games page so only that game stops auto-resolving. Game
-        admins can kill a game to remove it entirely. Use <strong className="text-st-fg">Rebuild orders</strong>{" "}
+        Admins can suspend autopilot on the Games page so only that game stops auto-resolving.
+        Resigning drops you from the game; if that leaves no human players, the match is score-finalized
+        and cleaned up automatically. Game admins can kill a game to remove it entirely. Use <strong className="text-st-fg">Rebuild orders</strong>{" "}
         to refresh standing routes (see the dialog for current-only, fill-blank, or full reset plus
         automation replan). The planning bar schedules when the <em>following</em> turn may begin
         resolving; click near the left for soon, near the right for later in that turn&apos;s window.

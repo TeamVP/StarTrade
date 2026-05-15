@@ -40,8 +40,10 @@ export function PlayerLobbyPage() {
   const lobbyState = useQuery(api.usr.queries.getMyLobbyState, {});
   const ensureMyStarterGames = useMutation(api.usr.mutations.ensureMyStarterGames);
   const resetMyStarterGame = useMutation(api.usr.mutations.resetMyStarterGame);
+  const resignFromGame = useMutation(api.usr.mutations.resignFromGame);
   const startGame = useMutation(api.sim.mutations.startGame);
   const [busyScenarioKey, setBusyScenarioKey] = useState<string | null>(null);
+  const [resignBusyScenarioKey, setResignBusyScenarioKey] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -63,16 +65,16 @@ export function PlayerLobbyPage() {
     setError(null);
     setBusyScenarioKey(entry.key);
     try {
-      if (entry.game.status === "lobby") {
-        await startGame({ gameId: entry.game._id });
-        selectGame(entry.game._id);
-        return;
-      }
-
-      if (entry.game.status === "finished") {
+      if (entry.game.status === "finished" || !entry.isActiveMember) {
         const result = await resetMyStarterGame({ scenarioKey: entry.key });
         setSelectedGameId(result.gameId as typeof selectedGameId);
         void navigate(basePath, { replace: true });
+        return;
+      }
+
+      if (entry.game.status === "lobby") {
+        await startGame({ gameId: entry.game._id });
+        selectGame(entry.game._id);
         return;
       }
 
@@ -82,6 +84,30 @@ export function PlayerLobbyPage() {
       setError(message.replace(/^[\s\S]*?Error:\s*/g, "").trim());
     } finally {
       setBusyScenarioKey(null);
+    }
+  }
+
+  async function onScenarioResign(entry: NonNullable<typeof lobbyState>["games"][number]) {
+    if (entry.game === null || !entry.isActiveMember || entry.game.status === "finished") {
+      return;
+    }
+    if (
+      !window.confirm(
+        "Resign from this game? If no human players remain, the game will end immediately, write final results, and begin cleanup.",
+      )
+    ) {
+      return;
+    }
+
+    setError(null);
+    setResignBusyScenarioKey(entry.key);
+    try {
+      await resignFromGame({ gameId: entry.game._id });
+    } catch (mutationError) {
+      const message = mutationError instanceof Error ? mutationError.message : String(mutationError);
+      setError(message.replace(/^[\s\S]*?Error:\s*/g, "").trim());
+    } finally {
+      setResignBusyScenarioKey(null);
     }
   }
 
@@ -95,11 +121,11 @@ export function PlayerLobbyPage() {
     if (entry.game === null) {
       return "Preparing...";
     }
+    if (entry.game.status === "finished" || !entry.isActiveMember) {
+      return "New game";
+    }
     if (entry.game.status === "lobby") {
       return "Start";
-    }
-    if (entry.game.status === "finished") {
-      return "Replay";
     }
     return "Play";
   }
@@ -287,15 +313,33 @@ export function PlayerLobbyPage() {
                       </p>
                     ) : null}
                   </div>
-                  <Button
-                    type="button"
-                    variant={isSelected && game?.status !== "finished" ? "secondary" : "primary"}
-                    className="shrink-0"
-                    disabled={!entry.unlocked || game === null || busyScenarioKey === entry.key}
-                    onClick={() => void onScenarioAction(entry)}
-                  >
-                    {busyScenarioKey === entry.key ? "Working..." : actionLabel(entry)}
-                  </Button>
+                  <div className="flex shrink-0 items-center gap-2">
+                    {game !== null && entry.isActiveMember && game.status !== "finished" ? (
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        className="border border-orange-500/40 text-orange-700 hover:border-orange-500/70 hover:text-orange-800 dark:text-orange-300 dark:hover:text-orange-200"
+                        disabled={busyScenarioKey === entry.key || resignBusyScenarioKey === entry.key}
+                        onClick={() => void onScenarioResign(entry)}
+                      >
+                        {resignBusyScenarioKey === entry.key ? "Resigning..." : "Resign"}
+                      </Button>
+                    ) : null}
+                    <Button
+                      type="button"
+                      variant={isSelected && game?.status !== "finished" ? "secondary" : "primary"}
+                      className="shrink-0"
+                      disabled={
+                        !entry.unlocked ||
+                        game === null ||
+                        busyScenarioKey === entry.key ||
+                        resignBusyScenarioKey === entry.key
+                      }
+                      onClick={() => void onScenarioAction(entry)}
+                    >
+                      {busyScenarioKey === entry.key ? "Working..." : actionLabel(entry)}
+                    </Button>
+                  </div>
                 </Card>
               );
             })}

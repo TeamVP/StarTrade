@@ -71,6 +71,8 @@ export const updateEmpireMeta = mutation({
     colorHex: v.optional(v.string()),
     playerName: v.optional(v.string()),
     strategyJson: v.optional(v.union(v.string(), v.null())),
+    strategyStartMode: v.optional(v.union(v.literal("turn"), v.literal("attacked"))),
+    strategyStartTurn: v.optional(v.union(v.number(), v.null())),
   },
   handler: async (ctx, args) => {
     const empire = await ctx.db.get("emp_states", args.empireId);
@@ -85,6 +87,9 @@ export const updateEmpireMeta = mutation({
       colorHex?: string;
       playerName?: string;
       strategyJson?: string | undefined;
+      strategyStartMode?: "turn" | "attacked";
+      strategyStartTurn?: number | undefined;
+      strategyActivatedAtTurn?: number | undefined;
     } = {};
 
     if (args.name !== undefined) {
@@ -136,6 +141,21 @@ export const updateEmpireMeta = mutation({
     if (args.strategyJson !== undefined) {
       patch.strategyJson =
         args.strategyJson === null ? undefined : canonicalizeStrategyJson(args.strategyJson);
+    }
+
+    if (args.strategyStartMode !== undefined) {
+      patch.strategyStartMode = args.strategyStartMode;
+      patch.strategyActivatedAtTurn = undefined;
+    }
+
+    if (args.strategyStartTurn !== undefined) {
+      if (args.strategyStartTurn === null) {
+        patch.strategyStartTurn = undefined;
+      } else {
+        const normalizedTurn = Math.max(1, Math.floor(args.strategyStartTurn));
+        patch.strategyStartTurn = normalizedTurn;
+      }
+      patch.strategyActivatedAtTurn = undefined;
     }
 
     await ctx.db.patch("emp_states", args.empireId, patch);

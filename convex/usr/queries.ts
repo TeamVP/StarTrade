@@ -283,12 +283,21 @@ export const getMyLobbyState = query({
         mediumUnlocked: smallWins >= 2,
         largeUnlocked: mediumWins >= 1,
       },
-      games: STARTER_LOBBY_SCENARIOS.map((scenario) => {
+      games: await Promise.all(STARTER_LOBBY_SCENARIOS.map((scenario) => {
         const game = gamesByScenario.get(scenario.key) ?? null;
+        const activeMembershipPromise =
+          game === null
+            ? Promise.resolve(null)
+            : ctx.db
+                .query("usr_game_roles")
+                .withIndex("by_gameId_and_userId", (q) =>
+                  q.eq("gameId", game._id).eq("userId", userId),
+                )
+                .unique();
         const unlocked =
           smallWins >= scenario.requiredSmallWins &&
           mediumWins >= scenario.requiredMediumWins;
-        return {
+        return activeMembershipPromise.then((membership) => ({
           key: scenario.key,
           name: scenario.name,
           mapKey: scenario.mapKey,
@@ -300,8 +309,10 @@ export const getMyLobbyState = query({
           unlocked,
           game,
           result: game === null ? null : resultByGameId.get(game._id) ?? null,
-        };
-      }),
+          isActiveMember: membership?.isActive ?? false,
+          myRole: membership?.isActive ? membership.role : null,
+        }));
+      })),
     };
   },
 });

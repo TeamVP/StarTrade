@@ -458,6 +458,14 @@ export default defineSchema({
     playerName: v.optional(v.string()),
     /** Editable automation brain for NPCs or humans that opt into scripted empire management. */
     strategyJson: v.optional(v.string()),
+    /** How an NPC empire's automation becomes active. Human automation ignores this and runs immediately. */
+    strategyStartMode: v.optional(
+      v.union(v.literal("turn"), v.literal("attacked")),
+    ),
+    /** First turn when a turn-gated NPC strategy may begin. */
+    strategyStartTurn: v.optional(v.number()),
+    /** Latched turn when an NPC strategy first became active. */
+    strategyActivatedAtTurn: v.optional(v.number()),
     /** Timestamp when this empire asked for its standing orders to be cleared and replanned. */
     standingOrdersRefreshRequestedAt: v.optional(v.number()),
     /**

@@ -249,6 +249,34 @@ function parseEconomy(strategyJson: string): StrategyEconomy | null {
   };
 }
 
+function npcStrategyShouldActivateNow(params: {
+  empire: Doc<"emp_states">;
+  turnNumber: number;
+  ownedSystems: Doc<"gal_systems">[];
+  strengthBySystem: Map<string, Map<string, number>>;
+}): boolean {
+  if (params.empire.strategyActivatedAtTurn !== undefined) {
+    return true;
+  }
+
+  const startMode = params.empire.strategyStartMode ?? "turn";
+  if (startMode === "turn") {
+    return params.turnNumber >= (params.empire.strategyStartTurn ?? 1);
+  }
+
+  return params.ownedSystems.some((system) => {
+    if (system.underAttack === true) {
+      return true;
+    }
+    const foreignStrength = totalForeignStrengthAtSystem(
+      params.strengthBySystem,
+      system._id,
+      params.empire._id,
+    );
+    return foreignStrength > 0;
+  });
+}
+
 export function parseAutomation(strategyJson: string): StrategyAutomation | null {
   const strategy = parseStrategy(strategyJson);
   if (strategy === null) {
@@ -1356,6 +1384,23 @@ export async function applyNpcStrategy(
     }
 
     const ownedSystems = systemsByEmpire.get(empire._id) ?? [];
+    if (empire.controller === "npc") {
+      const strategyActive = npcStrategyShouldActivateNow({
+        empire,
+        turnNumber: params.turnNumber,
+        ownedSystems,
+        strengthBySystem,
+      });
+      if (!strategyActive) {
+        continue;
+      }
+      if (empire.strategyActivatedAtTurn === undefined) {
+        await ctx.db.patch("emp_states", empire._id, {
+          strategyActivatedAtTurn: params.turnNumber,
+        });
+      }
+    }
+
     const automation = parseAutomation(empire.strategyJson);
     const empirePriorityRows = priorityRowsByEmpire.get(empire._id) ?? [];
     const priorityStarObjectiveActive =

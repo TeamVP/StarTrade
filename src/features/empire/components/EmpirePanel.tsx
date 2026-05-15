@@ -426,9 +426,17 @@ function EmpireSnapshotListRow(props: {
 
 export function EmpirePanel(props: { focusEmpireId?: Id<"emp_states"> | null }) {
   const focusEmpireId = props.focusEmpireId ?? null;
-  const { activeGame } = useActiveGame();
+  const { activeGame, setSelectedGameId } = useActiveGame();
   const galaxyMapNav = useGalaxyMapNav();
   const requestEmpireHomeworldFocus = galaxyMapNav?.requestEmpireHomeworldFocus;
+  const myMembership = useQuery(
+    api.usr.queries.getMyGameMembership,
+    activeGame ? { gameId: activeGame._id } : "skip",
+  );
+  const resignFromGame = useMutation(api.usr.mutations.resignFromGame);
+  const resetMyStarterGame = useMutation(api.usr.mutations.resetMyStarterGame);
+  const pauseGame = useMutation(api.sim.mutations.pauseGame);
+  const resumeGame = useMutation(api.sim.mutations.resumeGame);
   const systems =
     useQuery(
       api.gal.queries.listSystems,
@@ -439,6 +447,10 @@ export function EmpirePanel(props: { focusEmpireId?: Id<"emp_states"> | null }) 
     activeGame ? { gameId: activeGame._id, limit: 20 } : "skip",
   );
   const empires = useMemo(() => empiresRaw ?? [], [empiresRaw]);
+  const [gameActionBusy, setGameActionBusy] = useState<"resign" | "new" | null>(null);
+  const [gameActionError, setGameActionError] = useState<string | null>(null);
+  const [pauseBusy, setPauseBusy] = useState(false);
+  const [pauseError, setPauseError] = useState<string | null>(null);
 
   type EmpireRow = (typeof empires)[number];
 
@@ -464,8 +476,104 @@ export function EmpirePanel(props: { focusEmpireId?: Id<"emp_states"> | null }) 
 
   const hasRivalSection =
     focusEmpireId !== null && (otherHumanEmpires.length > 0 || npcEmpires.length > 0);
+  const snapshotStarsOwned =
+    snapshotEmpire === null
+      ? 0
+      : systems.filter((s) => s.ownerEmpireId === snapshotEmpire._id).length;
+  const canResignFromSnapshot =
+    activeGame !== null &&
+    snapshotEmpire !== null &&
+    activeGame.status !== "finished" &&
+    myMembership?.isEmpirePlayer === true &&
+    myMembership.empireId === snapshotEmpire._id;
+  const canCreateNewStarterGame =
+    activeGame !== null &&
+    activeGame.lobbyScenarioKey !== null &&
+    activeGame.status === "finished";
+  const canPauseOrResume =
+    activeGame !== null &&
+    (activeGame.status === "running" || activeGame.status === "paused") &&
+    (myMembership?.role === "empire" || myMembership?.role === "admin");
+
+  async function onPauseToggle() {
+    if (activeGame === null) return;
+    setPauseBusy(true);
+    setPauseError(null);
+    try {
+      if (activeGame.status === "running") {
+        await pauseGame({ gameId: activeGame._id });
+      } else if (activeGame.status === "paused") {
+        await resumeGame({ gameId: activeGame._id });
+      }
+    } catch (error) {
+      setPauseError(mutationErrorMessage(error));
+    } finally {
+      setPauseBusy(false);
+    }
+  }
+
+  async function onResignFromSnapshot() {
+    if (activeGame === null) return;
+    if (
+      !window.confirm(
+        "Resign from this game? If no human players remain, the game will end immediately, write final results, and begin cleanup.",
+      )
+    ) {
+      return;
+    }
+    setGameActionBusy("resign");
+    setGameActionError(null);
+    try {
+      await resignFromGame({ gameId: activeGame._id });
+    } catch (error) {
+      setGameActionError(mutationErrorMessage(error));
+    } finally {
+      setGameActionBusy(null);
+    }
+  }
+
+  async function onStartNewStarterGame() {
+    if (activeGame?.lobbyScenarioKey === null || activeGame?.lobbyScenarioKey === undefined) {
+      return;
+    }
+    setGameActionBusy("new");
+    setGameActionError(null);
+    try {
+      const result = await resetMyStarterGame({ scenarioKey: activeGame.lobbyScenarioKey });
+      setSelectedGameId(result.gameId as Id<"sim_games">);
+    } catch (error) {
+      setGameActionError(mutationErrorMessage(error));
+    } finally {
+      setGameActionBusy(null);
+    }
+  }
+
   return (
     <Card>
+      {canPauseOrResume ? (
+        <div className="mb-3 border-b border-st-border pb-3">
+          <Button
+            type="button"
+            variant="secondary"
+            className="w-full"
+            disabled={pauseBusy}
+            onClick={() => {
+              void onPauseToggle();
+            }}
+          >
+            {pauseBusy
+              ? "Updating..."
+              : activeGame?.status === "paused"
+                ? "Play game"
+                : "Pause game"}
+          </Button>
+          {pauseError !== null ? (
+            <p className="mt-2 text-xs text-red-300" role="alert">
+              {pauseError}
+            </p>
+          ) : null}
+        </div>
+      ) : null}
       <h2 className="text-sm font-semibold uppercase tracking-wide text-st-muted">
         Empire Snapshot
       </h2>
@@ -491,9 +599,7 @@ export function EmpirePanel(props: { focusEmpireId?: Id<"emp_states"> | null }) 
             </dd>
             <dt className="text-st-muted">Stars held</dt>
             <dd className="text-right">
-              {snapshotEmpire === null
-                ? "—"
-                : systems.filter((s) => s.ownerEmpireId === snapshotEmpire._id).length}
+              {snapshotEmpire === null ? "—" : snapshotStarsOwned}
             </dd>
           </>
         )}
@@ -513,12 +619,45 @@ export function EmpirePanel(props: { focusEmpireId?: Id<"emp_states"> | null }) 
             <ul className="space-y-2">
               <EmpireSnapshotListRow
                 empire={snapshotEmpire}
-                starsOwned={systems.filter((s) => s.ownerEmpireId === snapshotEmpire._id).length}
+                starsOwned={snapshotStarsOwned}
                 homeworldId={resolveHomeworldSystemId(snapshotEmpire, systems)}
                 requestEmpireHomeworldFocus={requestEmpireHomeworldFocus}
                 showCredits={true}
               />
+              {canResignFromSnapshot || canCreateNewStarterGame ? (
+                <li className="flex flex-wrap justify-end gap-2 pt-1">
+                  {canCreateNewStarterGame ? (
+                    <Button
+                      type="button"
+                      disabled={gameActionBusy !== null}
+                      onClick={() => {
+                        void onStartNewStarterGame();
+                      }}
+                    >
+                      {gameActionBusy === "new" ? "Working..." : "New game"}
+                    </Button>
+                  ) : null}
+                  {canResignFromSnapshot ? (
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      className="border border-orange-500/40 text-orange-700 hover:border-orange-500/70 hover:text-orange-800 dark:text-orange-300 dark:hover:text-orange-200"
+                      disabled={gameActionBusy !== null}
+                      onClick={() => {
+                        void onResignFromSnapshot();
+                      }}
+                    >
+                      {gameActionBusy === "resign" ? "Resigning..." : "Resign"}
+                    </Button>
+                  ) : null}
+                </li>
+              ) : null}
             </ul>
+          ) : null}
+          {gameActionError !== null ? (
+            <p className="text-[11px] text-red-300" role="alert">
+              {gameActionError}
+            </p>
           ) : null}
           {hasRivalSection ? (
             <>

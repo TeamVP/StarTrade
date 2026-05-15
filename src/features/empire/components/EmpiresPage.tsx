@@ -643,6 +643,12 @@ function EmpireEditor({ empire }: { empire: Doc<"emp_states"> }) {
   const [colorHex, setColorHex] = useState(empire.colorHex);
   const [playerName, setPlayerName] = useState(empire.playerName ?? "");
   const [strategyText, setStrategyText] = useState(formatStrategyText(empire.strategyJson));
+  const [strategyStartMode, setStrategyStartMode] = useState<"turn" | "attacked">(
+    empire.strategyStartMode ?? "turn",
+  );
+  const [strategyStartTurn, setStrategyStartTurn] = useState(
+    String(empire.strategyStartTurn ?? 1),
+  );
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
@@ -677,11 +683,18 @@ function EmpireEditor({ empire }: { empire: Doc<"emp_states"> }) {
     setStatus(null);
     try {
       const normalized = validateStrategyText(strategyText);
+      const parsedStartTurn = Number.parseInt(strategyStartTurn, 10);
+      const normalizedStartTurn = Number.isFinite(parsedStartTurn)
+        ? Math.max(1, parsedStartTurn)
+        : 1;
       await updateEmpireMeta({
         empireId: empire._id,
         strategyJson: normalized,
+        strategyStartMode,
+        strategyStartTurn: strategyStartMode === "turn" ? normalizedStartTurn : null,
       });
       setStrategyText(normalized);
+      setStrategyStartTurn(String(normalizedStartTurn));
       setStatus("Saved strategy.");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Strategy JSON is invalid.");
@@ -783,6 +796,35 @@ function EmpireEditor({ empire }: { empire: Doc<"emp_states"> }) {
               automation. The turn runner applies economy settings and maintains strategy-managed
               standing routes for expansion, border reinforcement, and attacks.
             </p>
+            {empire.controller === "npc" ? (
+              <div className="grid gap-3 md:grid-cols-[180px_160px]">
+                <label className="space-y-1 text-xs text-st-muted">
+                  <span>NPC strategy begins</span>
+                  <select
+                    value={strategyStartMode}
+                    onChange={(event) =>
+                      setStrategyStartMode(event.target.value as "turn" | "attacked")
+                    }
+                    className="w-full rounded border border-st-border bg-st-panel px-3 py-2 text-sm text-st-fg outline-none focus:border-st-accent"
+                  >
+                    <option value="turn">On turn</option>
+                    <option value="attacked">When first attacked</option>
+                  </select>
+                </label>
+                <label className="space-y-1 text-xs text-st-muted">
+                  <span>Start turn</span>
+                  <input
+                    type="number"
+                    min={1}
+                    step={1}
+                    value={strategyStartTurn}
+                    disabled={strategyStartMode !== "turn"}
+                    onChange={(event) => setStrategyStartTurn(event.target.value)}
+                    className="w-full rounded border border-st-border bg-st-panel px-3 py-2 text-sm text-st-fg outline-none focus:border-st-accent disabled:opacity-50"
+                  />
+                </label>
+              </div>
+            ) : null}
             <textarea
               value={strategyText}
               onChange={(event) => setStrategyText(event.target.value)}

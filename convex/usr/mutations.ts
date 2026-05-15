@@ -4,6 +4,7 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { api } from "../_generated/api";
 import { assignStarterOwnerEmpireSeat } from "../sim/mutations";
 import { gameAllowsPlayerActions, touchGameMeaningfulActivity } from "../sim/helpers";
+import { evaluateGameFinalization } from "../sim/finalization";
 import { getStarterLobbyScenario, STARTER_LOBBY_SCENARIOS } from "./lobbyScenarios";
 import {
   buildStrategyFromBaseAndOverrides,
@@ -68,6 +69,21 @@ async function assertEmpireSeatForGame(
     throw new Error("You need an active empire seat in this game.");
   }
   return binding.empireId;
+}
+
+async function listActiveGameRoles(
+  ctx: MutationCtx,
+  gameId: Id<"sim_games">,
+) {
+  const grouped = await Promise.all(
+    (["admin", "empire", "trader", "observer"] as const).map((role) =>
+      ctx.db
+        .query("usr_game_roles")
+        .withIndex("by_gameId_and_role", (q) => q.eq("gameId", gameId).eq("role", role))
+        .collect(),
+    ),
+  );
+  return grouped.flat().filter((role) => role.isActive);
 }
 
 export const upsertMyProfile = mutation({
@@ -446,6 +462,70 @@ export const queueMyEmpireStandingOrdersRefresh = mutation({
   },
 });
 
+export const resignFromGame = mutation({
+  args: {
+    gameId: v.id("sim_games"),
+  },
+  handler: async (ctx, args) => {
+    const userId = await requireAuthUserId(ctx);
+    const role = await ctx.db
+      .query("usr_game_roles")
+      .withIndex("by_gameId_and_userId", (q) =>
+        q.eq("gameId", args.gameId).eq("userId", userId),
+      )
+      .unique();
+
+    if (role === null || !role.isActive) {
+      throw new Error("You are not an active member of this game.");
+    }
+
+    const game = await ctx.db.get("sim_games", args.gameId);
+    if (game === null) {
+      throw new Error("Game not found.");
+    }
+    if (game.finalizationState === "pending_cleanup" || game.finalizationState === "cleaned") {
+      throw new Error("This game is already being cleaned up.");
+    }
+
+    await ctx.db.patch("usr_game_roles", role._id, {
+      isActive: false,
+    });
+
+    if (role.role === "empire" && role.empireId !== null) {
+      const empire = await ctx.db.get("emp_states", role.empireId);
+      if (empire !== null && empire.gameId === args.gameId) {
+        await ctx.db.patch("emp_states", empire._id, {
+          controller: "npc",
+          strategyJson: empire.strategyJson ?? "{}",
+          playerName: empire.playerName ?? `${empire.name} AI`,
+        });
+      }
+    }
+
+    const activeRoles = await listActiveGameRoles(ctx, args.gameId);
+    const humansRemaining = activeRoles.length > 0;
+
+    if (!humansRemaining) {
+      const result = await evaluateGameFinalization(ctx, {
+        gameId: args.gameId,
+        forceFinishReason: "abandoned_scored",
+      });
+      return {
+        resigned: true,
+        finalized: result.finalized,
+        finishReason: result.finishReason,
+      };
+    }
+
+    await touchGameMeaningfulActivity(ctx, args.gameId, { humanAction: true });
+    return {
+      resigned: true,
+      finalized: false,
+      finishReason: null,
+    };
+  },
+});
+
 export const ensureMyStarterGames = mutation({
   args: {},
   handler: async (ctx): Promise<{ created: number }> => {
@@ -463,7 +543,23 @@ export const ensureMyStarterGames = mutation({
         )
         .take(1);
       if (existing.length > 0) {
-        await assignStarterOwnerEmpireSeat(ctx, { gameId: existing[0]!._id, userId });
+        const existingGame = existing[0]!;
+        if (
+          existingGame.status === "finished" ||
+          existingGame.finalizationState === "pending_cleanup" ||
+          existingGame.finalizationState === "cleaned"
+        ) {
+          continue;
+        }
+        const existingRole = await ctx.db
+          .query("usr_game_roles")
+          .withIndex("by_gameId_and_userId", (q) =>
+            q.eq("gameId", existingGame._id).eq("userId", userId),
+          )
+          .unique();
+        if (existingRole === null) {
+          await assignStarterOwnerEmpireSeat(ctx, { gameId: existingGame._id, userId });
+        }
         continue;
       }
 
@@ -504,7 +600,15 @@ export const resetMyStarterGame = mutation({
     const current = existing[0] ?? null;
 
     if (current !== null && current.status === "running") {
-      throw new Error("Pause or finish the current run before starting a new attempt.");
+      const existingRole = await ctx.db
+        .query("usr_game_roles")
+        .withIndex("by_gameId_and_userId", (q) =>
+          q.eq("gameId", current._id).eq("userId", userId),
+        )
+        .unique();
+      if (existingRole?.isActive) {
+        throw new Error("Pause or finish the current run before starting a new attempt.");
+      }
     }
 
     if (current !== null) {

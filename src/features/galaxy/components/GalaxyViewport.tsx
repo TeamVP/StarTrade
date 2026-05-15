@@ -339,6 +339,8 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
   const cancelColonyShipBuild = useMutation(api.col.mutations.cancelColonyShipBuild);
   const dispatchColonyShip = useMutation(api.col.mutations.dispatchColonyShip);
   const colonizeWithColonyShip = useMutation(api.col.mutations.colonize);
+  const resignFromGame = useMutation(api.usr.mutations.resignFromGame);
+  const startGame = useMutation(api.sim.mutations.startGame);
 
   const [selectedFleetId, setSelectedFleetId] = useState<string | null>(null);
   const [selectedTraderId, setSelectedTraderId] = useState<string | null>(null);
@@ -362,6 +364,10 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
   const [routeEditorPct, setRouteEditorPct] = useState(25);
   const [routeEditorEnabled, setRouteEditorEnabled] = useState(true);
   const [colonyMutationError, setColonyMutationError] = useState<string | null>(null);
+  const [mapResignBusy, setMapResignBusy] = useState(false);
+  const [mapResignError, setMapResignError] = useState<string | null>(null);
+  const [startBusy, setStartBusy] = useState(false);
+  const [startError, setStartError] = useState<string | null>(null);
 
   const [camera, setCamera] = useState<GalaxyMapCamera>(() =>
     computeFitAllSystemsCamera([]),
@@ -596,6 +602,63 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
   const canUseColonyShips =
     simAllowsPlayerOrders && (isAdmin || myEmpireId !== null);
   const canMarkPriorityStars = simAllowsPlayerOrders && priorityEmpireId !== null;
+  const myOwnedSystemsCount = useMemo(
+    () =>
+      myEmpireId === null
+        ? 0
+        : systems.filter((system) => system.ownerEmpireId === myEmpireId).length,
+    [myEmpireId, systems],
+  );
+  const myFleetCount = useMemo(
+    () =>
+      myEmpireId === null ? 0 : fleets.filter((fleet) => fleet.empireId === myEmpireId).length,
+    [fleets, myEmpireId],
+  );
+  const showMapResignButton =
+    playerHomeMapLayout &&
+    activeGame !== null &&
+    activeGame.status !== "finished" &&
+    myEmpireId !== null &&
+    (myOwnedSystemsCount === 0 || myFleetCount === 0);
+  const showPlayerStartOverlay =
+    playerHomeMapLayout &&
+    activeGame?.status === "lobby" &&
+    myRoles.some((role) => role.role === "empire" && role.isActive);
+
+  const handleMapResign = useCallback(async () => {
+    if (activeGame === null) return;
+    if (
+      !window.confirm(
+        "Resign from this game? If no human players remain, the game will end immediately, write final results, and begin cleanup.",
+      )
+    ) {
+      return;
+    }
+    setMapResignBusy(true);
+    setMapResignError(null);
+    try {
+      await resignFromGame({ gameId: activeGame._id });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setMapResignError(message.replace(/^[\s\S]*?Error:\s*/g, "").trim());
+    } finally {
+      setMapResignBusy(false);
+    }
+  }, [activeGame, resignFromGame]);
+
+  const handlePlayerStartGame = useCallback(async () => {
+    if (activeGame === null) return;
+    setStartBusy(true);
+    setStartError(null);
+    try {
+      await startGame({ gameId: activeGame._id });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setStartError(message.replace(/^[\s\S]*?Error:\s*/g, "").trim());
+    } finally {
+      setStartBusy(false);
+    }
+  }, [activeGame, startGame]);
 
   const garrisonRouteEmpireFilter: Id<"emp_states"> | null =
     playerEmpireIdProp ?? (isAdmin ? null : myEmpireIdFromRole);
@@ -1976,9 +2039,52 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
             >
               {galaxyStageEl}
               <div className="pointer-events-none absolute inset-0 z-[6]">
+                {showPlayerStartOverlay ? (
+                  <div className="pointer-events-auto absolute left-1/2 top-1/2 flex w-[min(92vw,28rem)] -translate-x-1/2 -translate-y-1/2 flex-col items-center gap-3 rounded-2xl border border-st-border bg-st-bg/95 px-6 py-6 text-center shadow-2xl backdrop-blur-sm">
+                    <h2 className="text-xl font-semibold text-st-fg">Ready to begin?</h2>
+                    <p className="text-sm text-st-muted">
+                      Start the match to open turn 1 and begin empire play for this scenario.
+                    </p>
+                    <Button
+                      type="button"
+                      className="w-full max-w-xs py-3 text-base"
+                      disabled={startBusy}
+                      onClick={() => {
+                        void handlePlayerStartGame();
+                      }}
+                    >
+                      {startBusy ? "Starting..." : "Start game"}
+                    </Button>
+                    {startError !== null ? (
+                      <p className="text-xs text-red-300" role="alert">
+                        {startError}
+                      </p>
+                    ) : null}
+                  </div>
+                ) : null}
                 {mapZoomControlButtons !== null ? (
                   <div className="pointer-events-auto absolute right-3 top-3">
                     {mapZoomControlButtons}
+                  </div>
+                ) : null}
+                {showMapResignButton ? (
+                  <div className="pointer-events-auto absolute left-1/2 top-3 flex -translate-x-1/2 flex-col items-center gap-1">
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      className="border border-orange-500/40 bg-st-bg/95 text-orange-700 shadow-md ring-1 ring-st-border/50 backdrop-blur-sm hover:border-orange-500/70 hover:text-orange-800 dark:text-orange-300 dark:hover:text-orange-200"
+                      disabled={mapResignBusy}
+                      onClick={() => {
+                        void handleMapResign();
+                      }}
+                    >
+                      {mapResignBusy ? "Resigning..." : "Resign"}
+                    </Button>
+                    {mapResignError !== null ? (
+                      <p className="max-w-64 rounded bg-red-950/85 px-2 py-1 text-center text-[11px] text-red-200 shadow-md">
+                        {mapResignError}
+                      </p>
+                    ) : null}
                   </div>
                 ) : null}
                 <div className="absolute bottom-3 right-3 rounded-md bg-st-bg/90 px-2.5 py-1 text-xs text-st-muted shadow-md ring-1 ring-st-border/70 backdrop-blur-sm">
