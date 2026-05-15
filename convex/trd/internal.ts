@@ -5,6 +5,7 @@ export const recordTradeRun = internalMutation({
   args: {
     gameId: v.id("sim_games"),
     charterId: v.id("trd_charters"),
+    traderIdentityId: v.id("sim_trader_identities"),
     turnNumber: v.number(),
     commodity: v.string(),
     unitsMoved: v.number(),

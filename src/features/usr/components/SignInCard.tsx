@@ -3,6 +3,15 @@ import { useAuthActions } from "@convex-dev/auth/react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 
+function readableAuthError(message: string, flow: "signIn" | "signUp") {
+  if (message.includes("InvalidAccountId")) {
+    return flow === "signIn"
+      ? "No password sign-in account exists for that email yet. If an admin created the user record, they need to provision a password first."
+      : "This email does not have a password sign-in account yet. Ask an admin to provision one first."
+  }
+  return message;
+}
+
 export function SignInCard() {
   const { signIn } = useAuthActions();
   const [flow, setFlow] = useState<"signIn" | "signUp">("signIn");
@@ -18,7 +27,7 @@ export function SignInCard() {
         onClick={() => {
           setError(null);
           void signIn("google").catch((signInError: Error) => {
-            setError(signInError.message);
+            setError(readableAuthError(signInError.message, flow));
           });
         }}
       >
@@ -37,7 +46,7 @@ export function SignInCard() {
           formData.set("flow", flow);
           setError(null);
           void signIn("password", formData).catch((signInError: Error) => {
-            setError(signInError.message);
+            setError(readableAuthError(signInError.message, flow));
           });
         }}
       >

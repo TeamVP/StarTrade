@@ -1,13 +1,19 @@
 import { mutation, query } from "../_generated/server";
+import type { MutationCtx } from "../_generated/server";
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { internal } from "../_generated/api";
 import type { Id } from "../_generated/dataModel";
+import { Scrypt } from "lucia";
 import { assertGameAdmin } from "../sim/helpers";
+import { evaluateGameFinalization } from "../sim/finalization";
 import {
   DEFAULT_GAME_SETTINGS,
   loadGameSettings,
 } from "../sim/economy/gameSettings";
+
+const LEGACY_GAME_CLEANUP_SCAN_MULTIPLIER = 4;
+const PASSWORD_PROVIDER_ID = "password";
 
 function normalizeOptionalUserField(value: string | null | undefined): string | undefined {
   if (value === undefined || value === null) {
@@ -15,6 +21,26 @@ function normalizeOptionalUserField(value: string | null | undefined): string | 
   }
   const normalized = value.trim();
   return normalized.length > 0 ? normalized : undefined;
+}
+
+function normalizeOptionalPassword(value: string | null | undefined): string | undefined {
+  const password = normalizeOptionalUserField(value);
+  if (password === undefined) {
+    return undefined;
+  }
+  if (password.length < 8) {
+    throw new Error("Password must be at least 8 characters.");
+  }
+  return password;
+}
+
+async function findPasswordAccountByEmail(ctx: MutationCtx, email: string) {
+  return await ctx.db
+    .query("authAccounts")
+    .withIndex("providerAndAccountId", (q) =>
+      q.eq("provider", PASSWORD_PROVIDER_ID).eq("providerAccountId", email),
+    )
+    .unique();
 }
 
 export const reseedGame = mutation({
@@ -276,12 +302,68 @@ export const forceRetryTurnResolution = mutation({
   },
 });
 
+export const finalizeGameByScore = mutation({
+  args: { gameId: v.id("sim_games") },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (userId === null) {
+      throw new Error("Authentication required.");
+    }
+    await assertGameAdmin(ctx, args.gameId, userId);
+
+    const game = await ctx.db.get("sim_games", args.gameId);
+    if (game === null) {
+      throw new Error("Game not found.");
+    }
+
+    return await evaluateGameFinalization(ctx, {
+      gameId: args.gameId,
+      forceFinishReason: "admin_terminated_scored",
+    });
+  },
+});
+
+export const setGameRetentionClass = mutation({
+  args: {
+    gameId: v.id("sim_games"),
+    retentionClass: v.union(
+      v.literal("discarded"),
+      v.literal("official"),
+      v.literal("archived_debug"),
+    ),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (userId === null) {
+      throw new Error("Authentication required.");
+    }
+    await assertGameAdmin(ctx, args.gameId, userId);
+
+    const game = await ctx.db.get("sim_games", args.gameId);
+    if (game === null) {
+      throw new Error("Game not found.");
+    }
+    if (game.finalizationState === "pending_cleanup" || game.finalizationState === "cleaned") {
+      throw new Error("Cannot change retention after cleanup has started.");
+    }
+
+    await ctx.db.patch("sim_games", args.gameId, {
+      retentionClass: args.retentionClass,
+      finalizationState:
+        game.finalizationState === undefined ? "none" : game.finalizationState,
+    });
+
+    return { retentionClass: args.retentionClass };
+  },
+});
+
 export const createUser = mutation({
   args: {
     name: v.optional(v.union(v.string(), v.null())),
     email: v.optional(v.union(v.string(), v.null())),
     phone: v.optional(v.union(v.string(), v.null())),
     image: v.optional(v.union(v.string(), v.null())),
+    password: v.optional(v.union(v.string(), v.null())),
     isAnonymous: v.boolean(),
     emailVerified: v.boolean(),
     phoneVerified: v.boolean(),
@@ -295,6 +377,7 @@ export const createUser = mutation({
     const email = normalizeOptionalUserField(args.email)?.toLowerCase();
     const phone = normalizeOptionalUserField(args.phone);
     const image = normalizeOptionalUserField(args.image);
+    const password = normalizeOptionalPassword(args.password);
     const now = Date.now();
 
     if (args.emailVerified && email === undefined) {
@@ -302,6 +385,15 @@ export const createUser = mutation({
     }
     if (args.phoneVerified && phone === undefined) {
       throw new Error("Phone verification requires a phone number.");
+    }
+    if (password !== undefined && email === undefined) {
+      throw new Error("Password sign-in requires an email address.");
+    }
+    if (email !== undefined && password !== undefined) {
+      const existingPasswordAccount = await findPasswordAccountByEmail(ctx, email);
+      if (existingPasswordAccount !== null) {
+        throw new Error("That email already has a password sign-in account.");
+      }
     }
 
     const createdUserId = await ctx.db.insert("users", {
@@ -314,9 +406,74 @@ export const createUser = mutation({
       ...(args.isAnonymous ? { isAnonymous: true } : {}),
     });
 
+    if (email !== undefined && password !== undefined) {
+      await ctx.db.insert("authAccounts", {
+        userId: createdUserId,
+        provider: PASSWORD_PROVIDER_ID,
+        providerAccountId: email,
+        secret: await new Scrypt().hash(password),
+        ...(args.emailVerified ? { emailVerified: email } : {}),
+      });
+    }
+
     return {
       userId: createdUserId,
     };
+  },
+});
+
+export const setUserPassword = mutation({
+  args: {
+    userId: v.id("users"),
+    password: v.string(),
+  },
+  handler: async (
+    ctx,
+    args,
+  ): Promise<{ userId: Id<"users">; createdAccount: boolean }> => {
+    const viewerUserId = await getAuthUserId(ctx);
+    if (viewerUserId === null) {
+      throw new Error("Authentication required.");
+    }
+
+    const user = await ctx.db.get("users", args.userId);
+    if (user === null) {
+      throw new Error("User not found.");
+    }
+
+    const email = normalizeOptionalUserField(user.email)?.toLowerCase();
+    if (email === undefined) {
+      throw new Error("Password sign-in requires the user to have an email address.");
+    }
+
+    const password = normalizeOptionalPassword(args.password);
+    if (password === undefined) {
+      throw new Error("Password must be at least 8 characters.");
+    }
+
+    const existingPasswordAccount = await findPasswordAccountByEmail(ctx, email);
+    const secret = await new Scrypt().hash(password);
+
+    if (existingPasswordAccount === null) {
+      await ctx.db.insert("authAccounts", {
+        userId: user._id,
+        provider: PASSWORD_PROVIDER_ID,
+        providerAccountId: email,
+        secret,
+        ...(user.emailVerificationTime !== undefined ? { emailVerified: email } : {}),
+      });
+      return { userId: user._id, createdAccount: true };
+    }
+
+    if (existingPasswordAccount.userId !== user._id) {
+      throw new Error("That email already belongs to another password sign-in account.");
+    }
+
+    await ctx.db.patch("authAccounts", existingPasswordAccount._id, {
+      secret,
+      ...(user.emailVerificationTime !== undefined ? { emailVerified: email } : {}),
+    });
+    return { userId: user._id, createdAccount: false };
   },
 });
 
@@ -401,6 +558,99 @@ export const deleteUser = mutation({
 
     return {
       deletedUserId: args.userId,
+    };
+  },
+});
+
+export const runLegacyGameCleanupBatch = mutation({
+  args: {
+    limit: v.optional(v.number()),
+    includeFinished: v.optional(v.boolean()),
+    includeInactive: v.optional(v.boolean()),
+    defaultRetentionClass: v.optional(
+      v.union(
+        v.literal("discarded"),
+        v.literal("official"),
+        v.literal("archived_debug"),
+      ),
+    ),
+  },
+  handler: async (ctx, args) => {
+    const viewerUserId = await getAuthUserId(ctx);
+    if (viewerUserId === null) {
+      throw new Error("Authentication required.");
+    }
+
+    const limit = Math.max(1, Math.min(Math.floor(args.limit ?? 16), 64));
+    const scanLimit = Math.max(limit, limit * LEGACY_GAME_CLEANUP_SCAN_MULTIPLIER);
+    const includeFinished = args.includeFinished ?? true;
+    const includeInactive = args.includeInactive ?? true;
+    const defaultRetentionClass = args.defaultRetentionClass ?? "official";
+
+    const candidates: Array<{
+      _id: Id<"sim_games">;
+      status: "lobby" | "running" | "paused" | "finished";
+      retentionClass?: "discarded" | "official" | "archived_debug";
+      finalizationState?:
+        | "none"
+        | "pending_result_write"
+        | "results_written"
+        | "pending_cleanup"
+        | "cleaned"
+        | "archived_debug";
+    }> = [];
+
+    if (includeFinished) {
+      const finished = await ctx.db
+        .query("sim_games")
+        .withIndex("by_status", (q) => q.eq("status", "finished"))
+        .take(scanLimit);
+      candidates.push(...finished);
+    }
+
+    if (includeInactive) {
+      for (const status of ["running", "paused"] as const) {
+        const rows = await ctx.db
+          .query("sim_games")
+          .withIndex("by_status", (q) => q.eq("status", status))
+          .take(scanLimit);
+        candidates.push(...rows);
+      }
+    }
+
+    const processedGameIds: Id<"sim_games">[] = [];
+    let finalized = 0;
+
+    for (const game of candidates) {
+      if (processedGameIds.length >= limit) {
+        break;
+      }
+      if (
+        game.finalizationState === "pending_cleanup" ||
+        game.finalizationState === "cleaned" ||
+        game.finalizationState === "archived_debug"
+      ) {
+        continue;
+      }
+
+      if (game.retentionClass === undefined) {
+        await ctx.db.patch("sim_games", game._id, {
+          retentionClass: defaultRetentionClass,
+        });
+      }
+
+      const result = await evaluateGameFinalization(ctx, { gameId: game._id });
+      processedGameIds.push(game._id);
+      if (result.finalized) {
+        finalized += 1;
+      }
+    }
+
+    return {
+      processed: processedGameIds.length,
+      finalized,
+      limit,
+      processedGameIds,
     };
   },
 });

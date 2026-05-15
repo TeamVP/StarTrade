@@ -710,6 +710,7 @@ export default defineSchema({
     userId: v.union(v.id("users"), v.null()),
   })
     .index("by_gameId", ["gameId"])
+    .index("by_gameId_and_userId", ["gameId", "userId"])
     .index("by_gameId_and_state", ["gameId", "state"])
     .index("by_gameId_and_slotOrder", ["gameId", "slotOrder"]),
 
@@ -804,18 +805,19 @@ export default defineSchema({
   trd_charters: defineTable({
     gameId: v.id("sim_games"),
     issuerEmpireId: v.id("emp_states"),
-    traderUserId: v.id("users"),
+    traderIdentityId: v.id("sim_trader_identities"),
     routeStartSystemId: v.id("gal_systems"),
     routeEndSystemId: v.id("gal_systems"),
     baseRate: v.number(),
     status: v.union(v.literal("open"), v.literal("active"), v.literal("closed")),
   })
-    .index("by_gameId_and_traderUserId", ["gameId", "traderUserId"])
+    .index("by_gameId_and_traderIdentityId", ["gameId", "traderIdentityId"])
     .index("by_gameId_and_status", ["gameId", "status"]),
 
   trd_runs: defineTable({
     gameId: v.id("sim_games"),
     charterId: v.id("trd_charters"),
+    traderIdentityId: v.id("sim_trader_identities"),
     turnNumber: v.number(),
     commodity: v.string(),
     unitsMoved: v.number(),
@@ -823,5 +825,6 @@ export default defineSchema({
     success: v.boolean(),
   })
     .index("by_gameId_and_turnNumber", ["gameId", "turnNumber"])
+    .index("by_gameId_and_traderIdentityId", ["gameId", "traderIdentityId"])
     .index("by_gameId_and_charterId", ["gameId", "charterId"]),
 });
