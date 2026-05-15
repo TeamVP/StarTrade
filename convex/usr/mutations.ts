@@ -11,7 +11,7 @@ import {
   canonicalizeStrategyJson,
 } from "./automationStrategyLibrary";
 import { getAutomationStrategyByKey, getPublicAutomationStrategyByKey } from "./automationStrategyCatalog";
-import type { Id } from "../_generated/dataModel";
+import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx } from "../_generated/server";
 
 async function requireAuthUserId(ctx: MutationCtx): Promise<Id<"users">> {
@@ -84,6 +84,19 @@ async function listActiveGameRoles(
     ),
   );
   return grouped.flat().filter((role) => role.isActive);
+}
+
+function shouldRefreshMissionGame(
+  game: Doc<"sim_games">,
+  mission: Awaited<ReturnType<typeof listMissions>>[number],
+): boolean {
+  if (mission.updatedAt <= 0) {
+    return false;
+  }
+  if (game.status !== "lobby" || game.startedAt !== null) {
+    return false;
+  }
+  return (game.missionAppliedAt ?? 0) < mission.updatedAt;
 }
 
 export const upsertMyProfile = mutation({
@@ -544,6 +557,11 @@ export const ensureMyStarterGames = mutation({
       const existingGame =
         ownedGames.find((game) => (game.missionKey ?? game.lobbyScenarioKey) === scenario.key) ?? null;
       if (existingGame !== null) {
+        if (shouldRefreshMissionGame(existingGame, scenario)) {
+          await ctx.db.patch("sim_games", existingGame._id, {
+            ownerUserId: null,
+          });
+        } else {
         if (
           existingGame.status === "finished" ||
           existingGame.finalizationState === "pending_cleanup" ||
@@ -561,6 +579,7 @@ export const ensureMyStarterGames = mutation({
           await assignStarterOwnerEmpireSeat(ctx, { gameId: existingGame._id, userId });
         }
         continue;
+        }
       }
 
       await ctx.runMutation(api.sim.mutations.createGame, {

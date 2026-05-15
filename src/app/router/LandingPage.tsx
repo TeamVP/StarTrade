@@ -18,7 +18,7 @@ export function LandingPage() {
       className="min-h-dvh text-st-fg"
       style={{
         backgroundImage:
-          'radial-gradient(circle at top, rgba(52, 211, 153, 0.16), transparent 38%), linear-gradient(180deg, #07111f 0%, #040814 100%), url("/starry-background.jpg")',
+          'radial-gradient(circle at top, rgba(52, 211, 153, 0.16), transparent 38%), linear-gradient(180deg, rgba(7, 17, 31, 0.5) 0%, rgba(4, 8, 20, 0.5) 100%), url("/starry-background.jpg")',
         backgroundPosition: "center top, center, center",
         backgroundRepeat: "no-repeat, no-repeat, no-repeat",
         backgroundSize: "auto, auto, cover",
