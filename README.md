@@ -45,6 +45,12 @@ Then restart `npm run dev`.
 
 If `predev` already ran `setup.mjs --once` and skipped auth setup, you still need to run `npm run setup:auth` once per new machine or deployment. You can also set `JWT_PRIVATE_KEY` and `JWKS` manually under your project in the [Convex dashboard](https://dashboard.convex.dev) → **Settings** → **Environment Variables** (see the manual setup link above for key generation).
 
+## Production deployment: Convex URL
+
+The frontend needs a Convex client URL at build time. For Vite deployments, set `VITE_CONVEX_URL` in your hosting provider.
+
+If your deployment environment already has `CONVEX_URL`, the Vite config in this repo will also pick that up and inject it into the client build.
+
 ## Learn more
 
 To learn more about developing your project with Convex, check out:
