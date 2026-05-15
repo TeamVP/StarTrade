@@ -1,12 +1,21 @@
+import { useLocation } from "react-router-dom";
 import { Card } from "@/components/ui/card";
 import { GalaxyViewport } from "@/features/galaxy/components/GalaxyViewport";
 import { GalaxyMapNavProvider } from "@/features/galaxy/context/GalaxyMapNavContext";
 import { EmpirePanel } from "@/features/empire/components/EmpirePanel";
 import { usePlayerEmpireId, usePlayerPreview } from "@/features/player/PlayerPreviewContext";
 
+function focusFleetIdFromState(state: unknown): string | null {
+  if (state === null || typeof state !== "object") return null;
+  const value = (state as { focusFleetId?: unknown }).focusFleetId;
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
 export function PlayerHomePage() {
+  const location = useLocation();
   const { empireName } = usePlayerPreview();
   const empireId = usePlayerEmpireId();
+  const focusFleetId = focusFleetIdFromState(location.state);
 
   const aside =
     empireId !== null ? (
@@ -30,6 +39,7 @@ export function PlayerHomePage() {
           playerHomeMapLayout
           playerEmpireId={empireId}
           starPanelAside={aside}
+          initialFocusFleetId={focusFleetId}
         />
       </div>
     </GalaxyMapNavProvider>

@@ -62,18 +62,35 @@ export const getCommodityHistory = query({
 });
 
 /**
- * Returns all background traders currently in transit for a game.
- * Useful for map overlays showing active trade routes.
+ * Returns traders that should be visible on the galaxy map: voyages still in
+ * transit plus ships that delivered during the current turn resolution. The
+ * latter stay at the destination star until the next turn begins, avoiding a
+ * visual pop before the ship reaches the center of the destination.
  */
 export const listActiveTraders = query({
   args: { gameId: v.id("sim_games") },
   handler: async (ctx, args) => {
-    const rows = await ctx.db
+    const game = await ctx.db.get("sim_games", args.gameId);
+    if (game === null) return [];
+
+    const enRouteRows = await ctx.db
       .query("eco_bg_traders")
       .withIndex("by_gameId_and_status", (q) =>
         q.eq("gameId", args.gameId).eq("status", "enRoute"),
       )
       .take(64);
+
+    const justDeliveredRows = (
+      await ctx.db
+        .query("eco_bg_traders")
+        .withIndex("by_gameId_and_status", (q) =>
+          q.eq("gameId", args.gameId).eq("status", "delivered"),
+        )
+        .order("desc")
+        .take(64)
+    ).filter((row) => row.deliveredTurn === game.currentTurn);
+
+    const rows = [...enRouteRows, ...justDeliveredRows];
     return await attachCaptainFields(ctx, rows);
   },
 });

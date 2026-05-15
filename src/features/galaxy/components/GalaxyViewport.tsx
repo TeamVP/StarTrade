@@ -34,6 +34,7 @@ import {
   easeOutCubic,
   type GalaxyMapCamera,
 } from "../utils/mapCamera";
+import { turnTravelProgress } from "../utils/turnTravelProgress";
 import { useGalaxyMapNav } from "../context/GalaxyMapNavContext";
 import { useGalaxyData } from "../hooks/useGalaxyData";
 import {
@@ -76,6 +77,10 @@ const MIN_INHABITED_POPULATION = 1000;
 /** Zoom when focusing a fleet from the planet panel: geometric mean of min/max map scale (~1.2×). */
 const MAP_FLEET_FROM_PANEL_FOCUS_SCALE = clampMapScale(
   Math.sqrt(MIN_MAP_SCALE * MAX_MAP_SCALE),
+);
+/** Stronger focus when arriving from the Fleet page: 70% of the min→max zoom range. */
+const MAP_FLEET_LINK_FOCUS_SCALE = clampMapScale(
+  MIN_MAP_SCALE + (MAX_MAP_SCALE - MIN_MAP_SCALE) * 0.7,
 );
 
 function finiteCombatCount(value: unknown, fallback: number): number {
@@ -225,6 +230,8 @@ function combatReplayDraftFromEvent(event: CombatEventRow): CombatReplayDraft | 
 export type GalaxyViewportProps = {
   /** When set, map order context behaves as this empire (player home preview). */
   playerEmpireId?: Id<"emp_states"> | null;
+  /** Fleet to select and center after navigating from another page. */
+  initialFocusFleetId?: string | null;
   /** Rendered beside the star system panel below the map (player home layout). */
   starPanelAside?: ReactNode;
   /** Edge-to-edge map at 60vh with floating controls (player home). */
@@ -234,6 +241,7 @@ export type GalaxyViewportProps = {
 export function GalaxyViewport(props: GalaxyViewportProps = {}) {
   const {
     playerEmpireId: playerEmpireIdProp = null,
+    initialFocusFleetId = null,
     starPanelAside,
     playerHomeMapLayout = false,
   } = props;
@@ -359,6 +367,7 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
     computeFitAllSystemsCamera([]),
   );
   const fittedGameRef = useRef<string | null>(null);
+  const focusedInitialFleetRef = useRef<string | null>(null);
   const cameraRef = useRef(camera);
   const tweenRafRef = useRef<number | null>(null);
 
@@ -1098,27 +1107,6 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
     return markers;
   }, [simAllowsPlayerOrders, fleets, nodeMap, empireColors]);
 
-  const handleStarPanelFleetSelect = useCallback(
-    (fleetId: string) => {
-      handleSelectedFleetChange(fleetId);
-      const marker = fleetMarkers.find((m) => m.fleetId === fleetId);
-      const fleet = fleets.find((f) => f._id === fleetId);
-      const focus =
-        marker !== undefined
-          ? { x: marker.x, y: marker.y }
-          : fleet !== undefined
-            ? nodeMap[fleet.originSystemId]
-            : undefined;
-      if (focus === undefined) return;
-      startCameraTweenTo({
-        focusX: focus.x,
-        focusY: focus.y,
-        scale: MAP_FLEET_FROM_PANEL_FOCUS_SCALE,
-      });
-    },
-    [fleetMarkers, fleets, nodeMap, handleSelectedFleetChange, startCameraTweenTo],
-  );
-
   const pendingSegments = useMemo<PendingSegmentModel[]>(() => {
     if (!simAllowsPlayerOrders) return [];
     const markerByFleetId = Object.fromEntries(
@@ -1238,6 +1226,91 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
     () => [...fleetEnRouteGhosts, ...colonyEnRouteGhosts],
     [fleetEnRouteGhosts, colonyEnRouteGhosts],
   );
+
+  const focusFleetOnMap = useCallback(
+    (fleetId: string, scale = MAP_FLEET_FROM_PANEL_FOCUS_SCALE): boolean => {
+      const marker = fleetMarkers.find((m) => m.fleetId === fleetId);
+      if (marker !== undefined) {
+        handleSelectedFleetChange(fleetId);
+        startCameraTweenTo({
+          focusX: marker.x,
+          focusY: marker.y,
+          scale,
+        });
+        return true;
+      }
+
+      const ghost = fleetEnRouteGhosts.find((g) => g.fleetId === fleetId);
+      if (ghost !== undefined) {
+        const from = nodeMap[ghost.originSystemId];
+        const to = nodeMap[ghost.destSystemId];
+        if (from === undefined || to === undefined) return false;
+        const turnStartedAt = turnTimeline?.turnStartedAt ?? null;
+        const turnDurationMs = Math.max(1, turnTimeline?.turnDurationMs ?? 1);
+        const fraction = turnTravelProgress({
+          now: Date.now(),
+          currentTurn: turnTimeline?.currentTurn ?? activeGame?.currentTurn ?? ghost.dispatchedTurn,
+          dispatchedTurn: ghost.dispatchedTurn,
+          etaTurn: ghost.etaTurn,
+          travelTurnsTotal: ghost.travelTurnsTotal,
+          turnStartedAt,
+          turnDurationMs,
+        });
+        handleSelectedFleetChange(fleetId);
+        startCameraTweenTo({
+          focusX: from.x + (to.x - from.x) * fraction,
+          focusY: from.y + (to.y - from.y) * fraction,
+          scale,
+        });
+        return true;
+      }
+
+      const fleet = fleets.find((f) => f._id === fleetId);
+      const focus = fleet !== undefined ? nodeMap[fleet.originSystemId] : undefined;
+      if (focus === undefined) return false;
+      handleSelectedFleetChange(fleetId);
+      startCameraTweenTo({
+        focusX: focus.x,
+        focusY: focus.y,
+        scale,
+      });
+      return true;
+    },
+    [
+      activeGame?.currentTurn,
+      fleetEnRouteGhosts,
+      fleetMarkers,
+      fleets,
+      handleSelectedFleetChange,
+      nodeMap,
+      startCameraTweenTo,
+      turnTimeline,
+    ],
+  );
+
+  const handleStarPanelFleetSelect = useCallback(
+    (fleetId: string) => {
+      focusFleetOnMap(fleetId);
+    },
+    [focusFleetOnMap],
+  );
+
+  useEffect(() => {
+    if (initialFocusFleetId === null) {
+      focusedInitialFleetRef.current = null;
+      return;
+    }
+    if (focusedInitialFleetRef.current === initialFocusFleetId) return;
+    const fleet = fleets.find((f) => f._id === initialFocusFleetId);
+    if (fleet === undefined) return;
+    if (!fleetSelectionAllowed(fleet.empireId)) return;
+    const id = window.setTimeout(() => {
+      if (focusFleetOnMap(initialFocusFleetId, MAP_FLEET_LINK_FOCUS_SCALE)) {
+        focusedInitialFleetRef.current = initialFocusFleetId;
+      }
+    }, 0);
+    return () => window.clearTimeout(id);
+  }, [initialFocusFleetId, fleets, fleetSelectionAllowed, focusFleetOnMap]);
 
   const fleetById = useMemo(() => {
     return new Map(fleets.map((fleet) => [fleet._id, fleet]));

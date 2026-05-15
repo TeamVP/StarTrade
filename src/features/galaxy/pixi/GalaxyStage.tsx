@@ -20,12 +20,51 @@ import {
   type GalaxyLinkRow,
   systemsShareLink,
 } from "@/features/galaxy/utils/linkAdjacency";
-import { turnTravelProgress } from "@/features/galaxy/utils/turnTravelProgress";
+import {
+  turnTravelArrivalAlpha,
+  turnTravelProgress,
+} from "@/features/galaxy/utils/turnTravelProgress";
 
 extend({ Graphics, Container });
 
 const STAR_VISUAL_DRAG_MAX_DISTANCE = STAR_HIT_RADIUS * 2;
 const STAR_VISUAL_RETURN_MS = 2500;
+const SHIP_ARRIVAL_FADE_MS = 300;
+const SHIP_DEPARTURE_CATCHUP_MS = 700;
+
+type DepartureCatchupState = {
+  firstSeenAtMs: number;
+};
+
+function smoothFirstLegDepartureProgress(params: {
+  key: string;
+  progress: number;
+  nowMs: number;
+  currentTurn: number;
+  dispatchedTurn: number;
+  states: Map<string, DepartureCatchupState>;
+}): number {
+  if (params.currentTurn !== params.dispatchedTurn || params.progress <= 0) {
+    params.states.delete(params.key);
+    return params.progress;
+  }
+
+  let state = params.states.get(params.key);
+  if (state === undefined) {
+    state = { firstSeenAtMs: params.nowMs };
+    params.states.set(params.key, state);
+  }
+
+  const catchup = Math.max(
+    0,
+    Math.min(1, (params.nowMs - state.firstSeenAtMs) / SHIP_DEPARTURE_CATCHUP_MS),
+  );
+  if (catchup >= 1) {
+    params.states.delete(params.key);
+    return params.progress;
+  }
+  return params.progress * easeOutCubic(catchup);
+}
 
 export type GalaxyNode = {
   id: string;
@@ -939,6 +978,7 @@ function GalaxyStageInner({
           ghosts={enRouteGhosts}
           nodes={visualNodes}
           turnTimeline={turnTimeline}
+          selectedFleetId={selectedFleetId}
         />
         {traderShips.map((trader) => (
           <TraderShipMarker
@@ -1767,12 +1807,15 @@ function EnRouteGhostGraphics({
   ghosts,
   nodes,
   turnTimeline,
+  selectedFleetId,
 }: {
   ghosts: EnRouteGhostModel[];
   nodes: GalaxyNode[];
   turnTimeline: TurnTimelineModel | null;
+  selectedFleetId: string | null;
 }) {
   const [frame, setFrame] = useState(0);
+  const departureCatchupRef = useRef(new Map<string, DepartureCatchupState>());
   useTick(() => {
     setFrame((x) => x + 1);
   });
@@ -1785,14 +1828,16 @@ function EnRouteGhostGraphics({
       const currentTurn = turnTimeline?.currentTurn ?? 0;
       const turnStartedAt = turnTimeline?.turnStartedAt ?? null;
       const travelAnimMs = Math.max(1, turnTimeline?.turnDurationMs ?? TRAVEL_ANIM_MS);
+      const seenGhostIds = new Set<string>();
 
       for (const ghost of ghosts) {
+        seenGhostIds.add(ghost.fleetId);
         const from = nodes.find((n) => n.id === ghost.originSystemId);
         const to = nodes.find((n) => n.id === ghost.destSystemId);
         if (!from || !to) continue;
 
         const t = Math.max(1, ghost.travelTurnsTotal);
-        const fraction = turnTravelProgress({
+        const rawFraction = turnTravelProgress({
           now,
           currentTurn,
           dispatchedTurn: ghost.dispatchedTurn,
@@ -1801,12 +1846,28 @@ function EnRouteGhostGraphics({
           turnStartedAt,
           turnDurationMs: travelAnimMs,
         });
+        const fraction = smoothFirstLegDepartureProgress({
+          key: ghost.fleetId,
+          progress: rawFraction,
+          nowMs: now,
+          currentTurn,
+          dispatchedTurn: ghost.dispatchedTurn,
+          states: departureCatchupRef.current,
+        });
 
         const gx = from.x + (to.x - from.x) * fraction;
         const gy = from.y + (to.y - from.y) * fraction;
         const ox = to.x - from.x;
         const oy = to.y - from.y;
         const len = Math.hypot(ox, oy) || 1;
+        const arrivalAlpha = turnTravelArrivalAlpha({
+          progress: fraction,
+          dispatchedTurn: ghost.dispatchedTurn,
+          etaTurn: ghost.etaTurn,
+          travelTurnsTotal: t,
+          turnDurationMs: travelAnimMs,
+          fadeMs: SHIP_ARRIVAL_FADE_MS,
+        });
         if (ghost.variant === "colony") {
           drawColonyShipGhost(graphics, gx, gy, ox / len, oy / len, ghost.colorHex);
         } else {
@@ -1818,11 +1879,16 @@ function EnRouteGhostGraphics({
             oy / len,
             ghost.colorHex,
             ghost.strength,
+            arrivalAlpha,
+            selectedFleetId === ghost.fleetId,
           );
         }
       }
+      for (const ghostId of departureCatchupRef.current.keys()) {
+        if (!seenGhostIds.has(ghostId)) departureCatchupRef.current.delete(ghostId);
+      }
     },
-    [ghosts, nodes, turnTimeline, frame],
+    [ghosts, nodes, turnTimeline, selectedFleetId, frame],
   );
 
   return <pixiGraphics eventMode="none" draw={draw} />;
@@ -1842,6 +1908,7 @@ function TraderShipMarker({
   onTap: () => void;
 }) {
   const [frame, setFrame] = useState(0);
+  const departureCatchupRef = useRef(new Map<string, DepartureCatchupState>());
   useTick(() => {
     setFrame((x) => x + 1);
   });
@@ -1860,7 +1927,7 @@ function TraderShipMarker({
       if (!from || !to) return;
 
       const t = Math.max(1, trader.travelTurnsTotal);
-      const fraction = turnTravelProgress({
+      const rawFraction = turnTravelProgress({
         now,
         currentTurn,
         dispatchedTurn: trader.dispatchedTurn,
@@ -1869,13 +1936,29 @@ function TraderShipMarker({
         turnStartedAt,
         turnDurationMs: travelAnimMs,
       });
+      const fraction = smoothFirstLegDepartureProgress({
+        key: trader.traderId,
+        progress: rawFraction,
+        nowMs: now,
+        currentTurn,
+        dispatchedTurn: trader.dispatchedTurn,
+        states: departureCatchupRef.current,
+      });
 
       const gx = from.x + (to.x - from.x) * fraction;
       const gy = from.y + (to.y - from.y) * fraction;
       const ox = to.x - from.x;
       const oy = to.y - from.y;
       const len = Math.hypot(ox, oy) || 1;
-      drawTraderShip(graphics, gx, gy, ox / len, oy / len, selected);
+      const arrivalAlpha = turnTravelArrivalAlpha({
+        progress: fraction,
+        dispatchedTurn: trader.dispatchedTurn,
+        etaTurn: trader.etaTurn,
+        travelTurnsTotal: t,
+        turnDurationMs: travelAnimMs,
+        fadeMs: SHIP_ARRIVAL_FADE_MS,
+      });
+      drawTraderShip(graphics, gx, gy, ox / len, oy / len, selected, arrivalAlpha);
       graphics.hitArea = new Circle(gx, gy, 18);
     },
     [trader, nodes, turnTimeline, selected, frame],
@@ -2177,6 +2260,7 @@ function drawTraderShip(
   dirx: number,
   diry: number,
   selected: boolean,
+  alpha = 1,
 ) {
   const ox = dirx;
   const oy = diry;
@@ -2195,11 +2279,16 @@ function drawTraderShip(
   const fill = 0xf59e0b;
   graphics.poly([xBow, yBow, xPort, yPort, xStern, yStern, xStar, yStar]).fill({
     color: fill,
-    alpha: 0.92,
+    alpha: 0.92 * alpha,
   });
   graphics
     .poly([xBow, yBow, xPort, yPort, xStern, yStern, xStar, yStar])
-    .stroke({ width: selected ? 2.5 : 1.5, color: selected ? 0xffffff : 0xfde68a, alpha: 1, join: "round" });
+    .stroke({
+      width: selected ? 2.5 : 1.5,
+      color: selected ? 0xffffff : 0xfde68a,
+      alpha,
+      join: "round",
+    });
 }
 
 /** Translucent colony ship en route (distinct from military chevron). */
@@ -2282,6 +2371,8 @@ function drawFleetShipGhost(
   diry: number,
   colorHex: string,
   shipCount: number,
+  alpha = 1,
+  selected = false,
 ) {
   const ox = dirx;
   const oy = diry;
@@ -2301,10 +2392,15 @@ function drawFleetShipGhost(
   const fillColor = Number.parseInt(colorHex.replace("#", ""), 16);
   graphics
     .poly([xTip, yTip, xLeft, yLeft, xRight, yRight])
-    .fill({ color: fillColor, alpha: 0.42 });
+    .fill({ color: fillColor, alpha: 0.42 * alpha });
   graphics
     .poly([xTip, yTip, xLeft, yLeft, xRight, yRight])
-    .stroke({ width: 1.5, color: 0xe2e8f0, alpha: 0.35, join: "round" });
+    .stroke({
+      width: selected ? 2.5 : 1.5,
+      color: selected ? 0xffffff : 0xe2e8f0,
+      alpha: (selected ? 0.95 : 0.35) * alpha,
+      join: "round",
+    });
 }
 
 function drawDashedPolyline(

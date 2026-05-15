@@ -29,6 +29,7 @@ import { reconcileSystemHolding } from "./systemHoldings";
 import { POPULATION_MIN_INHABITED_PEOPLE } from "./economy/population";
 import { findLinkBetweenSystems } from "../gal/linkUtils";
 import { travelTurnsFromLinkCost } from "./fleetDispatch";
+import { scheduledNextTurnStartedAt, turnDurationHasElapsed } from "./turnTiming";
 
 /** Max en-route fleet rows scanned for arrivals (indexed `by_gameId_and_status`). */
 const MAX_ENROUTE_FLEETS_SCAN = 768;
@@ -1777,6 +1778,17 @@ export const beginTurnResolution = internalMutation({
     }
 
     if (
+      turn.state === "open" &&
+      !turnDurationHasElapsed({
+        nowMs: now,
+        turnStartedAtMs: turn.startedAt,
+        turnDurationMs: game.turnDurationMs,
+      })
+    ) {
+      return { started: false, turnNumber, alreadyResolving: false };
+    }
+
+    if (
       turn.state === "resolving" &&
       turn.resolvingStartedAt !== undefined &&
       now - turn.resolvingStartedAt < TURN_RESOLUTION_STALE_MS
@@ -2000,6 +2012,10 @@ export const finalizeTurnResolution = internalMutation({
     if (gameBeforeAdvance === null) {
       throw new Error("Game not found.");
     }
+    const nextTurnStartedAt = scheduledNextTurnStartedAt({
+      turnStartedAtMs: phase.turn.startedAt,
+      turnDurationMs: gameBeforeAdvance.turnDurationMs,
+    });
     const scheduledRatio = gameBeforeAdvance.nextTurnAutoResolveDelayRatio;
     const gamePatch: {
       currentTurn: number;
@@ -2011,7 +2027,7 @@ export const finalizeTurnResolution = internalMutation({
       const r = Math.max(0, Math.min(1, scheduledRatio));
       if (r > 0) {
         const delayMs = Math.round(r * Math.max(1, gameBeforeAdvance.turnDurationMs));
-        gamePatch.turnPausedUntilMs = Date.now() + delayMs;
+        gamePatch.turnPausedUntilMs = nextTurnStartedAt + delayMs;
       } else {
         gamePatch.turnPausedUntilMs = undefined;
       }
@@ -2023,7 +2039,7 @@ export const finalizeTurnResolution = internalMutation({
       await ctx.db.insert("sim_turns", {
         gameId: args.gameId,
         turnNumber: nextTurn,
-        startedAt: Date.now(),
+        startedAt: nextTurnStartedAt,
         resolvedAt: null,
         state: "open",
       });
@@ -2149,12 +2165,19 @@ export const resolveTurn = internalMutation({
     }
 
     const nextTurn = t + 1;
+    const nextTurnStartedAt =
+      activeTurn !== null
+        ? scheduledNextTurnStartedAt({
+            turnStartedAtMs: activeTurn.startedAt,
+            turnDurationMs: game.turnDurationMs,
+          })
+        : Date.now();
     await ctx.db.patch("sim_games", args.gameId, { currentTurn: nextTurn });
 
     await ctx.db.insert("sim_turns", {
       gameId: args.gameId,
       turnNumber: nextTurn,
-      startedAt: Date.now(),
+      startedAt: nextTurnStartedAt,
       resolvedAt: null,
       state: "open",
     });
