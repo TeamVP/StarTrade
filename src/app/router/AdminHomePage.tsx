@@ -12,11 +12,11 @@ const liveLinks = [
   { to: "/admin/traders", label: "Traders", description: "Trader activity and logistics." },
   { to: "/admin/history", label: "History", description: "Timeline and recorded events." },
   { to: "/admin/results", label: "Results", description: "Durable finished-game outcomes and leaderboards." },
-  { to: "/admin/db", label: "Database", description: "Database health, cleanup backlog, and maintenance actions." },
   { to: "/admin/balance", label: "Balance", description: "Tune live game parameters." },
 ] as const;
 
 const adminLinks = [
+  { to: "/admin/db", label: "Database", description: "Database health, cleanup backlog, and maintenance actions." },
   { to: "/admin/users", label: "Users", description: "View auth users and create new user records." },
 ] as const;
 
@@ -51,7 +51,9 @@ export function AdminHomePage() {
       <section className="space-y-3">
         <div>
           <h2 className="text-lg font-semibold text-st-fg">Live</h2>
-          <p className="text-sm text-st-muted">Operational pages for the currently selected game.</p>
+          <p className="text-sm text-st-muted">
+            Live-game views for admins to inspect and operate the currently selected game.
+          </p>
         </div>
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
           {liveLinks.map((link) => (
@@ -63,7 +65,9 @@ export function AdminHomePage() {
       <section className="space-y-3">
         <div>
           <h2 className="text-lg font-semibold text-st-fg">Admin</h2>
-          <p className="text-sm text-st-muted">Account and administrative tooling.</p>
+          <p className="text-sm text-st-muted">
+            Administrative tools that are not tied to one live game, including accounts and database maintenance.
+          </p>
         </div>
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
           {adminLinks.map((link) => (
