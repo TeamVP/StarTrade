@@ -76,13 +76,8 @@ function StrategicSlidersBlock(props: { gameId: Id<"sim_games"> }) {
 
   return (
     <div className="mt-3 space-y-3 border-t border-st-border pt-3">
-      <h3 className="text-xs font-semibold uppercase tracking-wide text-st-muted">
-        Strategic posture
-      </h3>
       <p className="text-[11px] text-st-muted">
-        Manual five-level overrides on top of your scripted automation. The badge shows whether
-        an axis follows the strategy default or your override. Picking the strategy default level
-        clears the override for that axis.
+        Override your strategy&apos;s default settings.
       </p>
       {STRATEGIC_SLIDER_KEYS.map((key) => {
         const defaultLevel = data.defaults[key];
@@ -171,6 +166,7 @@ function EmpireAutomationPicker(props: { gameId: Id<"sim_games"> }) {
   const [selectedValue, setSelectedValue] = useState("manual");
   const [selectionBusy, setSelectionBusy] = useState(false);
   const [rerunBusy, setRerunBusy] = useState(false);
+  const [showStrategyOptions, setShowStrategyOptions] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -298,10 +294,16 @@ function EmpireAutomationPicker(props: { gameId: Id<"sim_games"> }) {
           <Repeat2 className="size-4" aria-hidden />
         </Button>
       </div>
-      <p className="text-[11px] text-st-muted">
-        Choose one of your active roster strategies or Manual. The rerun button clears this empire&apos;s
-        standing orders and rebuilds automation routes from the selected strategy on the next eligible pass.
-      </p>
+      {showStrategyOptions ? <StrategicSlidersBlock gameId={props.gameId} /> : null}
+      <button
+        type="button"
+        className="w-fit text-[11px] text-cyan-200/95 underline decoration-cyan-500/40 underline-offset-2 hover:text-cyan-100 hover:decoration-cyan-300/70"
+        onClick={() => {
+          setShowStrategyOptions((current) => !current);
+        }}
+      >
+        {showStrategyOptions ? "Hide strategy options" : "Customise"}
+      </button>
       {activeProfiles.length === 0 ? (
         <p className="text-[11px] text-amber-200/90">
           No active strategy profiles are in your roster right now, so only Manual is available here.
@@ -756,9 +758,6 @@ export function EmpirePanel(props: { focusEmpireId?: Id<"emp_states"> | null }) 
             />
           ))}
         </ul>
-      ) : null}
-      {activeGame !== null ? (
-        <StrategicSlidersBlock gameId={activeGame._id} />
       ) : null}
     </Card>
   );
