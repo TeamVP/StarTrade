@@ -41,10 +41,19 @@ export type GalaxySoundscapeEngine = {
   dispose: () => void;
 };
 
-const MAX_EVENT_GAIN = 0.72;
+const MAX_EVENT_GAIN = 0.42;
+const MIN_EVENT_GAIN = 0.05;
+const MAX_WET_SEND_GAIN = 0.12;
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
+}
+
+function overlapHeadroomScale(overlapCount: number): number {
+  if (overlapCount <= 1) {
+    return 1;
+  }
+  return Math.max(0.42, 1 - (overlapCount - 1) * 0.1);
 }
 
 function actionGainBoost(actionType: SoundscapeActionType): number {
@@ -73,15 +82,15 @@ export async function createGalaxySoundscapeEngine(params?: {
   await Tone.loaded();
   const reverbTailSeconds = computeSoundscapeReverbTailSeconds(params?.turnDurationMs);
 
-  const limiter = new Tone.Limiter(-2).toDestination();
+  const limiter = new Tone.Limiter(-5).toDestination();
   const compressor = new Tone.Compressor({
-    threshold: -18,
-    ratio: 3,
-    attack: 0.01,
-    release: 0.24,
+    threshold: -24,
+    ratio: 4,
+    attack: 0.02,
+    release: 0.18,
     knee: 12,
   }).connect(limiter);
-  const masterGain = new Tone.Gain(0.72).connect(compressor);
+  const masterGain = new Tone.Gain(0.54).connect(compressor);
   const reverb = new Tone.Reverb({
     decay: reverbTailSeconds,
     preDelay: 0.04,
@@ -91,9 +100,9 @@ export async function createGalaxySoundscapeEngine(params?: {
   await reverb.generate();
 
   const actionBuses: Record<SoundscapeActionType, InstanceType<ToneModule["Gain"]>> = {
-    attack: new Tone.Gain(0.92).connect(masterGain),
-    defense: new Tone.Gain(0.84).connect(masterGain),
-    exploration: new Tone.Gain(0.78).connect(masterGain),
+    attack: new Tone.Gain(0.72).connect(masterGain),
+    defense: new Tone.Gain(0.62).connect(masterGain),
+    exploration: new Tone.Gain(0.56).connect(masterGain),
   };
 
   const disposalTimers = new Set<number>();
@@ -124,14 +133,23 @@ export async function createGalaxySoundscapeEngine(params?: {
 
   return {
     playBell(intent) {
-      const eventGain = clamp(intent.gain * clamp(intent.velocity, 0.2, 1), 0.08, MAX_EVENT_GAIN);
-      const reverbSendGain = eventGain * clamp(intent.reverbSend * 0.72, 0.06, 0.22);
+      const overlapScale = overlapHeadroomScale(disposalTimers.size);
+      const eventGain = clamp(
+        intent.gain * clamp(intent.velocity, 0.2, 0.82) * overlapScale,
+        MIN_EVENT_GAIN,
+        MAX_EVENT_GAIN,
+      );
+      const reverbSendGain = Math.min(
+        MAX_WET_SEND_GAIN,
+        eventGain * clamp(intent.reverbSend * 0.44, 0.025, 0.14),
+      );
       const sampleBuffer = resolveLoadedSampleBuffer(intent.sampleKey);
       if (sampleBuffer === null) {
         return;
       }
 
       const player: BellPlayer = new Tone.Player(sampleBuffer).set({
+        fadeIn: 0.012,
         fadeOut: Math.min(1.4, Math.max(0.4, intent.releaseSeconds * 0.35)),
       });
       const filter = new Tone.Filter(intent.cutoffHz, "lowpass");
@@ -155,7 +173,7 @@ export async function createGalaxySoundscapeEngine(params?: {
       panner.connect(wetGain);
       wetGain.connect(reverb);
 
-      player.start();
+      player.start(Tone.now() + 0.005);
       const sustainSeconds = Math.max(intent.releaseSeconds, Math.min(4.5, reverbTailSeconds * 0.38));
       if (sustainSeconds < reverbTailSeconds) {
         player.stop(Tone.now() + sustainSeconds);

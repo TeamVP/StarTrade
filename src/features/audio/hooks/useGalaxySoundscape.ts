@@ -13,6 +13,7 @@ import {
 } from "@/features/audio/utils/soundscapeMapping";
 import {
   buildSoundscapePlaybackPlan,
+  shouldSuppressSoundscapeUntilTurnAdvance,
   type SoundscapeTimelineSnapshot,
 } from "@/features/audio/utils/soundscapeTimeline";
 import { playUiSound } from "@/lib/audio/uiSounds";
@@ -50,6 +51,10 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
 
+function startupSuppressionTurnNumber(timeline?: SoundscapeTimelineSnapshot | null): number | null {
+  return timeline?.currentTurn ?? null;
+}
+
 export function useGalaxySoundscape(params: {
   activeGameId: string | null;
   canAutoStart: boolean;
@@ -79,6 +84,7 @@ export function useGalaxySoundscape(params: {
   const pendingPlaybackTimersRef = useRef<Map<string, number>>(new Map());
   const noticeTimerRef = useRef<number | null>(null);
   const activeGameIdRef = useRef<string | null>(activeGameId);
+  const startupSuppressedTurnRef = useRef<number | null>(null);
   const startupPromiseRef = useRef<Promise<void> | null>(null);
   const startupTokenRef = useRef(0);
   const mountedRef = useRef(true);
@@ -126,37 +132,6 @@ export function useGalaxySoundscape(params: {
     [camera, systemsById, ownership, listenerEmpireId],
   );
 
-  const playActivationPreview = useCallback((engine: GalaxySoundscapeEngine) => {
-    const currentTurn = timeline?.currentTurn ?? null;
-    const activationIntents = [...recentEvents]
-      .reverse()
-      .map(toBellIntent)
-      .filter((intent): intent is NonNullable<typeof intent> => intent !== null)
-      .filter((intent) => currentTurn === null || intent.turnNumber >= currentTurn - 1);
-
-    const prioritized =
-      currentTurn === null
-        ? activationIntents.slice(-2)
-        : [
-            ...activationIntents.filter((intent) => intent.turnNumber === currentTurn),
-            ...activationIntents.filter((intent) => intent.turnNumber === currentTurn - 1),
-          ].slice(-3);
-
-    if (prioritized.length === 0) {
-      showNotice("Sound on. Waiting for next event.");
-      return;
-    }
-
-    showNotice("Sound on. Sampling recent activity.");
-    prioritized.forEach((intent, index) => {
-      const timer = window.setTimeout(() => {
-        pendingPlaybackTimersRef.current.delete(`activation:${intent.eventId}`);
-        engine.playBell(intent);
-      }, index * 140);
-      pendingPlaybackTimersRef.current.set(`activation:${intent.eventId}`, timer);
-    });
-  }, [recentEvents, showNotice, timeline?.currentTurn, toBellIntent]);
-
   const disableSoundscape = useCallback(() => {
     startupTokenRef.current += 1;
     startupPromiseRef.current = null;
@@ -166,6 +141,7 @@ export function useGalaxySoundscape(params: {
     engineRef.current = null;
     seenEventIdsRef.current = new Set();
     activeGameIdRef.current = activeGameId;
+    startupSuppressedTurnRef.current = null;
     setEnabled(false);
     setStatus("off");
     setError(null);
@@ -203,9 +179,14 @@ export function useGalaxySoundscape(params: {
         }
         engineRef.current = engine;
         activeGameIdRef.current = activeGameId;
+        startupSuppressedTurnRef.current = startupSuppressionTurnNumber(timeline);
         playUiSound("sound_enabled_confirm");
-        playActivationPreview(engine);
         seenEventIdsRef.current = new Set(recentEvents.map((event) => String(event._id)));
+        showNotice(
+          startupSuppressedTurnRef.current === null
+            ? "Sound on. Waiting for live events."
+            : "Sound on. Live playback resumes next round.",
+        );
         setEnabled(true);
         setStatus("ready");
         writeStoredEnabled(true);
@@ -226,7 +207,7 @@ export function useGalaxySoundscape(params: {
     })();
     startupPromiseRef.current = startupPromise;
     await startupPromise;
-  }, [activeGameId, playActivationPreview, recentEvents, timeline?.turnDurationMs]);
+  }, [activeGameId, recentEvents, showNotice, timeline]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -238,6 +219,7 @@ export function useGalaxySoundscape(params: {
       clearPendingPlaybackTimers();
       engineRef.current?.dispose();
       engineRef.current = null;
+      startupSuppressedTurnRef.current = null;
     };
   }, [clearNoticeTimer, clearPendingPlaybackTimers]);
 
@@ -271,12 +253,28 @@ export function useGalaxySoundscape(params: {
     activeGameIdRef.current = activeGameId;
     clearPendingPlaybackTimers();
     seenEventIdsRef.current = new Set(recentEvents.map((event) => String(event._id)));
-  }, [activeGameId, recentEvents, clearPendingPlaybackTimers]);
+    startupSuppressedTurnRef.current = startupSuppressionTurnNumber(timeline);
+  }, [activeGameId, recentEvents, clearPendingPlaybackTimers, timeline]);
 
   useEffect(() => {
     const engine = engineRef.current;
     if (!enabled || engine === null) {
       return;
+    }
+    if (
+      shouldSuppressSoundscapeUntilTurnAdvance({
+        armedTurnNumber: startupSuppressedTurnRef.current,
+        currentTurnNumber: timeline?.currentTurn,
+      })
+    ) {
+      for (const event of recentEvents) {
+        seenEventIdsRef.current.add(String(event._id));
+      }
+      return;
+    }
+    if (startupSuppressedTurnRef.current !== null) {
+      startupSuppressedTurnRef.current = null;
+      showNotice("Sound live for the new round.", 2400);
     }
     const seen = seenEventIdsRef.current;
     const unseenEvents = [...recentEvents].reverse().filter((event) => !seen.has(String(event._id)));

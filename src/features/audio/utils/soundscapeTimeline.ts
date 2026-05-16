@@ -11,6 +11,17 @@ export type SoundscapeScheduledEvent = {
   slotFraction: number;
 };
 
+export function shouldSuppressSoundscapeUntilTurnAdvance(params: {
+  armedTurnNumber: number | null;
+  currentTurnNumber: number | null | undefined;
+}): boolean {
+  const { armedTurnNumber, currentTurnNumber } = params;
+  return (
+    armedTurnNumber !== null &&
+    (currentTurnNumber === null || currentTurnNumber === undefined || currentTurnNumber <= armedTurnNumber)
+  );
+}
+
 function clamp01(value: number): number {
   return Math.max(0, Math.min(1, value));
 }
@@ -85,7 +96,7 @@ export function computeSoundscapeReverbTailSeconds(
   turnDurationMs: number | null | undefined,
 ): number {
   if (turnDurationMs === null || turnDurationMs === undefined || !Number.isFinite(turnDurationMs)) {
-    return 12;
+    return 8;
   }
-  return Math.max(10, Math.min(22, turnDurationMs / 1000 + 2.5));
+  return Math.max(6.5, Math.min(14, turnDurationMs / 1000 * 0.5 + 3));
 }

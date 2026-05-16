@@ -2,6 +2,7 @@ import { describe, expect, test } from "vitest";
 import {
   buildSoundscapePlaybackPlan,
   computeSoundscapeReverbTailSeconds,
+  shouldSuppressSoundscapeUntilTurnAdvance,
   type SoundscapeTimelineSnapshot,
 } from "./soundscapeTimeline";
 
@@ -51,8 +52,29 @@ describe("soundscapeTimeline", () => {
     expect(plan).toEqual([{ eventId: "evt-1", delayMs: 0, slotFraction: 0.5 }]);
   });
 
-  test("keeps reverb tails longer than a typical turn", () => {
-    expect(computeSoundscapeReverbTailSeconds(10_000)).toBeGreaterThan(10);
-    expect(computeSoundscapeReverbTailSeconds(null)).toBe(12);
+  test("suppresses playback until the turn advances after startup", () => {
+    expect(
+      shouldSuppressSoundscapeUntilTurnAdvance({
+        armedTurnNumber: 8,
+        currentTurnNumber: 8,
+      }),
+    ).toBe(true);
+    expect(
+      shouldSuppressSoundscapeUntilTurnAdvance({
+        armedTurnNumber: 8,
+        currentTurnNumber: 9,
+      }),
+    ).toBe(false);
+    expect(
+      shouldSuppressSoundscapeUntilTurnAdvance({
+        armedTurnNumber: null,
+        currentTurnNumber: 8,
+      }),
+    ).toBe(false);
+  });
+
+  test("keeps reverb tails present without carrying across many turns", () => {
+    expect(computeSoundscapeReverbTailSeconds(10_000)).toBeCloseTo(8);
+    expect(computeSoundscapeReverbTailSeconds(null)).toBe(8);
   });
 });
