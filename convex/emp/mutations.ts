@@ -4,6 +4,7 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import type { Id } from "../_generated/dataModel";
 import type { MutationCtx } from "../_generated/server";
 import { gameAllowsPlayerActions, touchGameMeaningfulActivity } from "../sim/helpers";
+import { invalidateOpenTurnPreparation } from "../sim/turnPreparationInvalidation";
 import type { StrategicSliderKey, StrategicSliderOverrides } from "../sim/economy/strategicSliders";
 import { canonicalizeStrategyJson } from "../usr/automationStrategyLibrary";
 
@@ -159,6 +160,13 @@ export const updateEmpireMeta = mutation({
     }
 
     await ctx.db.patch("emp_states", args.empireId, patch);
+    if (
+      args.strategyJson !== undefined ||
+      args.strategyStartMode !== undefined ||
+      args.strategyStartTurn !== undefined
+    ) {
+      await invalidateOpenTurnPreparation(ctx, empire.gameId);
+    }
     await touchGameMeaningfulActivity(ctx, empire.gameId, {
       humanAction: userId !== null,
     });
@@ -209,6 +217,7 @@ export const patchStrategicSlider = mutation({
     await ctx.db.patch("emp_states", empireId, {
       strategicSliderOverrides: keys.length > 0 ? prev : undefined,
     });
+    await invalidateOpenTurnPreparation(ctx, args.gameId);
     await touchGameMeaningfulActivity(ctx, args.gameId, { humanAction: true });
     return null;
   },

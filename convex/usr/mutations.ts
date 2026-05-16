@@ -6,6 +6,7 @@ import { Scrypt } from "lucia";
 import { assignStarterOwnerEmpireSeat } from "../sim/mutations";
 import { gameAllowsPlayerActions, touchGameMeaningfulActivity } from "../sim/helpers";
 import { evaluateGameFinalization } from "../sim/finalization";
+import { invalidateOpenTurnPreparation } from "../sim/turnPreparationInvalidation";
 import { getMissionByKey, listMissions } from "./missionCatalog";
 import {
   buildStrategyFromBaseAndOverrides,
@@ -623,6 +624,7 @@ export const queueMyEmpireStandingOrdersRefresh = mutation({
     await ctx.db.patch("emp_states", empireId, {
       standingOrdersRefreshRequestedAt: requestedAt,
     });
+    await invalidateOpenTurnPreparation(ctx, args.gameId);
     await touchGameMeaningfulActivity(ctx, args.gameId, { humanAction: true });
     return {
       empireId,

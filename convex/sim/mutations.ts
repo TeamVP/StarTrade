@@ -24,6 +24,7 @@ import {
   shiftPausedDeadline,
 } from "./turnTiming";
 import { touchGameMeaningfulActivity } from "./helpers";
+import { invalidateOpenTurnPreparation } from "./turnPreparationInvalidation";
 import { createUniqueGameUrlCode } from "./urlCodes";
 
 async function resolveStarterOwnerDisplayName(
@@ -689,6 +690,7 @@ export const rebuildStandingOrders = mutation({
         turnNumber: game.currentTurn,
       });
 
+      await invalidateOpenTurnPreparation(ctx, args.gameId);
       await touchGameMeaningfulActivity(ctx, args.gameId, { humanAction: true });
 
       return { mode: args.mode, deletedCount: deleted, createdCount: 0 } as const;
@@ -696,6 +698,7 @@ export const rebuildStandingOrders = mutation({
 
     if (args.mode === "buildBlank") {
       const created = await buildBlankOwnedGarrisonRoutes(ctx, { gameId: args.gameId });
+      await invalidateOpenTurnPreparation(ctx, args.gameId);
       await touchGameMeaningfulActivity(ctx, args.gameId, { humanAction: true });
       return { mode: args.mode, deletedCount: 0, createdCount: created } as const;
     }
@@ -705,6 +708,7 @@ export const rebuildStandingOrders = mutation({
       gameId: args.gameId,
       turnNumber: game.currentTurn,
     });
+    await invalidateOpenTurnPreparation(ctx, args.gameId);
     await touchGameMeaningfulActivity(ctx, args.gameId, { humanAction: true });
     return { mode: args.mode, deletedCount: deleted, createdCount: 0 } as const;
   },

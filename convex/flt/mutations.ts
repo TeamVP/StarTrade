@@ -5,6 +5,7 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import type { Id } from "../_generated/dataModel";
 import { findLinkBetweenSystems } from "../gal/linkUtils";
 import { gameAllowsPlayerActions, touchGameMeaningfulActivity } from "../sim/helpers";
+import { invalidateOpenTurnPreparation } from "../sim/turnPreparationInvalidation";
 
 async function assertEmpireAccessToOwnedSystem(
   ctx: MutationCtx,
@@ -265,6 +266,7 @@ export const issueFleetOrder = mutation({
       });
     }
 
+    await invalidateOpenTurnPreparation(ctx, args.gameId);
     await touchGameMeaningfulActivity(ctx, args.gameId, { humanAction: true });
 
     return orderId;
@@ -318,6 +320,7 @@ export const setGarrisonRoute = mutation({
     }
 
     if (args.destinationSystemId === null) {
+      await invalidateOpenTurnPreparation(ctx, args.gameId);
       await touchGameMeaningfulActivity(ctx, args.gameId, { humanAction: true });
       return null;
     }
@@ -330,6 +333,7 @@ export const setGarrisonRoute = mutation({
       dispatchPct: pct,
       enabled: args.enabled,
     });
+    await invalidateOpenTurnPreparation(ctx, args.gameId);
     await touchGameMeaningfulActivity(ctx, args.gameId, { humanAction: true });
     return routeId;
   },

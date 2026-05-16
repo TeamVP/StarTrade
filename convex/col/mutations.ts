@@ -24,6 +24,7 @@ import {
   estimateHomeworldMaxShipsPerTurn,
 } from "./colonyShipBuildCost";
 import { validateColonyShipRouteDestinations } from "./routeValidation";
+import { invalidateOpenTurnPreparation } from "../sim/turnPreparationInvalidation";
 
 async function assertGameAndMembership(
   ctx: MutationCtx,
@@ -222,6 +223,7 @@ export const startColonyShipBuild = mutation({
       payload: { systemId: system._id, empireId: empire._id, costShipPoints: cost },
     });
 
+    await invalidateOpenTurnPreparation(ctx, args.gameId);
     return null;
   },
 });
@@ -247,6 +249,7 @@ export const cancelColonyShipBuild = mutation({
       colonyShipBuildProgress: 0,
       colonyShipBuildCost: 0,
     });
+    await invalidateOpenTurnPreparation(ctx, args.gameId);
     return null;
   },
 });
@@ -377,6 +380,7 @@ export const dispatchColonyShip = mutation({
       },
     });
 
+    await invalidateOpenTurnPreparation(ctx, args.gameId);
     return null;
   },
 });
@@ -454,6 +458,7 @@ export const colonize = mutation({
       },
     });
 
+    await invalidateOpenTurnPreparation(ctx, args.gameId);
     return null;
   },
 });

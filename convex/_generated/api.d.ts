@@ -84,6 +84,7 @@ import type * as sim_preparationOps from "../sim/preparationOps.js";
 import type * as sim_queries from "../sim/queries.js";
 import type * as sim_stagedTurnStore from "../sim/stagedTurnStore.js";
 import type * as sim_systemHoldings from "../sim/systemHoldings.js";
+import type * as sim_turnPreparationInvalidation from "../sim/turnPreparationInvalidation.js";
 import type * as sim_turnTiming from "../sim/turnTiming.js";
 import type * as sim_urlCodes from "../sim/urlCodes.js";
 import type * as sim_wipeGame from "../sim/wipeGame.js";
@@ -181,6 +182,7 @@ declare const fullApi: ApiFromModules<{
   "sim/queries": typeof sim_queries;
   "sim/stagedTurnStore": typeof sim_stagedTurnStore;
   "sim/systemHoldings": typeof sim_systemHoldings;
+  "sim/turnPreparationInvalidation": typeof sim_turnPreparationInvalidation;
   "sim/turnTiming": typeof sim_turnTiming;
   "sim/urlCodes": typeof sim_urlCodes;
   "sim/wipeGame": typeof sim_wipeGame;

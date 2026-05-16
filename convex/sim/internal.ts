@@ -1775,6 +1775,62 @@ async function upsertTurnPreparationRow(
   });
 }
 
+async function loadStagedPreparationPhase(
+  ctx: MutationCtx,
+  params: {
+    gameId: Id<"sim_games">;
+    turnNumber: number;
+    phase: TurnResolutionPhase;
+  },
+): Promise<{
+  game: Doc<"sim_games">;
+  turn: Doc<"sim_turns">;
+  preparation: Doc<"sim_turn_preparations">;
+} | null> {
+  const game = await ctx.db.get("sim_games", params.gameId);
+  if (game === null) {
+    return null;
+  }
+  if (game.status !== "running") {
+    return null;
+  }
+  if (game.currentTurn > params.turnNumber) {
+    return null;
+  }
+  if (game.currentTurn !== params.turnNumber) {
+    throw new Error(
+      `Turn resolution expected turn ${params.turnNumber}, but game is on turn ${game.currentTurn}.`,
+    );
+  }
+
+  const turn = await loadTurnRow(ctx, params.gameId, params.turnNumber);
+  if (turn === null) {
+    throw new Error("Current turn row not found.");
+  }
+  if (turn.state === "resolved") {
+    return null;
+  }
+
+  const preparation = await loadTurnPreparationRow(ctx, params.gameId, params.turnNumber);
+  if (preparation === null || preparation.state !== "preparing") {
+    return null;
+  }
+
+  const currentPhase = readTurnResolutionPhase(
+    preparation.resolutionPhase ?? turn.resolutionPhase,
+  );
+  const currentIdx = phaseIndex(currentPhase);
+  const expectedIdx = phaseIndex(params.phase);
+  if (currentIdx > expectedIdx) {
+    return null;
+  }
+  if (currentIdx < expectedIdx) {
+    throw new Error(`Turn resolution is waiting for ${currentPhase}.`);
+  }
+
+  return { game, turn, preparation };
+}
+
 async function loadResolutionPhase(
   ctx: MutationCtx,
   params: {
@@ -1828,9 +1884,11 @@ async function advanceResolutionPhase(
   turn: Doc<"sim_turns">,
   nextPhase: TurnResolutionPhase,
 ): Promise<void> {
-  await ctx.db.patch("sim_turns", turn._id, {
-    resolutionPhase: nextPhase,
-  });
+  if (isTurnPreparingState(turn.state)) {
+    await ctx.db.patch("sim_turns", turn._id, {
+      resolutionPhase: nextPhase,
+    });
+  }
   const preparation = await loadTurnPreparationRow(ctx, turn.gameId, turn.turnNumber);
   if (preparation !== null) {
     await ctx.db.patch("sim_turn_preparations", preparation._id, {
@@ -1852,13 +1910,16 @@ export const prepareTurnResolutionRetry = internalMutation({
       return;
     }
     const turn = await loadTurnRow(ctx, args.gameId, game.currentTurn);
-    if (turn === null || !isTurnPreparingState(turn.state)) {
+    if (turn === null) {
+      return;
+    }
+    const preparation = await loadTurnPreparationRow(ctx, args.gameId, game.currentTurn);
+    if (!isTurnPreparingState(turn.state) && preparation?.state !== "preparing") {
       return;
     }
     const aged = Date.now() - TURN_RESOLUTION_STALE_MS - 1;
     await ctx.db.patch("sim_turns", turn._id, { resolvingStartedAt: aged });
     // Also mark the preparation envelope as stale so the controller can re-queue it.
-    const preparation = await loadTurnPreparationRow(ctx, args.gameId, game.currentTurn);
     if (preparation !== null) {
       await ctx.db.patch("sim_turn_preparations", preparation._id, { state: "stale" });
     }
@@ -1924,43 +1985,62 @@ export const beginTurnResolution = internalMutation({
       return { started: true, turnNumber, alreadyResolving: false };
     }
 
-    if (turn.state === "resolved") {
-      return { started: false, turnNumber, alreadyResolving: false };
-    }
-
-    if (turn.state === "prepared") {
-      return { started: false, turnNumber, alreadyResolving: false };
-    }
-
-    if (
-      turn.state === "open" &&
-      now <
-        scheduledTurnPreparationAt({
-          turnStartedAtMs: turn.startedAt,
-          turnDurationMs: game.turnDurationMs,
-        })
-    ) {
-      return { started: false, turnNumber, alreadyResolving: false };
-    }
-
-    if (
-      isTurnPreparingState(turn.state) &&
-      turn.resolvingStartedAt !== undefined &&
-      now - turn.resolvingStartedAt < TURN_RESOLUTION_STALE_MS
-    ) {
-      return { started: false, turnNumber, alreadyResolving: true };
-    }
-
     const targetBoundaryAt = scheduledNextTurnStartedAt({
       turnStartedAtMs: turn.startedAt,
       turnDurationMs: game.turnDurationMs,
     });
-    await ctx.db.patch("sim_turns", turn._id, {
-      state: "preparing",
-      resolvingStartedAt: now,
-      resolutionPhase: "movement",
-      preparedAt: undefined,
+    const preparationStartAt = scheduledTurnPreparationAt({
+      turnStartedAtMs: turn.startedAt,
+      turnDurationMs: game.turnDurationMs,
     });
+    const preparation = await loadTurnPreparationRow(ctx, args.gameId, turnNumber);
+    const activePreparationStartedAt =
+      preparation?.state === "preparing"
+        ? preparation.startedAt
+        : isTurnPreparingState(turn.state)
+          ? turn.resolvingStartedAt
+          : undefined;
+
+    if (turn.state === "resolved") {
+      return { started: false, turnNumber, alreadyResolving: false };
+    }
+
+    if (turn.state === "prepared" || preparation?.state === "prepared") {
+      return { started: false, turnNumber, alreadyResolving: false };
+    }
+
+    if (turn.state === "open" && now < preparationStartAt) {
+      return { started: false, turnNumber, alreadyResolving: false };
+    }
+
+    if (
+      activePreparationStartedAt !== undefined &&
+      now - activePreparationStartedAt < TURN_RESOLUTION_STALE_MS
+    ) {
+      if (turn.state === "open" && now >= targetBoundaryAt) {
+        await ctx.db.patch("sim_turns", turn._id, {
+          state: "preparing",
+          resolvingStartedAt: activePreparationStartedAt,
+          resolutionPhase: readTurnResolutionPhase(preparation?.resolutionPhase),
+          preparedAt: undefined,
+        });
+      }
+      return { started: false, turnNumber, alreadyResolving: true };
+    }
+
+    if (now >= targetBoundaryAt) {
+      await ctx.db.patch("sim_turns", turn._id, {
+        state: "preparing",
+        resolvingStartedAt: now,
+        resolutionPhase: "movement",
+        preparedAt: undefined,
+      });
+    } else {
+      await ctx.db.patch("sim_turns", turn._id, {
+        resolvingStartedAt: now,
+        preparedAt: undefined,
+      });
+    }
     await upsertTurnPreparationRow(ctx, {
       gameId: args.gameId,
       turnNumber,
@@ -1983,7 +2063,10 @@ export const prepareTurnWithStaging = internalMutation({
     ctx,
     args,
   ): Promise<{ skipped: boolean; preparedTurn: number; opCount: number }> => {
-    const phase = await loadResolutionPhase(ctx, { ...args, phase: "movement" });
+    const phase = await loadStagedPreparationPhase(ctx, {
+      ...args,
+      phase: "movement",
+    });
     if (phase === null) {
       return {
         skipped: true,
@@ -1991,6 +2074,8 @@ export const prepareTurnWithStaging = internalMutation({
         opCount: 0,
       };
     }
+
+    const preparationStartedAt = phase.preparation.startedAt;
 
     const t = args.turnNumber;
     const stage = await createStagedTurnContext(ctx, {
@@ -2100,26 +2185,49 @@ export const prepareTurnWithStaging = internalMutation({
     const operations = stage.buildOperations();
     const preparedAt = Date.now();
     const preparation = await loadTurnPreparationRow(ctx, args.gameId, t);
+    if (
+      preparation === null ||
+      preparation.state !== "preparing" ||
+      preparation.startedAt !== preparationStartedAt
+    ) {
+      return { skipped: true, preparedTurn: t, opCount: 0 };
+    }
     const targetBoundaryAt =
-      preparation?.targetBoundaryAt ??
+      preparation.targetBoundaryAt ??
       scheduledNextTurnStartedAt({
         turnStartedAtMs: phase.turn.startedAt,
         turnDurationMs: phase.game.turnDurationMs,
       });
+    const shouldLockPreparedTurn =
+      phase.turn.state !== "open" ||
+      turnDurationHasElapsed({
+        nowMs: preparedAt,
+        turnStartedAtMs: phase.turn.startedAt,
+        turnDurationMs: phase.game.turnDurationMs,
+      });
 
-    await ctx.db.patch("sim_turns", phase.turn._id, {
-      preparedAt,
-      state: "prepared",
-      resolutionPhase: undefined,
-    });
+    if (shouldLockPreparedTurn) {
+      await ctx.db.patch("sim_turns", phase.turn._id, {
+        preparedAt,
+        state: "prepared",
+        resolvingStartedAt: undefined,
+        resolutionPhase: undefined,
+      });
+    } else {
+      await ctx.db.patch("sim_turns", phase.turn._id, {
+        preparedAt,
+        resolvingStartedAt: undefined,
+        resolutionPhase: undefined,
+      });
+    }
 
     const preparationId = await upsertTurnPreparationRow(ctx, {
       gameId: args.gameId,
       turnNumber: t,
       targetBoundaryAt,
       state: "prepared",
-      requestedAt: preparation?.requestedAt ?? preparedAt,
-      startedAt: preparation?.startedAt,
+      requestedAt: preparation.requestedAt ?? preparedAt,
+      startedAt: preparation.startedAt,
       preparedAt,
       committedAt: undefined,
       resolutionPhase: undefined,
@@ -2416,7 +2524,17 @@ export const commitPreparedTurn = internalMutation({
     }
 
     const turn = await loadTurnRow(ctx, args.gameId, turnNumber);
-    if (turn === null || turn.state !== "prepared") {
+    if (turn === null || turn.state === "resolved") {
+      return {
+        skipped: true,
+        committed: false,
+        resolvedTurn: turnNumber,
+        nextTurn: game.currentTurn,
+      };
+    }
+
+    const preparation = await loadTurnPreparationRow(ctx, args.gameId, turnNumber);
+    if (preparation === null || preparation.state !== "prepared") {
       return {
         skipped: true,
         committed: false,
@@ -2443,7 +2561,6 @@ export const commitPreparedTurn = internalMutation({
     const t = turnNumber;
     const nextTurn = t + 1;
     const resolvedAt = now;
-    const preparation = await loadTurnPreparationRow(ctx, args.gameId, t);
     const targetBoundaryAt =
       preparation?.targetBoundaryAt ??
       scheduledNextTurnStartedAt({
@@ -2454,7 +2571,7 @@ export const commitPreparedTurn = internalMutation({
     const nextTurnStartedAt = committedNextTurnStartedAt({
       turnStartedAtMs: turn.startedAt,
       turnDurationMs: game.turnDurationMs,
-      preparedAtMs: turn.preparedAt,
+      preparedAtMs: effectivePreparedAt ?? undefined,
       committedAtMs: resolvedAt,
     });
 

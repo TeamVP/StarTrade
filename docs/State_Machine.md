@@ -129,7 +129,8 @@ The controller now also owns a per-turn preparation record separate from `sim_tu
 - Valid only when `status = running`.
 - Reject while `turnPausedUntilMs > now`.
 - Reject until the configured preparation lead window opens.
-- Move the current turn row to `state = preparing`.
+- Before the visible boundary, keep the current turn row `open` and move only the preparation envelope to `state = preparing`.
+- At or after the visible boundary, lock the current turn row to `state = preparing` if commit cannot happen immediately.
 
 ### `finalizeTurnPreparation`
 
@@ -201,6 +202,8 @@ This document is being updated incrementally alongside the implementation.
 - If commit happens after the stored boundary because preparation finished late, the next turn now starts at commit time instead of opening already partway elapsed.
 - The controller now also creates a durable `sim_turn_preparations` row for each turn and a durable `sim_turn_preparation_ops` diff log for staged effects.
 - Turn preparation now runs against a staged snapshot instead of mutating live tables, so the heavy turn work can start before the visible boundary.
+- Pre-boundary preparation now keeps `sim_turns.state = open`, so players retain the full visible order-entry window until the actual boundary.
+- Mutations that change current-turn simulation inputs now invalidate any staged preparation so late edits force a fresh staged run instead of committing stale results.
 - Commit now applies the staged diff log at the boundary instead of rerunning simulation logic.
 
 ## Built So Far
@@ -226,6 +229,8 @@ This document is being updated incrementally alongside the implementation.
 - Turn resolution should start much closer to the intended boundary instead of waiting for a 10 second cron phase.
 - Starting a game, resuming an open turn, and opening the next turn after resolution should all schedule both the next preparation wake-up and the next boundary wake-up automatically.
 - Heavy turn work should be able to finish before the visible boundary without mutating the live turn while it is still open.
+- Players should keep the full visible order-entry window until the actual boundary even when pre-boundary staging has already started.
+- Changing current-turn orders or other turn-driving inputs during that open window should invalidate the staged result and force a fresh preparation pass.
 - Commit should now apply the precomputed staged diff rather than recomputing the entire turn at the boundary.
 - If heavy turn work completes late, the UI should no longer open the next turn already partway through its countdown.
 

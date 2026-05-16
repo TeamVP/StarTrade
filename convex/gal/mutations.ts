@@ -8,6 +8,7 @@ import {
   gameAllowsPlayerActions,
   touchGameMeaningfulActivity,
 } from "../sim/helpers";
+import { invalidateOpenTurnPreparation } from "../sim/turnPreparationInvalidation";
 
 async function resolvePriorityStarEmpireId(
   ctx: MutationCtx,
@@ -81,6 +82,7 @@ export const setEmphasis = mutation({
       emphasisShips: ships,
       emphasisFood: food,
     });
+    await invalidateOpenTurnPreparation(ctx, args.gameId);
     await touchGameMeaningfulActivity(ctx, args.gameId, { humanAction: true });
     return null;
   },
@@ -118,6 +120,7 @@ export const adjustFoodImportSubsidy = mutation({
     await ctx.db.patch("gal_systems", args.systemId, {
       foodImportSubsidyPerUnit: next,
     });
+    await invalidateOpenTurnPreparation(ctx, args.gameId);
     await touchGameMeaningfulActivity(ctx, args.gameId, { humanAction: true });
     return null;
   },
@@ -162,6 +165,7 @@ export const setPriorityStar = mutation({
       if (existing !== null) {
         await ctx.db.delete("emp_priority_stars", existing._id);
       }
+      await invalidateOpenTurnPreparation(ctx, args.gameId);
       await touchGameMeaningfulActivity(ctx, args.gameId, { humanAction: true });
       return null;
     }
@@ -175,6 +179,7 @@ export const setPriorityStar = mutation({
         createdAt: Date.now(),
       });
     }
+    await invalidateOpenTurnPreparation(ctx, args.gameId);
     await touchGameMeaningfulActivity(ctx, args.gameId, { humanAction: true });
     return null;
   },
