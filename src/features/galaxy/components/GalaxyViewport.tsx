@@ -806,7 +806,8 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
     playerHomeMapLayout &&
     activeGame?.status === "lobby" &&
     myRoles.some((role) => role.role === "empire" && role.isActive);
-  const mobileMapControlsVisible = activeGame !== null && activeGame.status !== "lobby";
+  const mapControlsVisible = activeGame !== null && activeGame.status !== "lobby";
+  const mobileMapControlsVisible = mapControlsVisible;
 
   const handleMapResign = useCallback(async () => {
     if (activeGame === null) return;
@@ -2341,6 +2342,7 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
   const mapCompactControlBtnClass = playerHomeMapLayout
     ? "size-7 shrink-0 border-st-border/80 bg-st-bg/95 p-0 shadow-md ring-1 ring-st-border/50 backdrop-blur-sm sm:size-8"
     : "size-7 shrink-0 p-0 sm:size-8";
+  const mapGhostBtnClass = "border-st-border/60 text-st-muted opacity-45 hover:border-st-border/60 hover:text-st-muted";
 
   const mapSoundStatusMessage =
     mapPauseError !== null ? (
@@ -2362,58 +2364,63 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
     ) : null;
 
   const mapZoomControlButtons =
-    activeGame !== null ? (
+    mapControlsVisible && activeGame !== null ? (
       <div className="flex w-full flex-col gap-1 sm:w-auto sm:items-end">
         {mobileMapControlsVisible ? (
           <div className="flex w-full items-center justify-between gap-3 sm:hidden">
             <div className="flex flex-1 items-center justify-center gap-3 pr-2">
-              {canMapPauseOrResume ? (
-                <Button
-                  variant="secondary"
-                  className={cn(mapCompactControlBtnClass, "relative overflow-hidden")}
-                  title={
-                    mapPauseBusy
-                      ? "Updating game pause state"
-                      : activeGame?.status === "paused"
+              <Button
+                variant="secondary"
+                className={cn(
+                  mapCompactControlBtnClass,
+                  "relative overflow-hidden",
+                  !canMapPauseOrResume ? mapGhostBtnClass : "",
+                )}
+                title={
+                  mapPauseBusy
+                    ? "Updating game pause state"
+                    : canMapPauseOrResume
+                      ? activeGame?.status === "paused"
                         ? "Play game"
                         : "Pause game"
-                  }
-                  aria-label={activeGame?.status === "paused" ? "Play game" : "Pause game"}
-                  type="button"
-                  disabled={mapPauseBusy}
-                  onClick={() => {
-                    void handleMapPauseToggle();
-                  }}
-                >
-                  {mapTurnElapsedFrac !== null ? (
-                    <span
-                      aria-hidden
-                      className="pointer-events-none absolute inset-y-0 right-0 st-turn-countdown-bg"
-                      style={{
-                        width: `${Math.round((1 - mapTurnElapsedFrac) * 100)}%`,
-                        transition: "width 0.25s linear",
-                        opacity: 0.72,
-                        animationPlayState: activeGame?.status === "paused" ? "paused" : "running",
-                      }}
-                    />
-                  ) : null}
-                  <span className="relative z-10 inline-flex items-center justify-center">
-                    {activeGame?.status === "paused" ? (
-                      <Play className="size-3.5 sm:size-4" aria-hidden />
-                    ) : (
-                      <Pause className="size-3.5 sm:size-4" aria-hidden />
-                    )}
-                  </span>
-                </Button>
-              ) : null}
+                      : "Pause/play unavailable right now"
+                }
+                aria-label={activeGame?.status === "paused" ? "Play game" : "Pause game"}
+                type="button"
+                disabled={!canMapPauseOrResume || mapPauseBusy}
+                onClick={() => {
+                  void handleMapPauseToggle();
+                }}
+              >
+                {mapTurnElapsedFrac !== null ? (
+                  <span
+                    aria-hidden
+                    className="pointer-events-none absolute inset-y-0 right-0 st-turn-countdown-bg"
+                    style={{
+                      width: `${Math.round((1 - mapTurnElapsedFrac) * 100)}%`,
+                      transition: "width 0.25s linear",
+                      opacity: canMapPauseOrResume ? 0.72 : 0.35,
+                      animationPlayState: activeGame?.status === "paused" ? "paused" : "running",
+                    }}
+                  />
+                ) : null}
+                <span className="relative z-10 inline-flex items-center justify-center">
+                  {activeGame?.status === "paused" ? (
+                    <Play className="size-3.5 sm:size-4" aria-hidden />
+                  ) : (
+                    <Pause className="size-3.5 sm:size-4" aria-hidden />
+                  )}
+                </span>
+              </Button>
               <Button
                 variant="secondary"
                 className={cn(
                   mapControlBtnClass,
-                  selectedSystemIsPriorityStar
+                  selectedSystem === null
+                    ? mapGhostBtnClass
+                    : selectedSystemIsPriorityStar
                     ? "border-amber-400/80 bg-amber-500/20 text-amber-100 hover:border-amber-300"
                     : "text-amber-300 hover:text-amber-200",
-                  selectedSystem === null ? "opacity-45" : "",
                 )}
                 title={
                   selectedSystem === null
@@ -2505,83 +2512,90 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
         <div className="hidden w-full items-center justify-between gap-4 sm:flex">
           <div className="flex items-center gap-3">
             <div className="flex items-center gap-2">
-              {canMapPauseOrResume ? (
-                <Button
-                  variant="secondary"
-                  className={cn(mapCompactControlBtnClass, "relative hidden overflow-hidden sm:inline-flex")}
-                  title={
-                    mapPauseBusy
-                      ? "Updating game pause state"
-                      : activeGame?.status === "paused"
+              <Button
+                variant="secondary"
+                className={cn(
+                  mapCompactControlBtnClass,
+                  "relative hidden overflow-hidden sm:inline-flex",
+                  !canMapPauseOrResume ? mapGhostBtnClass : "",
+                )}
+                title={
+                  mapPauseBusy
+                    ? "Updating game pause state"
+                    : canMapPauseOrResume
+                      ? activeGame?.status === "paused"
                         ? "Play game"
                         : "Pause game"
-                  }
-                  aria-label={activeGame?.status === "paused" ? "Play game" : "Pause game"}
-                  type="button"
-                  disabled={mapPauseBusy}
-                  onClick={() => {
-                    void handleMapPauseToggle();
-                  }}
-                >
-                  {mapTurnElapsedFrac !== null ? (
-                    <span
-                      aria-hidden
-                      className="pointer-events-none absolute inset-y-0 right-0 st-turn-countdown-bg"
-                      style={{
-                        width: `${Math.round((1 - mapTurnElapsedFrac) * 100)}%`,
-                        transition: "width 0.25s linear",
-                        opacity: 0.72,
-                        animationPlayState: activeGame?.status === "paused" ? "paused" : "running",
-                      }}
-                    />
-                  ) : null}
-                  <span className="relative z-10 inline-flex items-center justify-center">
-                    {activeGame?.status === "paused" ? (
-                      <Play className="size-3.5 sm:size-4" aria-hidden />
-                    ) : (
-                      <Pause className="size-3.5 sm:size-4" aria-hidden />
-                    )}
-                  </span>
-                </Button>
-              ) : null}
-              {selectedSystem !== null ? (
-                <Button
-                  variant="secondary"
-                  className={cn(
-                    mapControlBtnClass,
-                    "hidden sm:inline-flex",
-                    selectedSystemIsPriorityStar
+                      : "Pause/play unavailable right now"
+                }
+                aria-label={activeGame?.status === "paused" ? "Play game" : "Pause game"}
+                type="button"
+                disabled={!canMapPauseOrResume || mapPauseBusy}
+                onClick={() => {
+                  void handleMapPauseToggle();
+                }}
+              >
+                {mapTurnElapsedFrac !== null ? (
+                  <span
+                    aria-hidden
+                    className="pointer-events-none absolute inset-y-0 right-0 st-turn-countdown-bg"
+                    style={{
+                      width: `${Math.round((1 - mapTurnElapsedFrac) * 100)}%`,
+                      transition: "width 0.25s linear",
+                      opacity: canMapPauseOrResume ? 0.72 : 0.35,
+                      animationPlayState: activeGame?.status === "paused" ? "paused" : "running",
+                    }}
+                  />
+                ) : null}
+                <span className="relative z-10 inline-flex items-center justify-center">
+                  {activeGame?.status === "paused" ? (
+                    <Play className="size-3.5 sm:size-4" aria-hidden />
+                  ) : (
+                    <Pause className="size-3.5 sm:size-4" aria-hidden />
+                  )}
+                </span>
+              </Button>
+              <Button
+                variant="secondary"
+                className={cn(
+                  mapControlBtnClass,
+                  "hidden sm:inline-flex",
+                  selectedSystem === null
+                    ? mapGhostBtnClass
+                    : selectedSystemIsPriorityStar
                       ? "border-amber-400/80 bg-amber-500/20 text-amber-100 hover:border-amber-300"
                       : "text-amber-300 hover:text-amber-200",
-                  )}
-                  title={
-                    canMarkPriorityStars
+                )}
+                title={
+                  selectedSystem === null
+                    ? "Select a star to toggle Priority"
+                    : canMarkPriorityStars
                       ? selectedSystemIsPriorityStar
                         ? "Unmark selected star as a Priority star"
                         : "Mark selected star as a Priority star"
                       : (priorityStarDisabledReason ?? "Priority stars are unavailable right now")
-                  }
-                  aria-label={
-                    selectedSystemIsPriorityStar
-                      ? "Unmark selected star as a Priority star"
-                      : "Mark selected star as a Priority star"
-                  }
-                  aria-pressed={selectedSystemIsPriorityStar}
-                  type="button"
-                  disabled={!canMarkPriorityStars}
-                  onClick={() => {
-                    void togglePriorityStar(
-                      selectedSystem._id,
-                      !selectedSystemIsPriorityStar,
-                    );
-                  }}
-                >
-                  <Star
-                    className={selectedSystemIsPriorityStar ? "size-4 fill-current" : "size-4"}
-                    aria-hidden
-                  />
-                </Button>
-              ) : null}
+                }
+                aria-label={
+                  selectedSystemIsPriorityStar
+                    ? "Unmark selected star as a Priority star"
+                    : "Mark selected star as a Priority star"
+                }
+                aria-pressed={selectedSystemIsPriorityStar}
+                type="button"
+                disabled={selectedSystem === null || !canMarkPriorityStars}
+                onClick={() => {
+                  if (selectedSystem === null) return;
+                  void togglePriorityStar(
+                    selectedSystem._id,
+                    !selectedSystemIsPriorityStar,
+                  );
+                }}
+              >
+                <Star
+                  className={selectedSystemIsPriorityStar ? "size-4 fill-current" : "size-4"}
+                  aria-hidden
+                />
+              </Button>
               <Button
                 variant="secondary"
                 className={cn(mapControlBtnClass, "hidden sm:inline-flex")}
