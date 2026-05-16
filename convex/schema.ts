@@ -275,6 +275,8 @@ export default defineSchema({
     avatarUrl: v.union(v.string(), v.null()),
     timezone: v.union(v.string(), v.null()),
     analyticsConsent: v.boolean(),
+    /** The user's preferred starting strategy profile, applied at game start when shown the ready modal. */
+    defaultStartingStrategyProfileId: v.optional(v.id("usr_automation_profiles")),
   }).index("by_userId", ["userId"]),
 
   /**

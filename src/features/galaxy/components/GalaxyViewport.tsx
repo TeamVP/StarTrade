@@ -352,6 +352,21 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
   const colonizeWithColonyShip = useMutation(api.col.mutations.colonize);
   const resignFromGame = useMutation(api.usr.mutations.resignFromGame);
   const startGame = useMutation(api.sim.mutations.startGame);
+  const applyAutomationProfileToMyEmpire = useMutation(
+    api.usr.mutations.applyAutomationProfileToMyEmpire,
+  );
+  const setMyDefaultStartingStrategy = useMutation(
+    api.usr.mutations.setMyDefaultStartingStrategy,
+  );
+
+  const myAccount = useQuery(api.usr.queries.getMyAccount, {});
+  const myAutomationProfilesQuery = useQuery(api.usr.queries.listMyAutomationProfiles, {});
+  const myAutomationProfiles = useMemo(
+    () =>
+      ((myAutomationProfilesQuery ?? []) as Array<{ _id: Id<"usr_automation_profiles">; name: string; isActive?: boolean }>)
+        .filter((p) => p.isActive ?? true),
+    [myAutomationProfilesQuery],
+  );
 
   const [selectedFleetId, setSelectedFleetId] = useState<string | null>(null);
   const [selectedTraderId, setSelectedTraderId] = useState<string | null>(null);
@@ -379,6 +394,32 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
   const [mapResignError, setMapResignError] = useState<string | null>(null);
   const [startBusy, setStartBusy] = useState(false);
   const [startError, setStartError] = useState<string | null>(null);
+  /** Step 1 = strategy picker, step 2 = start game button. */
+  const [startModalStep, setStartModalStep] = useState<1 | 2>(1);
+  const [startStrategyValue, setStartStrategyValue] = useState<string>("manual");
+
+  // Derive the default strategy from saved profile whenever profiles or account changes.
+  useEffect(() => {
+    const savedId = (myAccount?.profile as { defaultStartingStrategyProfileId?: string } | undefined | null)
+      ?.defaultStartingStrategyProfileId ?? null;
+    if (savedId !== null && myAutomationProfiles.some((p) => p._id === savedId)) {
+      setStartStrategyValue(savedId);
+    } else if (myAutomationProfiles.length > 0) {
+      setStartStrategyValue(myAutomationProfiles[0]._id);
+    } else {
+      setStartStrategyValue("manual");
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [myAccount?.profile, myAutomationProfiles]);
+
+  // Reset the start modal to step 1 each time a new lobby game becomes visible.
+  const prevActiveGameIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (activeGameId !== prevActiveGameIdRef.current) {
+      prevActiveGameIdRef.current = activeGameId;
+      setStartModalStep(1);
+    }
+  }, [activeGameId]);
 
   const [camera, setCamera] = useState<GalaxyMapCamera>(() =>
     computeFitAllSystemsCamera([]),
@@ -668,13 +709,22 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
     setStartError(null);
     try {
       await startGame({ gameId: activeGame._id });
+      if (startStrategyValue !== "manual") {
+        await applyAutomationProfileToMyEmpire({
+          gameId: activeGame._id,
+          profileId: startStrategyValue as Id<"usr_automation_profiles">,
+        });
+      }
+      await setMyDefaultStartingStrategy({
+        profileId: startStrategyValue !== "manual" ? (startStrategyValue as Id<"usr_automation_profiles">) : null,
+      });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       setStartError(message.replace(/^[\s\S]*?Error:\s*/g, "").trim());
     } finally {
       setStartBusy(false);
     }
-  }, [activeGame, startGame]);
+  }, [activeGame, startGame, startStrategyValue, applyAutomationProfileToMyEmpire, setMyDefaultStartingStrategy]);
 
   const garrisonRouteEmpireFilter: Id<"emp_states"> | null =
     playerEmpireIdProp ?? (isAdmin ? null : myEmpireIdFromRole);
@@ -2145,26 +2195,74 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
               {galaxyStageEl}
               <div className="pointer-events-none absolute inset-0 z-[6]">
                 {showPlayerStartOverlay ? (
-                  <div className="pointer-events-auto absolute left-1/2 top-1/2 flex w-[min(92vw,28rem)] -translate-x-1/2 -translate-y-1/2 flex-col items-center gap-3 rounded-2xl border border-st-border bg-st-bg/95 px-6 py-6 text-center shadow-2xl backdrop-blur-sm">
+                  <div className="pointer-events-auto absolute left-1/2 top-1/2 flex w-[min(92vw,28rem)] -translate-x-1/2 -translate-y-1/2 flex-col items-center gap-4 rounded-2xl border border-st-border bg-st-bg/95 px-6 py-6 text-center shadow-2xl backdrop-blur-sm">
                     <h2 className="text-xl font-semibold text-st-fg">Ready to begin?</h2>
-                    <p className="text-sm text-st-muted">
-                      Start the match to open turn 1 and begin empire play for this scenario.
-                    </p>
-                    <Button
-                      type="button"
-                      className="w-full max-w-xs py-3 text-base"
-                      disabled={startBusy}
-                      onClick={() => {
-                        void handlePlayerStartGame();
-                      }}
-                    >
-                      {startBusy ? "Starting..." : "Start game"}
-                    </Button>
-                    {startError !== null ? (
-                      <p className="text-xs text-red-300" role="alert">
-                        {startError}
-                      </p>
-                    ) : null}
+                    {startModalStep === 1 ? (
+                      <>
+                        <p className="text-sm text-st-muted">
+                          Choose your standing-order strategy for this game.
+                        </p>
+                        <label className="w-full max-w-xs space-y-1 text-left">
+                          <span className="block text-xs font-semibold uppercase tracking-wide text-st-muted">
+                            Step 1 of 2 — Strategy
+                          </span>
+                          <select
+                            value={startStrategyValue}
+                            onChange={(e) => { setStartStrategyValue(e.target.value); }}
+                            className="w-full rounded-md border border-st-border bg-st-panel px-3 py-2 text-sm text-st-fg outline-none focus:border-st-accent"
+                          >
+                            <option value="manual">Manual (no automation)</option>
+                            {myAutomationProfiles.map((profile) => (
+                              <option key={profile._id} value={profile._id}>
+                                {profile.name}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <Button
+                          type="button"
+                          className="w-full max-w-xs py-3 text-base"
+                          onClick={() => { setStartModalStep(2); }}
+                        >
+                          Next
+                        </Button>
+                      </>
+                    ) : (
+                      <>
+                        <p className="text-sm text-st-muted">
+                          Start the match to open turn 1 and begin empire play for this scenario.
+                        </p>
+                        <p className="text-xs text-st-muted">
+                          <span className="font-medium text-st-fg">Strategy: </span>
+                          {startStrategyValue === "manual"
+                            ? "Manual"
+                            : (myAutomationProfiles.find((p) => p._id === startStrategyValue)?.name ?? "Selected strategy")}
+                        </p>
+                        <div className="flex w-full max-w-xs flex-col gap-2">
+                          <Button
+                            type="button"
+                            className="w-full py-3 text-base"
+                            disabled={startBusy}
+                            onClick={() => { void handlePlayerStartGame(); }}
+                          >
+                            {startBusy ? "Starting..." : "Start game"}
+                          </Button>
+                          <button
+                            type="button"
+                            className="text-xs text-st-muted underline-offset-2 hover:underline"
+                            disabled={startBusy}
+                            onClick={() => { setStartModalStep(1); }}
+                          >
+                            ← Back
+                          </button>
+                        </div>
+                        {startError !== null ? (
+                          <p className="text-xs text-red-300" role="alert">
+                            {startError}
+                          </p>
+                        ) : null}
+                      </>
+                    )}
                   </div>
                 ) : null}
                 {mapZoomControlButtons !== null ? (

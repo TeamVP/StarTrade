@@ -126,6 +126,46 @@ export const upsertMyProfile = mutation({
   },
 });
 
+export const setMyDefaultStartingStrategy = mutation({
+  args: {
+    /** Pass a profile ID to set the default, or null to clear it (revert to Manual). */
+    profileId: v.union(v.id("usr_automation_profiles"), v.null()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await requireAuthUserId(ctx);
+
+    if (args.profileId !== null) {
+      const profile = await ctx.db.get("usr_automation_profiles", args.profileId);
+      if (profile === null || profile.userId !== userId) {
+        throw new Error("Automation profile not found.");
+      }
+    }
+
+    const existing = await ctx.db
+      .query("usr_profiles")
+      .withIndex("by_userId", (q) => q.eq("userId", userId))
+      .unique();
+
+    const patch = {
+      defaultStartingStrategyProfileId:
+        args.profileId !== null ? args.profileId : undefined,
+    };
+
+    if (existing === null) {
+      await ctx.db.insert("usr_profiles", {
+        userId,
+        displayName: "",
+        avatarUrl: null,
+        timezone: null,
+        analyticsConsent: false,
+        ...patch,
+      });
+    } else {
+      await ctx.db.patch("usr_profiles", existing._id, patch);
+    }
+  },
+});
+
 export const createCustomAutomationProfile = mutation({
   args: {
     name: v.string(),
