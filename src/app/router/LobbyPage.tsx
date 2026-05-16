@@ -1,10 +1,9 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
-import { Link, useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import { Lock } from "lucide-react";
 import { api } from "../../../convex/_generated/api";
 import { Card } from "@/components/ui/card";
-import { getGamePath, getGameRouteKey } from "@/features/games/gameRoutes";
 import { useActiveGame } from "@/features/galaxy/hooks/useActiveGame";
 import { cn } from "@/lib/utils";
 
@@ -20,23 +19,24 @@ function formatRelativeDateTime(value: number | null): string {
   const absDiffMs = Math.abs(diffMs);
 
   if (absDiffMs < 60_000) {
-    return "Just now";
+    return "just now";
   }
 
-  const formatter = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
-  const units = [
-    ["day", 86_400_000],
-    ["hour", 3_600_000],
-    ["minute", 60_000],
-  ] as const;
+  const units: [number, string, string][] = [
+    [86_400_000, "day", "days"],
+    [3_600_000, "hr", "hrs"],
+    [60_000, "min", "mins"],
+  ];
 
-  for (const [unit, unitMs] of units) {
+  for (const [unitMs, singular, plural] of units) {
     if (absDiffMs >= unitMs) {
-      return formatter.format(Math.round(diffMs / unitMs), unit);
+      const count = Math.round(absDiffMs / unitMs);
+      const label = count === 1 ? singular : plural;
+      return diffMs < 0 ? `${count} ${label} ago` : `in ${count} ${label}`;
     }
   }
 
-  return "Just now";
+  return "just now";
 }
 
 function statusClassName(status: string): string {
@@ -154,7 +154,7 @@ export function LobbyPage() {
       return "Preparing...";
     }
     if (entry.game.status === "finished" || !entry.isActiveMember) {
-      return "New game";
+      return "Play again!";
     }
     if (entry.game.status === "lobby") {
       return "Start";
@@ -233,6 +233,10 @@ export function LobbyPage() {
                   result !== undefined &&
                   result.auroraPlacement !== null &&
                   !result.auroraWasWinner;
+                const isNewlyUnlocked =
+                  entry.unlocked &&
+                  entry.prerequisiteMissionKeys.length > 0 &&
+                  game?.status === "lobby";
 
                 return (
                   <div
@@ -262,6 +266,10 @@ export function LobbyPage() {
                       void onScenarioAction(entry);
                     }}
                   >
+                    {/* Newly-unlocked ripple overlay */}
+                    {isNewlyUnlocked ? (
+                      <div className="pointer-events-none absolute inset-0 rounded-xl st-unlocked-ripple" />
+                    ) : null}
                     {/* Left status stripe */}
                     <div
                       className={cn(
@@ -279,7 +287,7 @@ export function LobbyPage() {
                             <Lock size={13} className="shrink-0 text-amber-400" />
                           ) : null}
                           <h2 className="text-base font-semibold text-st-fg">{entry.name}</h2>
-                          {game !== null ? (
+                          {game !== null && game.status !== "lobby" ? (
                             <span
                               className={cn(
                                 "rounded-full border px-2 py-0.5 text-xs font-medium",
@@ -346,25 +354,19 @@ export function LobbyPage() {
                               {game?.currentTurn ?? 0}
                             </span>
                           </span>
-                          <span>
-                            Started{" "}
-                            <span className="font-semibold text-st-fg">
-                              {formatRelativeDateTime(game?.startedAt ?? null)}
+                          {game !== null && game.status !== "lobby" ? (
+                            <span>
+                              {game.status === "finished" ? "Finished" : "Started"}{" "}
+                              <span className="font-semibold text-st-fg">
+                                {game.status === "finished"
+                                  ? formatRelativeDateTime(result?.endedAt ?? null)
+                                  : formatRelativeDateTime(game.startedAt ?? null)}
+                              </span>
                             </span>
-                          </span>
+                          ) : null}
                         </div>
 
-                        {game !== null ? (
-                          <Link
-                            to={getGamePath(game)}
-                            className="mt-1.5 inline-block text-xs text-cyan-400/60 hover:text-cyan-300"
-                            onClick={(event) => {
-                              event.stopPropagation();
-                            }}
-                          >
-                            /game/{getGameRouteKey(game)}
-                          </Link>
-                        ) : null}
+
 
                         {/* Result inset */}
                         {game?.status === "finished" && result !== null ? (
@@ -417,6 +419,9 @@ export function LobbyPage() {
 
                       {/* ─ Action column ─ */}
                       <div className="flex shrink-0 items-center gap-2">
+                        {isNewlyUnlocked ? (
+                          <span className="text-sm font-semibold" style={{ color: "#84cc16" }}>Unlocked!</span>
+                        ) : null}
                         {game !== null &&
                         entry.isActiveMember &&
                         game.status === "running" ? (
