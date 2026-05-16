@@ -1954,6 +1954,27 @@ export const prepareTurnResolutionRetry = internalMutation({
       return;
     }
     const preparation = await loadTurnPreparationRow(ctx, args.gameId, game.currentTurn);
+    if (turn.state === "prepared" || preparation?.state === "prepared") {
+      await ctx.db.patch("sim_turns", turn._id, {
+        state: "open",
+        preparedAt: undefined,
+        resolvingStartedAt: undefined,
+        resolutionPhase: undefined,
+      });
+      if (preparation !== null) {
+        await deletePreparationOperations(ctx, preparation._id);
+        await ctx.db.patch("sim_turn_preparations", preparation._id, {
+          state: "queued",
+          requestedAt: Date.now(),
+          startedAt: undefined,
+          preparedAt: undefined,
+          committedAt: undefined,
+          resolutionPhase: undefined,
+          summaryJson: undefined,
+        });
+      }
+      return;
+    }
     if (!isTurnPreparingState(turn.state) && preparation?.state !== "preparing") {
       return;
     }

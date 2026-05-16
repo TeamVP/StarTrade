@@ -2,6 +2,7 @@ import { internalMutation } from "../_generated/server";
 import { v } from "convex/values";
 import { internal } from "../_generated/api";
 import { evaluateGameFinalization } from "./finalization";
+import { turnDurationHasElapsed } from "./turnTiming";
 
 /** Advances every running game whose pause window has expired (spec §6 cron driver). */
 export const tickRunningGames = internalMutation({
@@ -39,6 +40,48 @@ export const tickRunningGames = internalMutation({
         } = await ctx.runMutation(internal.sim.internal.beginTurnResolution, {
           gameId: game._id,
         });
+        if (!begin.started) {
+          const turnRow = await ctx.db
+            .query("sim_turns")
+            .withIndex("by_gameId_and_turnNumber", (q) =>
+              q.eq("gameId", game._id).eq("turnNumber", game.currentTurn),
+            )
+            .unique();
+          const preparationRow = await ctx.db
+            .query("sim_turn_preparations")
+            .withIndex("by_gameId_and_turnNumber", (q) =>
+              q.eq("gameId", game._id).eq("turnNumber", game.currentTurn),
+            )
+            .unique();
+          const stalePreparedTurn =
+            turnRow !== null &&
+            (turnRow.state === "prepared" || preparationRow?.state === "prepared") &&
+            turnDurationHasElapsed({
+              nowMs: now,
+              turnStartedAtMs: turnRow.startedAt,
+              turnDurationMs: game.turnDurationMs,
+            });
+          if (stalePreparedTurn) {
+            await ctx.runMutation(internal.sim.internal.prepareTurnResolutionRetry, {
+              gameId: game._id,
+            });
+            const retried: {
+              started: boolean;
+              turnNumber: number;
+              alreadyResolving: boolean;
+            } = await ctx.runMutation(internal.sim.internal.beginTurnResolution, {
+              gameId: game._id,
+            });
+            if (retried.started) {
+              await ctx.scheduler.runAfter(0, internal.sim.actions.resolveTurnJob, {
+                gameId: game._id,
+                turnNumber: retried.turnNumber,
+              });
+              stepped += 1;
+              continue;
+            }
+          }
+        }
         if (!begin.started) {
           continue;
         }
