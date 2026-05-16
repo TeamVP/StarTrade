@@ -21,6 +21,10 @@ const AuthenticatedGameLayout = lazyNamedComponent(
   () => import("@/app/router/AuthenticatedGameLayout"),
   "AuthenticatedGameLayout",
 );
+const AdminGuard = lazyNamedComponent(
+  () => import("@/app/router/AdminGuard"),
+  "AdminGuard",
+);
 const LandingPage = lazyNamedComponent(() => import("@/app/router/LandingPage"), "LandingPage");
 const GalaxyPage = lazyNamedComponent(() => import("@/app/router/GalaxyPage"), "GalaxyPage");
 const AdminHomePage = lazyNamedComponent(
@@ -196,7 +200,12 @@ const router = createBrowserRouter([
   {
     path: "/admin",
     element: <AuthenticatedGameLayout />,
-    children: [...adminChildRoutes],
+    children: [
+      {
+        element: <AdminGuard />,
+        children: [...adminChildRoutes],
+      },
+    ],
   },
   {
     path: "/",

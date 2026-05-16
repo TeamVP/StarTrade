@@ -86,6 +86,7 @@ export const getMyAccount = query({
         name: user.name ?? null,
         image: user.image ?? null,
         isAnonymous: user.isAnonymous ?? false,
+        admin: user.admin ?? false,
       },
       profile,
       hasPasswordAccount: passwordAccount?.userId === user._id,
