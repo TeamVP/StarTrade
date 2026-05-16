@@ -290,17 +290,17 @@ export function FleetScreen(props: {
         <h3 className="text-xs font-semibold uppercase tracking-wide text-st-muted">
           Fleet status
         </h3>
-        <ul className="mt-2 grid grid-cols-[max-content_max-content] justify-center gap-x-6 gap-y-2 text-center text-sm">
+        <ul className="mt-2 grid grid-cols-2 gap-x-3 gap-y-2 text-sm sm:grid-cols-[max-content_max-content] sm:justify-center sm:gap-x-6 sm:text-center">
           {fleetsVisible.map((fleet) => (
             <li key={fleet._id} className="contents">
               <button
                 type="button"
-                className="justify-self-center rounded px-1 text-st-fg underline-offset-2 transition-colors hover:text-st-accent hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-st-accent"
+                className="min-w-0 truncate justify-self-start rounded px-1 text-st-fg underline-offset-2 transition-colors hover:text-st-accent hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-st-accent sm:justify-self-center"
                 onClick={() => openFleetOnGalaxy(fleet._id)}
               >
                 {normalizeFleetDetachmentDisplayName(fleet.name)}
               </button>
-              <span className="justify-self-center text-st-muted">
+              <span className="min-w-0 justify-self-start text-st-muted sm:justify-self-center">
                 {fleet.strength} ships · {fleet.status}
                 {fleet.status === "enRoute" && fleet.etaTurn !== null
                   ? ` · ETA turn ${fleet.etaTurn}`

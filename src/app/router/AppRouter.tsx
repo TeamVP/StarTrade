@@ -76,10 +76,6 @@ const TermsOfServicePage = lazyNamedComponent(
   () => import("@/app/router/TermsOfServicePage"),
   "TermsOfServicePage",
 );
-const PlayerGameLayout = lazyNamedComponent(
-  () => import("@/app/router/PlayerGameLayout"),
-  "PlayerGameLayout",
-);
 const PlayerHomePage = lazyNamedComponent(
   () => import("@/app/router/PlayerHomePage"),
   "PlayerHomePage",
