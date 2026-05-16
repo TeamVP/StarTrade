@@ -14,6 +14,7 @@ import { cn } from "@/lib/utils";
 import { useNavigate } from "react-router-dom";
 import { api } from "../../../../convex/_generated/api";
 import type { Id } from "../../../../convex/_generated/dataModel";
+import { useOptionalPlayerTopNavControls } from "@/app/layout/PlayerTopNavControls";
 import { useGalaxySoundscape } from "@/features/audio/hooks/useGalaxySoundscape";
 import { getTurnEffectiveNowMs } from "@/lib/time/turnClock";
 import { useTurnClock } from "@/lib/time/useTurnClock";
@@ -254,6 +255,7 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
   } = props;
   const { activeGame, systems, links, empires, empireColors } = useGalaxyData();
   const galaxyMapNav = useGalaxyMapNav();
+  const playerTopNavControls = useOptionalPlayerTopNavControls();
   const navigate = useNavigate();
   const activeGameId = activeGame?._id ?? null;
 
@@ -2095,7 +2097,7 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
       <div className="flex items-center gap-1">
         <Button
           variant="secondary"
-          className={mapControlBtnClass}
+          className={cn(mapControlBtnClass, "hidden sm:inline-flex")}
           title={soundscapeEnabled ? "Disable event bell soundscape" : "Enable event bell soundscape"}
           aria-label={soundscapeEnabled ? "Disable event bell soundscape" : "Enable event bell soundscape"}
           type="button"
@@ -2154,6 +2156,74 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
         ) : null}
       </div>
     ) : null;
+
+  useEffect(() => {
+    if (playerTopNavControls === null) {
+      return;
+    }
+
+    if (activeGame === null) {
+      playerTopNavControls.setMobileControl("sound", null);
+      return () => {
+        playerTopNavControls.setMobileControl("sound", null);
+      };
+    }
+
+    playerTopNavControls.setMobileControl(
+      "sound",
+      <Button
+        type="button"
+        variant="secondary"
+        className="size-8 shrink-0 p-0 sm:hidden"
+        title={soundscapeEnabled ? "Disable event bell soundscape" : "Enable event bell soundscape"}
+        aria-label={soundscapeEnabled ? "Disable event bell soundscape" : "Enable event bell soundscape"}
+        onClick={() => {
+          if (soundscapeEnabled || soundscapeStatus === "starting") {
+            disableSoundscape();
+            return;
+          }
+          void enableSoundscape();
+        }}
+      >
+        {soundscapeEnabled ? <Volume2 className="size-4" aria-hidden /> : <VolumeX className="size-4" aria-hidden />}
+      </Button>,
+    );
+
+    return () => {
+      playerTopNavControls.setMobileControl("sound", null);
+    };
+  }, [
+    activeGame,
+    disableSoundscape,
+    enableSoundscape,
+    playerTopNavControls,
+    soundscapeEnabled,
+    soundscapeStatus,
+  ]);
+
+  useEffect(() => {
+    if (playerTopNavControls === null || !playerHomeMapLayout || starPanelAside === null) {
+      return;
+    }
+
+    playerTopNavControls.setMobileControl(
+      "panel",
+      <Button
+        type="button"
+        variant="secondary"
+        className="h-8 gap-1 px-2 text-xs sm:hidden"
+        onClick={() => setMobileAsideOpen((open) => !open)}
+      >
+        {mobileAsideOpen ? <ChevronLeft className="size-3.5" aria-hidden /> : null}
+        {mobileAsideOpen ? "Back to map" : "Info"}
+        {!mobileAsideOpen ? <ChevronRight className="size-3.5" aria-hidden /> : null}
+      </Button>,
+    );
+
+    return () => {
+      playerTopNavControls.setMobileControl("panel", null);
+    };
+  }, [mobileAsideOpen, playerHomeMapLayout, playerTopNavControls, starPanelAside]);
 
   const galaxyStageEl = (
     <GalaxyStage
@@ -2327,16 +2397,6 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
                 <div className="absolute bottom-3 right-3 rounded-md bg-st-bg/90 px-2.5 py-1 text-xs text-st-muted shadow-md ring-1 ring-st-border/70 backdrop-blur-sm">
                   {activeGame ? `${stageNodes.length} stars` : "Create + seed a game"}
                 </div>
-                {starPanelAside != null && (
-                  <button
-                    type="button"
-                    onClick={() => setMobileAsideOpen(true)}
-                    className="absolute right-2 top-2 z-7 flex items-center gap-1 rounded-md bg-st-panel/90 px-3 py-1.5 text-sm text-st-fg shadow-md backdrop-blur-sm lg:hidden"
-                    aria-label="Show empire panel"
-                  >
-                    Info <ChevronRight size={14} />
-                  </button>
-                )}
               </div>
             </div>
             {starPanelAside != null ? (

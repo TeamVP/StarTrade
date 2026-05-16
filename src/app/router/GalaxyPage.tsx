@@ -1,6 +1,8 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useLocation } from "react-router-dom";
 import { ChevronRight, ChevronLeft } from "lucide-react";
+import { usePlayerTopNavControls } from "@/app/layout/PlayerTopNavControls";
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { GalaxyViewport } from "@/features/galaxy/components/GalaxyViewport";
 import { GalaxyMapNavProvider } from "@/features/galaxy/context/GalaxyMapNavContext";
@@ -18,6 +20,27 @@ export function GalaxyPage() {
   const location = useLocation();
   const focusFleetId = focusFleetIdFromState(location.state);
   const [showPanel, setShowPanel] = useState(false);
+  const { setMobileControl } = usePlayerTopNavControls();
+
+  useEffect(() => {
+    setMobileControl(
+      "panel",
+      <Button
+        type="button"
+        variant="secondary"
+        className="h-8 gap-1 px-2 text-xs sm:hidden"
+        onClick={() => setShowPanel((open) => !open)}
+      >
+        {showPanel ? <ChevronLeft className="size-3.5" aria-hidden /> : null}
+        {showPanel ? "Back to map" : "Info"}
+        {!showPanel ? <ChevronRight className="size-3.5" aria-hidden /> : null}
+      </Button>,
+    );
+
+    return () => {
+      setMobileControl("panel", null);
+    };
+  }, [setMobileControl, showPanel]);
 
   return (
     <GalaxyMapNavProvider>
@@ -30,15 +53,6 @@ export function GalaxyPage() {
         {/* Map pane */}
         <section className="relative space-y-4">
           <GalaxyViewport initialFocusFleetId={focusFleetId} />
-          {/* Mobile-only button to open the info panel */}
-          <button
-            type="button"
-            onClick={() => setShowPanel(true)}
-            className="absolute top-2 right-2 z-10 flex items-center gap-1 rounded-md bg-st-panel/90 px-3 py-1.5 text-sm text-st-fg shadow-md backdrop-blur-sm lg:hidden"
-            aria-label="Show info panel"
-          >
-            Info <ChevronRight size={14} />
-          </button>
         </section>
 
         {/*

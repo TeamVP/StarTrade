@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Link, NavLink } from "react-router-dom";
 import { Menu, X } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { usePlayerTopNavControls } from "@/app/layout/PlayerTopNavControls";
 import { usePlayerPreview } from "@/features/player/PlayerPreviewContext";
 import { SignOutButton } from "@/features/usr/components/SignOutButton";
 
@@ -17,6 +18,7 @@ const subPaths = [
 
 export function PlayerTopNav() {
   const { basePath } = usePlayerPreview();
+  const { controls } = usePlayerTopNavControls();
   const [drawerOpen, setDrawerOpen] = useState(false);
 
   return (
@@ -57,21 +59,27 @@ export function PlayerTopNav() {
       </nav>
 
       {/* Mobile header strip — visible only on small screens */}
-      <div className="flex sm:hidden items-center gap-2">
-        <Link
-          to="/"
-          className="rounded-md px-2 py-px text-base font-semibold tracking-wide text-st-fg transition-colors hover:bg-st-panel"
-        >
-          StarStrat
-        </Link>
-        <button
-          type="button"
-          onClick={() => setDrawerOpen(true)}
-          className="rounded-md p-1.5 text-st-muted transition-colors hover:bg-st-panel hover:text-st-fg"
-          aria-label="Open navigation menu"
-        >
-          <Menu size={20} />
-        </button>
+      <div className="flex w-full items-center justify-between gap-2 sm:hidden">
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setDrawerOpen(true)}
+            className="rounded-md p-1.5 text-st-muted transition-colors hover:bg-st-panel hover:text-st-fg"
+            aria-label="Open navigation menu"
+          >
+            <Menu size={20} />
+          </button>
+          <Link
+            to="/"
+            className="rounded-md px-2 py-px text-base font-semibold tracking-wide text-st-fg transition-colors hover:bg-st-panel"
+          >
+            StarStrat
+          </Link>
+        </div>
+        <div className="flex items-center gap-1">
+          {controls.sound ?? null}
+          {controls.panel ?? null}
+        </div>
       </div>
 
       {/* Mobile slide-out drawer */}
