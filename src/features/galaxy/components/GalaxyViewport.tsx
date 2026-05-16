@@ -1202,6 +1202,18 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
   const fleetMarkers = useMemo<FleetMarkerModel[]>(() => {
     if (!simAllowsPlayerOrders) return [];
     const idle = fleets.filter((f) => f.status === "idle");
+
+    // Compute per-empire min/max strength for icon size scaling.
+    const empireMin = new Map<string, number>();
+    const empireMax = new Map<string, number>();
+    for (const fleet of idle) {
+      const s = fleet.strength ?? 0;
+      const prev = empireMin.get(fleet.empireId);
+      if (prev === undefined || s < prev) empireMin.set(fleet.empireId, s);
+      const prevMax = empireMax.get(fleet.empireId);
+      if (prevMax === undefined || s > prevMax) empireMax.set(fleet.empireId, s);
+    }
+
     const bySystem = new Map<string, typeof idle>();
     for (const fleet of idle) {
       const list = bySystem.get(fleet.originSystemId) ?? [];
@@ -1216,6 +1228,14 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
       const n = list.length;
       list.forEach((fleet, i) => {
         const angle = (i / n) * Math.PI * 2 - Math.PI / 2;
+        const minS = empireMin.get(fleet.empireId) ?? 0;
+        const maxS = empireMax.get(fleet.empireId) ?? 0;
+        const range = maxS - minS;
+        // De-emphasise when all fleets are within 10 ships of each other.
+        // The scale effect fades in linearly from 0 (range=0) to full (range>=30).
+        const rangeFactor = Math.min(1, range / 30);
+        const t = range > 0 ? ((fleet.strength ?? 0) - minS) / range : 0.5;
+        const sizeScale = 1 + (t - 0.5) * rangeFactor;
         markers.push({
           fleetId: fleet._id,
           empireId: fleet.empireId,
@@ -1223,6 +1243,7 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
           x: node.x + Math.cos(angle) * FLEET_ORBIT_RADIUS,
           y: node.y + Math.sin(angle) * FLEET_ORBIT_RADIUS,
           colorHex: empireColors[fleet.empireId] ?? "#94a3b8",
+          sizeScale,
         });
       });
     }

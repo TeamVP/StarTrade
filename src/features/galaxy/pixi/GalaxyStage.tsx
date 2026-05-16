@@ -117,6 +117,8 @@ export type FleetMarkerModel = {
   x: number;
   y: number;
   colorHex: string;
+  /** Scale factor applied to the icon size (0.5 = smallest, 1.5 = largest in empire). */
+  sizeScale: number;
 };
 
 export type ColonyShipMarkerModel = {
@@ -2332,8 +2334,9 @@ function drawFleetShip(
   const oy = vy / len;
   const px = -oy;
   const py = ox;
-  const wing = 7;
-  const nose = 11;
+  const scale = fleet.sizeScale ?? 1;
+  const wing = 7 * scale;
+  const nose = 11 * scale;
   const xTip = fx + ox * nose;
   const yTip = fy + oy * nose;
   const xLeft = fx + px * wing - ox * wing * 0.35;
