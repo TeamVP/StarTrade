@@ -2,6 +2,7 @@ import { mutation } from "../_generated/server";
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { api } from "../_generated/api";
+import { Scrypt } from "lucia";
 import { assignStarterOwnerEmpireSeat } from "../sim/mutations";
 import { gameAllowsPlayerActions, touchGameMeaningfulActivity } from "../sim/helpers";
 import { evaluateGameFinalization } from "../sim/finalization";
@@ -13,6 +14,8 @@ import {
 import { getAutomationStrategyByKey, getPublicAutomationStrategyByKey } from "./automationStrategyCatalog";
 import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx } from "../_generated/server";
+
+const PASSWORD_PROVIDER_ID = "password";
 
 async function requireAuthUserId(ctx: MutationCtx): Promise<Id<"users">> {
   const userId = await getAuthUserId(ctx);
@@ -36,6 +39,25 @@ function normalizeOptionalDescription(description: string | null | undefined): s
   }
   const normalized = description.trim();
   return normalized.length > 0 ? normalized : undefined;
+}
+
+function normalizeOptionalUserField(value: string | null | undefined): string | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  const normalized = value.trim();
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+function normalizeOptionalPassword(value: string | null | undefined): string | undefined {
+  const password = normalizeOptionalUserField(value);
+  if (password === undefined) {
+    return undefined;
+  }
+  if (password.length < 8) {
+    throw new Error("Password must be at least 8 characters.");
+  }
+  return password;
 }
 
 async function getOwnedAutomationProfileOrThrow(
@@ -123,6 +145,58 @@ export const upsertMyProfile = mutation({
 
     await ctx.db.patch("usr_profiles", existing._id, args);
     return existing._id;
+  },
+});
+
+export const setMyPassword = mutation({
+  args: {
+    password: v.string(),
+  },
+  handler: async (ctx, args): Promise<{ userId: Id<"users">; createdAccount: boolean }> => {
+    const userId = await requireAuthUserId(ctx);
+    const user = await ctx.db.get("users", userId);
+    if (user === null) {
+      throw new Error("User not found.");
+    }
+
+    const email = normalizeOptionalUserField(user.email)?.toLowerCase();
+    if (email === undefined) {
+      throw new Error("Password sign-in requires your account to have an email address.");
+    }
+
+    const password = normalizeOptionalPassword(args.password);
+    if (password === undefined) {
+      throw new Error("Password must be at least 8 characters.");
+    }
+
+    const existingPasswordAccount = await ctx.db
+      .query("authAccounts")
+      .withIndex("providerAndAccountId", (q) =>
+        q.eq("provider", PASSWORD_PROVIDER_ID).eq("providerAccountId", email),
+      )
+      .unique();
+    const secret = await new Scrypt().hash(password);
+
+    if (existingPasswordAccount === null) {
+      await ctx.db.insert("authAccounts", {
+        userId,
+        provider: PASSWORD_PROVIDER_ID,
+        providerAccountId: email,
+        secret,
+        ...(user.emailVerificationTime !== undefined ? { emailVerified: email } : {}),
+      });
+      return { userId, createdAccount: true };
+    }
+
+    if (existingPasswordAccount.userId !== userId) {
+      throw new Error("That email already belongs to another password sign-in account.");
+    }
+
+    await ctx.db.patch("authAccounts", existingPasswordAccount._id, {
+      secret,
+      ...(user.emailVerificationTime !== undefined ? { emailVerified: email } : {}),
+    });
+    return { userId, createdAccount: false };
   },
 });
 
@@ -489,7 +563,7 @@ export const queueMyEmpireStandingOrdersRefresh = mutation({
       )
       .unique();
 
-    if (turnRow?.state !== "resolving") {
+    if (turnRow?.state === undefined || turnRow.state === "open") {
       const existingRoutes = await ctx.db
         .query("flt_garrison_routes")
         .withIndex("by_gameId_and_empireId", (q) =>
@@ -510,7 +584,7 @@ export const queueMyEmpireStandingOrdersRefresh = mutation({
     return {
       empireId,
       queuedAt: requestedAt,
-      turnResolving: turnRow?.state === "resolving",
+      turnResolving: turnRow?.state !== undefined && turnRow.state !== "open",
     };
   },
 });

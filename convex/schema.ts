@@ -205,6 +205,7 @@ export default defineSchema({
     gameId: v.id("sim_games"),
     turnNumber: v.number(),
     startedAt: v.number(),
+    preparedAt: v.optional(v.number()),
     resolvedAt: v.union(v.number(), v.null()),
     resolvingStartedAt: v.optional(v.number()),
     resolutionPhase: v.optional(
@@ -222,11 +223,46 @@ export default defineSchema({
     state: v.union(
       v.literal("open"),
       v.literal("resolving"),
+      v.literal("preparing"),
+      v.literal("prepared"),
       v.literal("resolved"),
     ),
   })
     .index("by_gameId", ["gameId"])
     .index("by_gameId_and_turnNumber", ["gameId", "turnNumber"]),
+
+  sim_turn_preparations: defineTable({
+    gameId: v.id("sim_games"),
+    turnNumber: v.number(),
+    targetBoundaryAt: v.number(),
+    state: v.union(
+      v.literal("queued"),
+      v.literal("preparing"),
+      v.literal("prepared"),
+      v.literal("committed"),
+      v.literal("stale"),
+    ),
+    requestedAt: v.number(),
+    startedAt: v.optional(v.number()),
+    preparedAt: v.optional(v.number()),
+    committedAt: v.optional(v.number()),
+    resolutionPhase: v.optional(
+      v.union(
+        v.literal("movement"),
+        v.literal("economy"),
+        v.literal("npc"),
+        v.literal("trade"),
+        v.literal("traderSetup"),
+        v.literal("tradeSpawn"),
+        v.literal("garrisons"),
+        v.literal("finalize"),
+      ),
+    ),
+    summaryJson: v.optional(v.string()),
+  })
+    .index("by_gameId", ["gameId"])
+    .index("by_gameId_and_turnNumber", ["gameId", "turnNumber"])
+    .index("by_gameId_and_state", ["gameId", "state"]),
 
   sim_events: defineTable({
     gameId: v.id("sim_games"),

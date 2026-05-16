@@ -19,6 +19,7 @@ import {
   DEFAULT_TURN_DURATION_MS,
   msUntilTurnBoundary,
   resumedTurnStartedAt,
+  scheduledNextTurnStartedAt,
   shiftPausedDeadline,
 } from "./turnTiming";
 import { touchGameMeaningfulActivity } from "./helpers";
@@ -431,6 +432,16 @@ export const startGame = mutation({
       resolvedAt: null,
       state: "open",
     });
+    await ctx.db.insert("sim_turn_preparations", {
+      gameId: args.gameId,
+      turnNumber: 1,
+      targetBoundaryAt: scheduledNextTurnStartedAt({
+        turnStartedAtMs: now,
+        turnDurationMs: game.turnDurationMs,
+      }),
+      state: "queued",
+      requestedAt: now,
+    });
 
     await ctx.db.insert("sim_events", {
       gameId: args.gameId,
@@ -481,6 +492,21 @@ export const stepTurn = mutation({
     }
     if (gameRow.status !== "running") {
       throw new Error("Turn can only advance while the game is running.");
+    }
+
+    const committed = await ctx.runMutation(internal.sim.internal.commitPreparedTurn, {
+      gameId: args.gameId,
+      turnNumber: gameRow.currentTurn,
+    });
+    if (committed.committed) {
+      await touchGameMeaningfulActivity(ctx, args.gameId, {
+        humanAction: true,
+      });
+      return {
+        accepted: true,
+        turnNumber: committed.nextTurn,
+        alreadyResolving: false,
+      };
     }
 
     const begin: {
@@ -629,7 +655,7 @@ export const rebuildStandingOrders = mutation({
         q.eq("gameId", args.gameId).eq("turnNumber", game.currentTurn),
       )
       .unique();
-    if (turnRow?.state === "resolving") {
+    if (turnRow?.state !== undefined && turnRow.state !== "open") {
       throw new Error("Wait until the current turn finishes resolving, then try again.");
     }
 
@@ -709,7 +735,7 @@ export const scheduleNextTurnResolutionDelay = mutation({
         q.eq("gameId", args.gameId).eq("turnNumber", game.currentTurn),
       )
       .unique();
-    if (turnRow?.state === "resolving") {
+    if (turnRow?.state !== undefined && turnRow.state !== "open") {
       throw new Error("Wait until this turn finishes resolving.");
     }
 
@@ -746,8 +772,8 @@ export const pauseGame = mutation({
         q.eq("gameId", args.gameId).eq("turnNumber", game.currentTurn),
       )
       .unique();
-    if (turnRow?.state === "resolving") {
-      throw new Error("Cannot pause while the current turn is resolving.");
+    if (turnRow?.state !== undefined && turnRow.state !== "open") {
+      throw new Error("Cannot pause unless the current turn is open for orders.");
     }
     await ctx.db.patch("sim_games", args.gameId, {
       status: "paused",
@@ -793,6 +819,20 @@ export const resumeGame = mutation({
         await ctx.db.patch("sim_turns", turnRow._id, {
           startedAt: activeTurnStartedAt,
         });
+        const preparationRow = await ctx.db
+          .query("sim_turn_preparations")
+          .withIndex("by_gameId_and_turnNumber", (q) =>
+            q.eq("gameId", args.gameId).eq("turnNumber", game.currentTurn),
+          )
+          .unique();
+        if (preparationRow !== null) {
+          await ctx.db.patch("sim_turn_preparations", preparationRow._id, {
+            targetBoundaryAt: scheduledNextTurnStartedAt({
+              turnStartedAtMs: activeTurnStartedAt,
+              turnDurationMs: game.turnDurationMs,
+            }),
+          });
+        }
       } else if (turnRow !== null) {
         activeTurnStartedAt = turnRow.startedAt;
       }

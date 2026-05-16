@@ -37,7 +37,8 @@ function formatFinishReason(reason: string): string {
 
 function TurnProgressCell(props: {
   now: number;
-  turnState: "open" | "resolving" | "resolved" | null;
+  turnState: "open" | "resolving" | "preparing" | "prepared" | "resolved" | null;
+  preparationState: "queued" | "preparing" | "prepared" | "committed" | "stale" | null;
   resolutionPhase: string | null;
   resolvingStartedAt: number | null;
   turnPausedUntilMs: number | undefined;
@@ -46,6 +47,7 @@ function TurnProgressCell(props: {
   const {
     now,
     turnState,
+    preparationState,
     resolutionPhase,
     resolvingStartedAt,
     turnPausedUntilMs,
@@ -71,17 +73,29 @@ function TurnProgressCell(props: {
   } else if (turnState === null) {
     body = <span className="text-amber-200/90">No turn row</span>;
   } else if (turnState === "open") {
-    body = <span className="text-emerald-200/90">Open — waiting for tick</span>;
+    body = (
+      <div>
+        <span className="text-emerald-200/90">Open — waiting for tick</span>
+        {preparationState === "queued" ? (
+          <div className="mt-0.5 text-xs text-st-muted">Preparation envelope queued</div>
+        ) : null}
+      </div>
+    );
+  } else if (turnState === "prepared") {
+    body = (
+      <span className="text-sky-200/90">Prepared — waiting to commit</span>
+    );
   } else if (turnState === "resolved") {
     body = (
       <span className="text-st-muted">Resolved (unexpected on current turn)</span>
     );
   } else {
+    const stateLabel = turnState === "preparing" ? "Preparing" : "Resolving";
     const phaseLabel = resolutionPhase ?? "…";
     if (resolvingStartedAt === null) {
       body = (
         <div>
-          <span className="text-cyan-200/90">Resolving</span>
+          <span className="text-cyan-200/90">{stateLabel}</span>
           <div className="mt-0.5 font-mono text-xs text-st-muted">{phaseLabel}</div>
         </div>
       );
@@ -100,7 +114,7 @@ function TurnProgressCell(props: {
                   : "text-cyan-200/90"
             }
           >
-            Resolving · {formatDurationMs(elapsed)}
+            {stateLabel} · {formatDurationMs(elapsed)}
           </div>
           <div className="mt-0.5 font-mono text-xs text-st-muted">{phaseLabel}</div>
           {warn ? (
@@ -299,6 +313,7 @@ export function GamesScreen() {
                       <TurnProgressCell
                         now={now}
                         turnState={game.turnState}
+                        preparationState={game.preparationState}
                         resolutionPhase={game.resolutionPhase}
                         resolvingStartedAt={game.resolvingStartedAt}
                         turnPausedUntilMs={game.turnPausedUntilMs}
@@ -311,7 +326,8 @@ export function GamesScreen() {
                     <td className="border-b border-st-border/60 px-3 py-2 text-right">
                       <div className="flex flex-col items-end gap-1">
                         {game.viewerCanForceRetry &&
-                        (game.turnState === "resolving" || game.turnState === "open") ? (
+                        game.turnState !== null &&
+                        game.turnState !== "resolved" ? (
                           <Button
                             type="button"
                             variant="outline"

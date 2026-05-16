@@ -6,7 +6,22 @@ export const attemptResolveTurnBoundary = internalAction({
   args: {
     gameId: v.id("sim_games"),
   },
-  handler: async (ctx, args): Promise<{ started: boolean; turnNumber: number }> => {
+  handler: async (
+    ctx,
+    args,
+  ): Promise<{ committed: boolean; started: boolean; turnNumber: number }> => {
+    const commit: {
+      skipped: boolean;
+      committed: boolean;
+      resolvedTurn: number;
+      nextTurn: number;
+    } = await ctx.runMutation(internal.sim.internal.commitPreparedTurn, {
+      gameId: args.gameId,
+    });
+    if (commit.committed) {
+      return { committed: true, started: false, turnNumber: commit.nextTurn };
+    }
+
     const begin: {
       started: boolean;
       turnNumber: number;
@@ -20,7 +35,7 @@ export const attemptResolveTurnBoundary = internalAction({
         turnNumber: begin.turnNumber,
       });
     }
-    return { started: begin.started, turnNumber: begin.turnNumber };
+    return { committed: false, started: begin.started, turnNumber: begin.turnNumber };
   },
 });
 
@@ -29,7 +44,10 @@ export const resolveTurnJob = internalAction({
     gameId: v.id("sim_games"),
     turnNumber: v.number(),
   },
-  handler: async (ctx, args): Promise<{ resolvedTurn: number; nextTurn: number }> => {
+  handler: async (
+    ctx,
+    args,
+  ): Promise<{ preparedTurn: number; committed: boolean; nextTurn: number }> => {
     await ctx.runMutation(internal.sim.internal.resolveTurnMovementPhase, args);
     await ctx.runMutation(internal.sim.internal.resolveTurnEconomyPhase, args);
     await ctx.runMutation(internal.sim.internal.resolveTurnNpcPhase, args);
@@ -37,11 +55,20 @@ export const resolveTurnJob = internalAction({
     await ctx.runMutation(internal.sim.internal.resolveTurnTraderSetupPhase, args);
     await ctx.runMutation(internal.sim.internal.resolveTurnTradeSpawnPhase, args);
     await ctx.runMutation(internal.sim.internal.resolveTurnGarrisonsPhase, args);
-    const result: {
+    const prepared: {
       skipped: boolean;
+      preparedTurn: number;
+    } = await ctx.runMutation(internal.sim.internal.finalizeTurnPreparation, args);
+    const committed: {
+      skipped: boolean;
+      committed: boolean;
       resolvedTurn: number;
       nextTurn: number;
-    } = await ctx.runMutation(internal.sim.internal.finalizeTurnResolution, args);
-    return { resolvedTurn: result.resolvedTurn, nextTurn: result.nextTurn };
+    } = await ctx.runMutation(internal.sim.internal.commitPreparedTurn, args);
+    return {
+      preparedTurn: prepared.preparedTurn,
+      committed: committed.committed,
+      nextTurn: committed.nextTurn,
+    };
   },
 });

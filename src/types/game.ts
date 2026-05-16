@@ -1,6 +1,6 @@
 export type GameRole = "observer" | "empire" | "trader" | "admin";
 
-export type TurnState = "open" | "resolving" | "resolved";
+export type TurnState = "open" | "resolving" | "preparing" | "prepared" | "resolved";
 
 export type FleetOrderType = "move" | "hold";
 

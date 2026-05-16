@@ -38,7 +38,7 @@ The visible turn is what the player is watching now. The prepared next turn is t
 
 ### Resolution Fields
 
-- `turnState`: `open`, `resolving`, or `resolved` for the row in `sim_turns`.
+- `turnState`: `open`, `preparing`, `prepared`, or `resolved` for the current row in `sim_turns`.
 - `resolutionPhase`: current phase while a turn is resolving.
 - `nextTurnAutoResolveDelayRatio`: optional hold chosen during the visible turn.
 - `turnPausedUntilMs`: optional post-resolution hold deadline.
@@ -51,6 +51,15 @@ These are not implemented in the first slice, but they are the target architectu
 - `preparedAt`
 - `preparedSnapshotId` or equivalent durable staging reference
 - `preparedStatus`: `idle`, `preparing`, `ready`, `stale`
+
+### Preparation Envelope
+
+The controller now also owns a per-turn preparation record separate from `sim_turns`.
+
+- `sim_turn_preparations(gameId, turnNumber)` stores the durable preparation lifecycle for that turn.
+- `targetBoundaryAt` records the boundary this turn is trying to hit.
+- `state` is `queued`, `preparing`, `prepared`, `committed`, or `stale`.
+- This row is the future home for staged next-turn patches or snapshot references.
 
 ## State Diagram
 
@@ -72,12 +81,20 @@ These are not implemented in the first slice, but they are the target architectu
 - UI must derive progress using `turnPausedAtMs`, not client `Date.now()`.
 - On resume, the current turn window is shifted forward by `resumedAt - turnPausedAtMs`.
 
-### Running/Resolving
+### Running/Preparing
 
 - The current turn is no longer open for orders.
-- Resolution phases execute in order.
-- In the current architecture this still computes after the boundary.
-- In the target architecture this work should move earlier and produce a prepared next turn.
+- Preparation phases execute in order.
+- The current implementation now has an explicit `prepared` stop before commit.
+- Because the heavy simulation still mutates live tables in place, safe preparation still begins at or after the visible boundary today.
+- The target architecture is to move this work earlier against staged state and produce a prepared next turn before the boundary.
+
+### Running/Prepared
+
+- Heavy turn work has finished for the current turn.
+- The controller is waiting to commit the next visible turn.
+- If preparation finished before the stored boundary, commit can keep the exact boundary start.
+- If preparation finished late, the next visible turn starts when commit happens instead of being backdated partway complete.
 
 ### Finished
 
@@ -112,15 +129,21 @@ These are not implemented in the first slice, but they are the target architectu
 - Valid only when `status = running`.
 - Reject while `turnPausedUntilMs > now`.
 - Reject while the visible turn duration has not elapsed.
-- Move the current turn row to `state = resolving`.
+- Move the current turn row to `state = preparing`.
 
-### `finalizeTurnResolution`
+### `finalizeTurnPreparation`
+
+- Mark the current turn row as `prepared`.
+- Do not advance `currentTurn` yet.
+
+### `commitPreparedTurn`
 
 - Mark current turn as resolved.
 - Advance `currentTurn`.
 - Insert the next `sim_turns` row.
-- Today this next row is backdated to the prior exact boundary.
-- Target architecture should commit a precomputed next turn here instead of doing heavy work after the boundary.
+- If preparation completed before the stored boundary, the next row keeps that exact boundary start time.
+- If preparation completed late, the next row starts at commit time so the UI never opens a turn already partway elapsed.
+- Target architecture should make this commit cheap by feeding it staged prepared state instead of live in-place mutations.
 
 ## Client Clock Rules
 
@@ -173,7 +196,10 @@ This document is being updated incrementally alongside the implementation.
 - The player/admin turn panels and turn-driven map visuals now read an offset-aware shared turn clock that freezes while paused.
 - The cron driver now polls once per second instead of once per turn duration, which removes scheduler-phase drift as a major source of delayed turn starts.
 - Starting a game, resuming an open turn, and opening a newly resolved turn now schedule an exact wake-up attempt at that turn boundary, with cron kept as the recovery path.
-- Precomputed next-turn staging is not implemented yet.
+- The backend now has an explicit prepare/commit split for the current turn row: heavy work ends in `prepared`, and commit advances the visible turn separately.
+- If commit happens after the stored boundary because preparation finished late, the next turn now starts at commit time instead of opening already partway elapsed.
+- The controller now also creates a durable `sim_turn_preparations` row for each turn so preparation state and future staged payloads can live outside the visible turn row.
+- True pre-boundary preparation is not implemented yet because the simulation still mutates live tables in place and needs staged state first.
 
 ## Built So Far
 
@@ -183,6 +209,9 @@ This document is being updated incrementally alongside the implementation.
 - Turn timeline query fields for status, pause time, and server time snapshots.
 - Turn-driven UI and map consumers moved onto the shared clock.
 - Faster resolution polling plus exact turn-boundary wake-up attempts.
+- Backend prepare/commit state split with `prepared` as an explicit boundary before visible-turn advancement.
+- Late-commit protection so the next turn is not backdated into a partially elapsed timer when preparation overruns.
+- Durable per-turn preparation envelopes keyed by `(gameId, turnNumber)` with a stored target boundary and lifecycle state.
 
 ## What Should Be Working Now
 
@@ -191,10 +220,11 @@ This document is being updated incrementally alongside the implementation.
 - Turn-driven visuals should be less sensitive to browser/server clock drift.
 - Turn resolution should start much closer to the intended boundary instead of waiting for a 10 second cron phase.
 - Starting a game, resuming an open turn, and opening the next turn after resolution should all schedule the next boundary wake-up automatically.
+- If heavy turn work completes late, the UI should no longer open the next turn already partway through its countdown.
 
 ## Still To Build
 
 - Prepared-next-turn staging so heavy simulation work can finish before the visible turn boundary.
-- A cheap commit step that flips to a precomputed next turn instead of resolving after the boundary.
-- Any schema and lifecycle needed to track prepared turn snapshots and readiness.
+- A truly cheap commit step that flips to a precomputed next turn instead of relying on live in-place mutations.
+- The staged payload format itself: patch logs, snapshot references, or another durable representation of next-turn effects.
 - Final cleanup of remaining secondary screens that still derive time independently outside the main turn-clock path.

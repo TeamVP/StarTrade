@@ -521,7 +521,10 @@ export function EmpirePanel(props: { focusEmpireId?: Id<"emp_states"> | null }) 
     activeGame.status === "finished";
   const canPauseOrResume =
     activeGame !== null &&
-    ((activeGame.status === "running" && turnTimeline?.turnState !== "resolving") ||
+    ((activeGame.status === "running" &&
+      (turnTimeline?.turnState === undefined ||
+        turnTimeline.turnState === null ||
+        turnTimeline.turnState === "open")) ||
       activeGame.status === "paused") &&
     (myMembership?.role === "empire" || myMembership?.role === "admin");
 

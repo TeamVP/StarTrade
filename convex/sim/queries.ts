@@ -110,7 +110,8 @@ export const listRunningGamesTurnProgress = query({
       gameStartedAt: number | null;
       turnPausedUntilMs: number | undefined;
       simCronTurnsDisabled: boolean | undefined;
-      turnState: "open" | "resolving" | "resolved" | null;
+      turnState: "open" | "resolving" | "preparing" | "prepared" | "resolved" | null;
+      preparationState: "queued" | "preparing" | "prepared" | "committed" | "stale" | null;
       resolutionPhase: string | null;
       resolvingStartedAt: number | null;
       viewerCanForceRetry: boolean;
@@ -135,6 +136,12 @@ export const listRunningGamesTurnProgress = query({
           q.eq("gameId", game._id).eq("turnNumber", game.currentTurn),
         )
         .unique();
+      const preparationRow = await ctx.db
+        .query("sim_turn_preparations")
+        .withIndex("by_gameId_and_turnNumber", (q) =>
+          q.eq("gameId", game._id).eq("turnNumber", game.currentTurn),
+        )
+        .unique();
 
       result.push({
         gameId: game._id,
@@ -146,6 +153,7 @@ export const listRunningGamesTurnProgress = query({
         turnPausedUntilMs: game.turnPausedUntilMs,
         simCronTurnsDisabled: game.simCronTurnsDisabled,
         turnState: turnRow?.state ?? null,
+        preparationState: preparationRow?.state ?? null,
         resolutionPhase: turnRow?.resolutionPhase ?? null,
         resolvingStartedAt: turnRow?.resolvingStartedAt ?? null,
         viewerCanForceRetry,
@@ -171,6 +179,12 @@ export const getTurnTimelineForGame = query({
         q.eq("gameId", args.gameId).eq("turnNumber", game.currentTurn),
       )
       .unique();
+    const preparationRow = await ctx.db
+      .query("sim_turn_preparations")
+      .withIndex("by_gameId_and_turnNumber", (q) =>
+        q.eq("gameId", args.gameId).eq("turnNumber", game.currentTurn),
+      )
+      .unique();
     return {
       gameStatus: game.status,
       serverNowMs: Date.now(),
@@ -179,6 +193,9 @@ export const getTurnTimelineForGame = query({
       turnStartedAt: turnRow?.startedAt ?? null,
       turnPausedAtMs: game.turnPausedAtMs,
       turnState: turnRow?.state ?? null,
+      turnPreparationState: preparationRow?.state ?? null,
+      turnPreparationBoundaryAt: preparationRow?.targetBoundaryAt ?? null,
+      turnPreparedAtMs: preparationRow?.preparedAt ?? null,
       resolutionPhase: turnRow?.resolutionPhase ?? null,
       simCronTurnsDisabled: game.simCronTurnsDisabled === true,
       turnPausedUntilMs: game.turnPausedUntilMs,

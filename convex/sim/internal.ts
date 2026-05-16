@@ -32,6 +32,7 @@ import { travelTurnsFromLinkCost } from "./fleetDispatch";
 import { evaluateGameFinalization } from "./finalization";
 import { recordGameTurnResolved } from "./helpers";
 import {
+  committedNextTurnStartedAt,
   msUntilTurnBoundary,
   scheduledNextTurnStartedAt,
   turnDurationHasElapsed,
@@ -1658,7 +1659,7 @@ export const appendEvent = internalMutation({
   },
 });
 
-/** If a turn stays `resolving` longer than this, cron may schedule another `resolveTurnJob`. */
+/** If a turn stays `preparing` longer than this, cron may schedule another `resolveTurnJob`. */
 const TURN_RESOLUTION_STALE_MS = 3 * 60_000;
 const RESOLUTION_PHASES = [
   "movement",
@@ -1692,6 +1693,10 @@ function readTurnResolutionPhase(value: string | undefined): TurnResolutionPhase
   return "movement";
 }
 
+function isTurnPreparingState(state: Doc<"sim_turns">["state"]): boolean {
+  return state === "preparing" || state === "resolving";
+}
+
 async function loadTurnRow(
   ctx: MutationCtx,
   gameId: Id<"sim_games">,
@@ -1703,6 +1708,63 @@ async function loadTurnRow(
       q.eq("gameId", gameId).eq("turnNumber", turnNumber),
     )
     .unique();
+}
+
+async function loadTurnPreparationRow(
+  ctx: MutationCtx,
+  gameId: Id<"sim_games">,
+  turnNumber: number,
+): Promise<Doc<"sim_turn_preparations"> | null> {
+  return await ctx.db
+    .query("sim_turn_preparations")
+    .withIndex("by_gameId_and_turnNumber", (q) =>
+      q.eq("gameId", gameId).eq("turnNumber", turnNumber),
+    )
+    .unique();
+}
+
+async function upsertTurnPreparationRow(
+  ctx: MutationCtx,
+  params: {
+    gameId: Id<"sim_games">;
+    turnNumber: number;
+    targetBoundaryAt: number;
+    state: Doc<"sim_turn_preparations">["state"];
+    requestedAt?: number;
+    startedAt?: number;
+    preparedAt?: number;
+    committedAt?: number;
+    resolutionPhase?: TurnResolutionPhase;
+    summaryJson?: string;
+  },
+): Promise<Doc<"sim_turn_preparations">["_id"]> {
+  const existing = await loadTurnPreparationRow(ctx, params.gameId, params.turnNumber);
+  if (existing !== null) {
+    await ctx.db.patch("sim_turn_preparations", existing._id, {
+      targetBoundaryAt: params.targetBoundaryAt,
+      state: params.state,
+      requestedAt: params.requestedAt ?? existing.requestedAt,
+      startedAt: params.startedAt,
+      preparedAt: params.preparedAt,
+      committedAt: params.committedAt,
+      resolutionPhase: params.resolutionPhase,
+      summaryJson: params.summaryJson,
+    });
+    return existing._id;
+  }
+
+  return await ctx.db.insert("sim_turn_preparations", {
+    gameId: params.gameId,
+    turnNumber: params.turnNumber,
+    targetBoundaryAt: params.targetBoundaryAt,
+    state: params.state,
+    requestedAt: params.requestedAt ?? Date.now(),
+    startedAt: params.startedAt,
+    preparedAt: params.preparedAt,
+    committedAt: params.committedAt,
+    resolutionPhase: params.resolutionPhase,
+    summaryJson: params.summaryJson,
+  });
 }
 
 async function loadResolutionPhase(
@@ -1736,8 +1798,8 @@ async function loadResolutionPhase(
   if (turn.state === "resolved") {
     return null;
   }
-  if (turn.state !== "resolving") {
-    throw new Error("Turn is not locked for resolution.");
+  if (!isTurnPreparingState(turn.state)) {
+    throw new Error("Turn is not locked for preparation.");
   }
 
   const currentPhase = readTurnResolutionPhase(turn.resolutionPhase);
@@ -1761,6 +1823,13 @@ async function advanceResolutionPhase(
   await ctx.db.patch("sim_turns", turn._id, {
     resolutionPhase: nextPhase,
   });
+  const preparation = await loadTurnPreparationRow(ctx, turn.gameId, turn.turnNumber);
+  if (preparation !== null) {
+    await ctx.db.patch("sim_turn_preparations", preparation._id, {
+      state: "preparing",
+      resolutionPhase: nextPhase,
+    });
+  }
 }
 
 /**
@@ -1775,11 +1844,16 @@ export const prepareTurnResolutionRetry = internalMutation({
       return;
     }
     const turn = await loadTurnRow(ctx, args.gameId, game.currentTurn);
-    if (turn === null || turn.state !== "resolving") {
+    if (turn === null || !isTurnPreparingState(turn.state)) {
       return;
     }
     const aged = Date.now() - TURN_RESOLUTION_STALE_MS - 1;
     await ctx.db.patch("sim_turns", turn._id, { resolvingStartedAt: aged });
+    // Also mark the preparation envelope as stale so the controller can re-queue it.
+    const preparation = await loadTurnPreparationRow(ctx, args.gameId, game.currentTurn);
+    if (preparation !== null) {
+      await ctx.db.patch("sim_turn_preparations", preparation._id, { state: "stale" });
+    }
   },
 });
 
@@ -1813,19 +1887,40 @@ export const beginTurnResolution = internalMutation({
     const turnNumber = game.currentTurn;
     const turn = await loadTurnRow(ctx, args.gameId, turnNumber);
     if (turn === null) {
+      const targetBoundaryAt = scheduledNextTurnStartedAt({
+        turnStartedAtMs: now,
+        turnDurationMs: game.turnDurationMs,
+      });
       await ctx.db.insert("sim_turns", {
         gameId: args.gameId,
         turnNumber,
         startedAt: now,
+        preparedAt: undefined,
         resolvedAt: null,
-        state: "resolving",
+        state: "preparing",
         resolvingStartedAt: now,
         resolutionPhase: "movement",
+      });
+      await upsertTurnPreparationRow(ctx, {
+        gameId: args.gameId,
+        turnNumber,
+        targetBoundaryAt,
+        state: "preparing",
+        requestedAt: now,
+        startedAt: now,
+        preparedAt: undefined,
+        committedAt: undefined,
+        resolutionPhase: "movement",
+        summaryJson: undefined,
       });
       return { started: true, turnNumber, alreadyResolving: false };
     }
 
     if (turn.state === "resolved") {
+      return { started: false, turnNumber, alreadyResolving: false };
+    }
+
+    if (turn.state === "prepared") {
       return { started: false, turnNumber, alreadyResolving: false };
     }
 
@@ -1841,17 +1936,34 @@ export const beginTurnResolution = internalMutation({
     }
 
     if (
-      turn.state === "resolving" &&
+      isTurnPreparingState(turn.state) &&
       turn.resolvingStartedAt !== undefined &&
       now - turn.resolvingStartedAt < TURN_RESOLUTION_STALE_MS
     ) {
       return { started: false, turnNumber, alreadyResolving: true };
     }
 
+    const targetBoundaryAt = scheduledNextTurnStartedAt({
+      turnStartedAtMs: turn.startedAt,
+      turnDurationMs: game.turnDurationMs,
+    });
     await ctx.db.patch("sim_turns", turn._id, {
-      state: "resolving",
+      state: "preparing",
       resolvingStartedAt: now,
       resolutionPhase: readTurnResolutionPhase(turn.resolutionPhase),
+      preparedAt: undefined,
+    });
+    await upsertTurnPreparationRow(ctx, {
+      gameId: args.gameId,
+      turnNumber,
+      targetBoundaryAt,
+      state: "preparing",
+      requestedAt: now,
+      startedAt: now,
+      preparedAt: undefined,
+      committedAt: undefined,
+      resolutionPhase: readTurnResolutionPhase(turn.resolutionPhase),
+      summaryJson: undefined,
     });
     return { started: true, turnNumber, alreadyResolving: false };
   },
@@ -2030,35 +2142,172 @@ export const resolveTurnGarrisonsPhase = internalMutation({
   },
 });
 
-export const finalizeTurnResolution = internalMutation({
+export const finalizeTurnPreparation = internalMutation({
   args: { gameId: v.id("sim_games"), turnNumber: v.number() },
   handler: async (
     ctx,
     args,
-  ): Promise<{ skipped: boolean; resolvedTurn: number; nextTurn: number }> => {
+  ): Promise<{ skipped: boolean; preparedTurn: number }> => {
     const phase = await loadResolutionPhase(ctx, { ...args, phase: "finalize" });
     if (phase === null) {
-      const game = await ctx.db.get("sim_games", args.gameId);
       return {
         skipped: true,
-        resolvedTurn: args.turnNumber,
-        nextTurn: game?.currentTurn ?? args.turnNumber,
+        preparedTurn: args.turnNumber,
       };
     }
 
     const t = args.turnNumber;
-    const nextTurn = t + 1;
     await cleanupFleetOrdersForTurn(ctx, {
       gameId: args.gameId,
       turnNumber: t,
     });
 
-    const resolvedAt = Date.now();
+    const preparedAt = Date.now();
+    const preparation = await loadTurnPreparationRow(ctx, args.gameId, args.turnNumber);
+    const targetBoundaryAt =
+      preparation?.targetBoundaryAt ??
+      scheduledNextTurnStartedAt({
+        turnStartedAtMs: phase.turn.startedAt,
+        turnDurationMs: phase.game.turnDurationMs,
+      });
     await ctx.db.patch("sim_turns", phase.turn._id, {
+      preparedAt,
+      state: "prepared",
+      resolutionPhase: undefined,
+    });
+
+    await upsertTurnPreparationRow(ctx, {
+      gameId: args.gameId,
+      turnNumber: args.turnNumber,
+      targetBoundaryAt,
+      state: "prepared",
+      requestedAt: preparation?.requestedAt ?? preparedAt,
+      startedAt: preparation?.startedAt,
+      preparedAt,
+      committedAt: undefined,
+      resolutionPhase: undefined,
+      summaryJson: JSON.stringify({ preparedAt, targetBoundaryAt }),
+    });
+
+    return { skipped: false, preparedTurn: t };
+  },
+});
+
+export const commitPreparedTurn = internalMutation({
+  args: { gameId: v.id("sim_games"), turnNumber: v.optional(v.number()) },
+  handler: async (
+    ctx,
+    args,
+  ): Promise<{ skipped: boolean; committed: boolean; resolvedTurn: number; nextTurn: number }> => {
+    const game = await ctx.db.get("sim_games", args.gameId);
+    if (game === null) {
+      return {
+        skipped: true,
+        committed: false,
+        resolvedTurn: args.turnNumber ?? 0,
+        nextTurn: args.turnNumber ?? 0,
+      };
+    }
+    if (game.status !== "running") {
+      return {
+        skipped: true,
+        committed: false,
+        resolvedTurn: args.turnNumber ?? game.currentTurn,
+        nextTurn: game.currentTurn,
+      };
+    }
+
+    const turnNumber = args.turnNumber ?? game.currentTurn;
+
+    const now = Date.now();
+    if (game.turnPausedUntilMs !== undefined && now < game.turnPausedUntilMs) {
+      return {
+        skipped: true,
+        committed: false,
+        resolvedTurn: turnNumber,
+        nextTurn: game.currentTurn,
+      };
+    }
+
+    if (game.currentTurn > turnNumber) {
+      return {
+        skipped: true,
+        committed: false,
+        resolvedTurn: turnNumber,
+        nextTurn: game.currentTurn,
+      };
+    }
+    if (game.currentTurn !== turnNumber) {
+      throw new Error(
+        `Turn commit expected turn ${turnNumber}, but game is on turn ${game.currentTurn}.`,
+      );
+    }
+
+    const turn = await loadTurnRow(ctx, args.gameId, turnNumber);
+    if (turn === null || turn.state !== "prepared") {
+      return {
+        skipped: true,
+        committed: false,
+        resolvedTurn: turnNumber,
+        nextTurn: game.currentTurn,
+      };
+    }
+
+    if (
+      !turnDurationHasElapsed({
+        nowMs: now,
+        turnStartedAtMs: turn.startedAt,
+        turnDurationMs: game.turnDurationMs,
+      })
+    ) {
+      return {
+        skipped: true,
+        committed: false,
+        resolvedTurn: turnNumber,
+        nextTurn: game.currentTurn,
+      };
+    }
+
+    const t = turnNumber;
+    const nextTurn = t + 1;
+    const resolvedAt = now;
+    const preparation = await loadTurnPreparationRow(ctx, args.gameId, t);
+    const targetBoundaryAt =
+      preparation?.targetBoundaryAt ??
+      scheduledNextTurnStartedAt({
+        turnStartedAtMs: turn.startedAt,
+        turnDurationMs: game.turnDurationMs,
+      });
+    const effectivePreparedAt = preparation?.preparedAt ?? turn.preparedAt ?? null;
+    const nextTurnStartedAt = committedNextTurnStartedAt({
+      turnStartedAtMs: turn.startedAt,
+      turnDurationMs: game.turnDurationMs,
+      preparedAtMs: turn.preparedAt,
+      committedAtMs: resolvedAt,
+    });
+
+    await ctx.db.patch("sim_turns", turn._id, {
       resolvedAt,
       state: "resolved",
-      resolutionPhase: undefined,
       resolvingStartedAt: undefined,
+    });
+
+    await upsertTurnPreparationRow(ctx, {
+      gameId: args.gameId,
+      turnNumber: t,
+      targetBoundaryAt,
+      state: "committed",
+      requestedAt: preparation?.requestedAt ?? resolvedAt,
+      startedAt: preparation?.startedAt,
+      preparedAt: effectivePreparedAt ?? undefined,
+      committedAt: resolvedAt,
+      resolutionPhase: undefined,
+      summaryJson: JSON.stringify({
+        preparedAt: effectivePreparedAt,
+        committedAt: resolvedAt,
+        // Negative means prepared ahead of boundary; positive means overrun.
+        commitLagMs: (effectivePreparedAt ?? resolvedAt) - targetBoundaryAt,
+      }),
     });
 
     await recordGameTurnResolved(ctx, args.gameId, resolvedAt);
@@ -2066,18 +2315,10 @@ export const finalizeTurnResolution = internalMutation({
     const winner = await finishGameIfSingleEmpireRemains(ctx, args.gameId, t);
     if (winner !== null) {
       await evaluateGameFinalization(ctx, { gameId: args.gameId });
-      return { skipped: false, resolvedTurn: t, nextTurn: t };
+      return { skipped: false, committed: true, resolvedTurn: t, nextTurn: t };
     }
 
-    const gameBeforeAdvance = await ctx.db.get("sim_games", args.gameId);
-    if (gameBeforeAdvance === null) {
-      throw new Error("Game not found.");
-    }
-    const nextTurnStartedAt = scheduledNextTurnStartedAt({
-      turnStartedAtMs: phase.turn.startedAt,
-      turnDurationMs: gameBeforeAdvance.turnDurationMs,
-    });
-    const scheduledRatio = gameBeforeAdvance.nextTurnAutoResolveDelayRatio;
+    const scheduledRatio = game.nextTurnAutoResolveDelayRatio;
     const gamePatch: {
       currentTurn: number;
       nextTurnAutoResolveDelayRatio?: undefined;
@@ -2087,7 +2328,7 @@ export const finalizeTurnResolution = internalMutation({
       gamePatch.nextTurnAutoResolveDelayRatio = undefined;
       const r = Math.max(0, Math.min(1, scheduledRatio));
       if (r > 0) {
-        const delayMs = Math.round(r * Math.max(1, gameBeforeAdvance.turnDurationMs));
+        const delayMs = Math.round(r * Math.max(1, game.turnDurationMs));
         gamePatch.turnPausedUntilMs = nextTurnStartedAt + delayMs;
       } else {
         gamePatch.turnPausedUntilMs = undefined;
@@ -2105,6 +2346,21 @@ export const finalizeTurnResolution = internalMutation({
         state: "open",
       });
     }
+    await upsertTurnPreparationRow(ctx, {
+      gameId: args.gameId,
+      turnNumber: nextTurn,
+      targetBoundaryAt: scheduledNextTurnStartedAt({
+        turnStartedAtMs: nextTurnStartedAt,
+        turnDurationMs: game.turnDurationMs,
+      }),
+      state: "queued",
+      requestedAt: resolvedAt,
+      startedAt: undefined,
+      preparedAt: undefined,
+      committedAt: undefined,
+      resolutionPhase: undefined,
+      summaryJson: undefined,
+    });
 
     await ctx.db.insert("sim_events", {
       gameId: args.gameId,
@@ -2122,7 +2378,7 @@ export const finalizeTurnResolution = internalMutation({
       msUntilTurnBoundary({
         nowMs: resolvedAt,
         turnStartedAtMs: nextTurnStartedAt,
-        turnDurationMs: gameBeforeAdvance.turnDurationMs,
+        turnDurationMs: game.turnDurationMs,
       }),
       internal.sim.actions.attemptResolveTurnBoundary,
       { gameId: args.gameId },
@@ -2130,10 +2386,11 @@ export const finalizeTurnResolution = internalMutation({
 
     await evaluateGameFinalization(ctx, { gameId: args.gameId });
 
-    return { skipped: false, resolvedTurn: t, nextTurn };
+    return { skipped: false, committed: true, resolvedTurn: t, nextTurn };
   },
 });
 
+/** @deprecated Dead code — superseded by the phase-split prepare/commit pipeline. */
 export const resolveTurn = internalMutation({
   args: { gameId: v.id("sim_games") },
   handler: async (ctx, args): Promise<{ resolvedTurn: number; nextTurn: number }> => {

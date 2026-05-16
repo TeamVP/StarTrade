@@ -24,6 +24,14 @@ export const tickRunningGames = internalMutation({
       }
 
       try {
+        const commit = await ctx.runMutation(internal.sim.internal.commitPreparedTurn, {
+          gameId: game._id,
+          turnNumber: game.currentTurn,
+        });
+        if (commit.committed) {
+          stepped += 1;
+          continue;
+        }
         const begin: {
           started: boolean;
           turnNumber: number;

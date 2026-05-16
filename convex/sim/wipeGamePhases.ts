@@ -17,6 +17,7 @@ export const WIPE_GAME_PHASES = [
   "gal_systems",
   "emp_states",
   "sim_events",
+  "sim_turn_preparations",
   "sim_turns",
   "usr_game_roles",
 ] as const;

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
 import {
+  committedNextTurnStartedAt,
   msUntilTurnBoundary,
   resumedTurnStartedAt,
   scheduledNextTurnStartedAt,
@@ -65,5 +66,27 @@ describe("turnDurationHasElapsed", () => {
         turnDurationMs: 10_000,
       }),
     ).toBe(2_750);
+  });
+
+  test("keeps the exact boundary when preparation finished before commit time", () => {
+    expect(
+      committedNextTurnStartedAt({
+        turnStartedAtMs: 5_000,
+        turnDurationMs: 10_000,
+        preparedAtMs: 14_750,
+        committedAtMs: 15_000,
+      }),
+    ).toBe(15_000);
+  });
+
+  test("starts the next turn at commit time when preparation finishes late", () => {
+    expect(
+      committedNextTurnStartedAt({
+        turnStartedAtMs: 5_000,
+        turnDurationMs: 10_000,
+        preparedAtMs: 15_900,
+        committedAtMs: 15_900,
+      }),
+    ).toBe(15_900);
   });
 });

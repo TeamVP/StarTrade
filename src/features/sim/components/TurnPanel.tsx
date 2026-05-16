@@ -64,7 +64,10 @@ export function TurnPanel() {
     api.sim.queries.getDurableGameResult,
     gameId !== undefined && activeGame?.status === "finished" ? { gameId } : "skip",
   );
-  const turnResolving = timeline?.turnState === "resolving";
+  const turnBusy =
+    timeline?.turnState !== undefined &&
+    timeline.turnState !== null &&
+    timeline.turnState !== "open";
   const turnGameStatus = timeline?.gameStatus ?? activeGame?.status ?? null;
   const { alignedNowMs, effectiveNowMs } = useTurnClock({
     gameStatus: turnGameStatus,
@@ -72,7 +75,7 @@ export function TurnPanel() {
     serverNowMs: timeline?.serverNowMs,
     tickMs: 200,
   });
-  const canRebuildModalActions = !turnResolving && rebuildPendingMode === null;
+  const canRebuildModalActions = !turnBusy && rebuildPendingMode === null;
   const isGameAdmin = myRoles?.some((role) => role.role === "admin") ?? false;
   const canResign = (myRoles?.length ?? 0) > 0 && gameId !== undefined;
   const canPauseOrResumeClock =
@@ -84,20 +87,20 @@ export function TurnPanel() {
     activeGame !== null &&
     activeGame.status === "running" &&
     gameId !== undefined &&
-    !turnResolving;
+    !turnBusy;
   const canRebuildOrders =
     activeGame !== null &&
     (activeGame.status === "running" || activeGame.status === "paused") &&
     gameId !== undefined &&
-    !turnResolving;
+    !turnBusy;
   const canScheduleNextTurnDelay =
     activeGame !== null &&
     (activeGame.status === "running" || activeGame.status === "paused") &&
     gameId !== undefined &&
-    !turnResolving;
+    !turnBusy;
   const canPauseOrResume =
     activeGame !== null &&
-    ((activeGame.status === "running" && timeline?.turnState !== "resolving") ||
+    ((activeGame.status === "running" && !turnBusy) ||
       activeGame.status === "paused") &&
     gameId !== undefined &&
     canPauseOrResumeClock;
@@ -245,9 +248,9 @@ export function TurnPanel() {
     mode: "rebuildCurrent" | "buildBlank" | "rebuildAll",
   ) {
     if (!gameId) return;
-    if (turnResolving) {
+    if (turnBusy) {
       setRebuildModalError(
-        "This match is resolving a turn. Try again when the current turn is open for orders.",
+        "This match is preparing or committing a turn. Try again when the current turn is open for orders.",
       );
       return;
     }
@@ -287,15 +290,15 @@ export function TurnPanel() {
   const pendingDelayRatio = timeline?.nextTurnAutoResolveDelayRatio;
 
   useEffect(() => {
-    if (!rebuildModalOpen || !turnResolving) return;
+    if (!rebuildModalOpen || !turnBusy) return;
     const id = window.setTimeout(() => {
       setRebuildAllAwaitingInModalConfirm(false);
       setRebuildModalError(
-        "This match started resolving a turn. Wait until that finishes, then try again if you still need to change standing orders.",
+        "This match started preparing or committing a turn. Wait until that finishes, then try again if you still need to change standing orders.",
       );
     }, 0);
     return () => window.clearTimeout(id);
-  }, [rebuildModalOpen, turnResolving]);
+  }, [rebuildModalOpen, turnBusy]);
 
   const onPlanningBarPointer = useCallback(
     async (clientX: number) => {
@@ -351,11 +354,13 @@ export function TurnPanel() {
         <dd className="text-right">{activeGame?.currentTurn ?? "—"}</dd>
         <dt className="text-st-muted">Retention</dt>
         <dd className="text-right capitalize">{activeGame?.retentionClass ?? "official"}</dd>
-        {turnResolving ? (
+        {turnBusy ? (
           <>
-            <dt className="text-st-muted">Resolution</dt>
+            <dt className="text-st-muted">Turn work</dt>
             <dd className="text-right capitalize">
-              {timeline?.resolutionPhase ?? "working"}
+              {timeline?.turnState === "prepared"
+                ? "Prepared"
+                : timeline?.resolutionPhase ?? timeline?.turnState ?? "working"}
             </dd>
           </>
         ) : null}
@@ -505,8 +510,8 @@ export function TurnPanel() {
                   Elapsed {formatMsAsClock(planElapsedFrac * planDurationMs)} /{" "}
                   {formatMsAsClock(planDurationMs)}
                 </>
-              ) : turnResolving ? (
-                "Resolving — bar updates next open turn"
+              ) : turnBusy ? (
+                "Turn busy — bar updates next open turn"
               ) : (
                 "Open a turn to see the timer"
               )}
@@ -578,7 +583,7 @@ export function TurnPanel() {
           className="w-full"
           onClick={() => void onStepTurn()}
         >
-          {turnResolving ? "Resolving turn..." : stepBusy ? "Queuing..." : "Step turn"}
+          {turnBusy ? "Turn busy..." : stepBusy ? "Queuing..." : "Step turn"}
         </Button>
         {stepError !== null ? (
           <p className="text-xs text-red-600 dark:text-red-400" role="alert">

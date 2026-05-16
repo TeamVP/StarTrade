@@ -429,7 +429,10 @@ export const killGame = mutation({
 
 export const forceRetryTurnResolution = mutation({
   args: { gameId: v.id("sim_games") },
-  handler: async (ctx, args) => {
+  handler: async (
+    ctx,
+    args,
+  ): Promise<{ started: boolean; turnNumber: number; alreadyResolving: boolean }> => {
     const userId = await getAuthUserId(ctx);
     if (userId === null) {
       throw new Error("Authentication required.");
@@ -439,6 +442,22 @@ export const forceRetryTurnResolution = mutation({
     await ctx.runMutation(internal.sim.internal.prepareTurnResolutionRetry, {
       gameId: args.gameId,
     });
+
+    const committed: {
+      skipped: boolean;
+      committed: boolean;
+      resolvedTurn: number;
+      nextTurn: number;
+    } = await ctx.runMutation(internal.sim.internal.commitPreparedTurn, {
+      gameId: args.gameId,
+    });
+    if (committed.committed) {
+      return {
+        started: true,
+        turnNumber: committed.nextTurn,
+        alreadyResolving: false,
+      };
+    }
 
     const begin: {
       started: boolean;
