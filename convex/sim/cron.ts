@@ -62,7 +62,7 @@ export const tickRunningGames = internalMutation({
               turnDurationMs: game.turnDurationMs,
             });
           if (stalePreparedTurn) {
-            await ctx.runMutation(internal.sim.internal.prepareTurnResolutionRetry, {
+            await ctx.runMutation(internal.sim.internal.resetCurrentTurnPreparationForRecovery, {
               gameId: game._id,
             });
             const retried: {
