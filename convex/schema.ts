@@ -57,6 +57,8 @@ export default defineSchema({
     abandonedAt: v.optional(v.number()),
     cleanupQueuedAt: v.optional(v.number()),
     cleanupCompletedAt: v.optional(v.number()),
+    /** Exact real-time timestamp when the visible turn clock was paused. */
+    turnPausedAtMs: v.optional(v.number()),
     /** Global turn timer pause (real-time ms); cron skips resolve while Date.now() < this. */
     turnPausedUntilMs: v.optional(v.number()),
     /**

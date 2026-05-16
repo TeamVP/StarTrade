@@ -5,7 +5,11 @@ import { DEFAULT_TURN_DURATION_MS } from "../../../../convex/sim/turnTiming";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { useGalaxyData } from "@/features/galaxy/hooks/useGalaxyData";
-import { formatMsAsClock } from "@/lib/time/turnClock";
+import {
+  formatMsAsClock,
+  getTurnElapsedFraction,
+} from "@/lib/time/turnClock";
+import { useTurnClock } from "@/lib/time/useTurnClock";
 
 export function TurnPanel() {
   const { activeGame } = useGalaxyData();
@@ -45,7 +49,6 @@ export function TurnPanel() {
   const [pauseError, setPauseError] = useState<string | null>(null);
   const [scheduleBusy, setScheduleBusy] = useState(false);
   const [scheduleError, setScheduleError] = useState<string | null>(null);
-  const [barNow, setBarNow] = useState(() => Date.now());
   const planBarRef = useRef<HTMLDivElement | null>(null);
 
   const gameId = activeGame?._id;
@@ -62,6 +65,13 @@ export function TurnPanel() {
     gameId !== undefined && activeGame?.status === "finished" ? { gameId } : "skip",
   );
   const turnResolving = timeline?.turnState === "resolving";
+  const turnGameStatus = timeline?.gameStatus ?? activeGame?.status ?? null;
+  const { alignedNowMs, effectiveNowMs } = useTurnClock({
+    gameStatus: turnGameStatus,
+    turnPausedAtMs: timeline?.turnPausedAtMs ?? null,
+    serverNowMs: timeline?.serverNowMs,
+    tickMs: 200,
+  });
   const canRebuildModalActions = !turnResolving && rebuildPendingMode === null;
   const isGameAdmin = myRoles?.some((role) => role.role === "admin") ?? false;
   const canResign = (myRoles?.length ?? 0) > 0 && gameId !== undefined;
@@ -87,7 +97,8 @@ export function TurnPanel() {
     !turnResolving;
   const canPauseOrResume =
     activeGame !== null &&
-    (activeGame.status === "running" || activeGame.status === "paused") &&
+    ((activeGame.status === "running" && timeline?.turnState !== "resolving") ||
+      activeGame.status === "paused") &&
     gameId !== undefined &&
     canPauseOrResumeClock;
 
@@ -257,10 +268,16 @@ export function TurnPanel() {
   const turnOpen = timeline?.turnState === "open";
   const planDurationMs = Math.max(1, timeline?.turnDurationMs ?? DEFAULT_TURN_DURATION_MS);
   const planStartedAt = timeline?.turnStartedAt ?? null;
-  const nowMs = barNow;
+  const nowMs = effectiveNowMs;
   const planElapsedFrac =
-    turnOpen && planStartedAt !== null
-      ? Math.max(0, Math.min(1, (nowMs - planStartedAt) / planDurationMs))
+    turnOpen
+      ? getTurnElapsedFraction({
+          turnStartedAtMs: planStartedAt,
+          turnDurationMs: planDurationMs,
+          nowMs: alignedNowMs,
+          gameStatus: turnGameStatus,
+          turnPausedAtMs: timeline?.turnPausedAtMs ?? null,
+        }) ?? 0
       : 0;
   const pauseUntilMs = timeline?.turnPausedUntilMs;
   const pauseRemainingMs =
@@ -268,14 +285,6 @@ export function TurnPanel() {
       ? Math.ceil(pauseUntilMs - nowMs)
       : 0;
   const pendingDelayRatio = timeline?.nextTurnAutoResolveDelayRatio;
-
-  useEffect(() => {
-    if (!turnOpen || planStartedAt === null) return;
-    const id = window.setInterval(() => {
-      setBarNow(Date.now());
-    }, 200);
-    return () => window.clearInterval(id);
-  }, [turnOpen, planStartedAt]);
 
   useEffect(() => {
     if (!rebuildModalOpen || !turnResolving) return;

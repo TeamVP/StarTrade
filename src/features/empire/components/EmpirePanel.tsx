@@ -8,6 +8,8 @@ import { Button } from "@/components/ui/button";
 import { useGalaxyMapNav } from "@/features/galaxy/context/GalaxyMapNavContext";
 import { useActiveGame } from "@/features/galaxy/hooks/useActiveGame";
 import { formatPopulationPeople } from "@/lib/populationFormat";
+import { getTurnElapsedFraction } from "@/lib/time/turnClock";
+import { useTurnClock } from "@/lib/time/useTurnClock";
 
 const STRATEGIC_LEVEL_ORDER = [
   "lowest",
@@ -451,7 +453,6 @@ export function EmpirePanel(props: { focusEmpireId?: Id<"emp_states"> | null }) 
   const [gameActionError, setGameActionError] = useState<string | null>(null);
   const [pauseBusy, setPauseBusy] = useState(false);
   const [pauseError, setPauseError] = useState<string | null>(null);
-  const [barNow, setBarNow] = useState(() => Date.now());
 
   const turnTimeline = useQuery(
     api.sim.queries.getTurnTimelineForGame,
@@ -460,26 +461,25 @@ export function EmpirePanel(props: { focusEmpireId?: Id<"emp_states"> | null }) 
 
   const turnStartedAt = turnTimeline?.turnStartedAt ?? null;
   const turnDurationMs = turnTimeline?.turnDurationMs ?? null;
-  const gameStatus = activeGame?.status ?? null;
-
-  // Snap barNow to now whenever a new turn opens so the bar always resets to full.
-  useEffect(() => {
-    if (turnStartedAt !== null) setBarNow(Date.now());
-  }, [turnStartedAt]);
-
-  // Advance the clock only while the game is running (stop ticking when paused).
-  useEffect(() => {
-    if (gameStatus !== "running" || turnStartedAt === null) return;
-    const id = window.setInterval(() => setBarNow(Date.now()), 250);
-    return () => window.clearInterval(id);
-  }, [gameStatus, turnStartedAt]);
+  const turnPausedAtMs = turnTimeline?.turnPausedAtMs ?? null;
+  const gameStatus = turnTimeline?.gameStatus ?? activeGame?.status ?? null;
+  const { alignedNowMs } = useTurnClock({
+    gameStatus,
+    turnPausedAtMs,
+    serverNowMs: turnTimeline?.serverNowMs,
+  });
 
   // Fraction elapsed in the current turn window [0..1]; visible during running AND paused.
   const turnElapsedFrac = useMemo(() => {
     if (gameStatus !== "running" && gameStatus !== "paused") return null;
-    if (turnStartedAt === null || turnDurationMs === null || turnDurationMs <= 0) return null;
-    return Math.min(1, Math.max(0, (barNow - turnStartedAt) / turnDurationMs));
-  }, [gameStatus, barNow, turnStartedAt, turnDurationMs]);
+    return getTurnElapsedFraction({
+      turnStartedAtMs: turnStartedAt,
+      turnDurationMs,
+      nowMs: alignedNowMs,
+      gameStatus,
+      turnPausedAtMs,
+    });
+  }, [gameStatus, alignedNowMs, turnStartedAt, turnDurationMs, turnPausedAtMs]);
 
   type EmpireRow = (typeof empires)[number];
 
@@ -521,7 +521,8 @@ export function EmpirePanel(props: { focusEmpireId?: Id<"emp_states"> | null }) 
     activeGame.status === "finished";
   const canPauseOrResume =
     activeGame !== null &&
-    (activeGame.status === "running" || activeGame.status === "paused") &&
+    ((activeGame.status === "running" && turnTimeline?.turnState !== "resolving") ||
+      activeGame.status === "paused") &&
     (myMembership?.role === "empire" || myMembership?.role === "admin");
 
   async function onPauseToggle() {

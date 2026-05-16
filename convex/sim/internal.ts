@@ -31,7 +31,11 @@ import { findLinkBetweenSystems } from "../gal/linkUtils";
 import { travelTurnsFromLinkCost } from "./fleetDispatch";
 import { evaluateGameFinalization } from "./finalization";
 import { recordGameTurnResolved } from "./helpers";
-import { scheduledNextTurnStartedAt, turnDurationHasElapsed } from "./turnTiming";
+import {
+  msUntilTurnBoundary,
+  scheduledNextTurnStartedAt,
+  turnDurationHasElapsed,
+} from "./turnTiming";
 
 /** Max en-route fleet rows scanned for arrivals (indexed `by_gameId_and_status`). */
 const MAX_ENROUTE_FLEETS_SCAN = 768;
@@ -2113,6 +2117,16 @@ export const finalizeTurnResolution = internalMutation({
       summary: `Turn ${t} resolved → turn ${nextTurn}`,
       payload: JSON.stringify({ resolvedTurn: t, nextTurn }),
     });
+
+    await ctx.scheduler.runAfter(
+      msUntilTurnBoundary({
+        nowMs: resolvedAt,
+        turnStartedAtMs: nextTurnStartedAt,
+        turnDurationMs: gameBeforeAdvance.turnDurationMs,
+      }),
+      internal.sim.actions.attemptResolveTurnBoundary,
+      { gameId: args.gameId },
+    );
 
     await evaluateGameFinalization(ctx, { gameId: args.gameId });
 

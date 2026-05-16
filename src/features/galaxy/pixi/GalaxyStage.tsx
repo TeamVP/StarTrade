@@ -28,6 +28,7 @@ import {
   resolveGhostRenderState,
   shouldFadeInFleetMarker,
 } from "@/features/galaxy/utils/fleetRenderHandoff";
+import { getServerAlignedNowMs, getTurnEffectiveNowMs } from "@/lib/time/turnClock";
 
 extend({ Graphics, Container });
 
@@ -236,6 +237,9 @@ export type TurnTimelineModel = {
   currentTurn: number;
   turnStartedAt: number | null;
   turnDurationMs: number;
+  turnPausedAtMs?: number | null;
+  gameStatus?: "lobby" | "running" | "paused" | "finished" | null;
+  serverClockOffsetMs?: number | null;
 };
 
 export type GalaxyStageProps = {
@@ -1370,7 +1374,14 @@ function CombatAnimationGraphics({
     (graphics: Graphics) => {
       void frame;
       graphics.clear();
-      const now = Date.now();
+      const now = getTurnEffectiveNowMs({
+        nowMs: getServerAlignedNowMs({
+          clientNowMs: Date.now(),
+          serverClockOffsetMs: turnTimeline?.serverClockOffsetMs ?? null,
+        }),
+        gameStatus: turnTimeline?.gameStatus ?? null,
+        turnPausedAtMs: turnTimeline?.turnPausedAtMs ?? null,
+      });
 
       for (const marker of combatMarkers) {
         const node = nodes.find((n) => n.id === marker.systemId);
@@ -1860,7 +1871,14 @@ function EnRouteGhostGraphics({
     (graphics: Graphics) => {
       void frame;
       graphics.clear();
-      const now = Date.now();
+      const now = getTurnEffectiveNowMs({
+        nowMs: getServerAlignedNowMs({
+          clientNowMs: Date.now(),
+          serverClockOffsetMs: turnTimeline?.serverClockOffsetMs ?? null,
+        }),
+        gameStatus: turnTimeline?.gameStatus ?? null,
+        turnPausedAtMs: turnTimeline?.turnPausedAtMs ?? null,
+      });
       const currentTurn = turnTimeline?.currentTurn ?? 0;
       const turnStartedAt = turnTimeline?.turnStartedAt ?? null;
       const travelAnimMs = Math.max(1, turnTimeline?.turnDurationMs ?? TRAVEL_ANIM_MS);
@@ -1957,7 +1975,14 @@ function TraderShipMarker({
     (graphics: Graphics) => {
       void frame;
       graphics.clear();
-      const now = Date.now();
+      const now = getTurnEffectiveNowMs({
+        nowMs: getServerAlignedNowMs({
+          clientNowMs: Date.now(),
+          serverClockOffsetMs: turnTimeline?.serverClockOffsetMs ?? null,
+        }),
+        gameStatus: turnTimeline?.gameStatus ?? null,
+        turnPausedAtMs: turnTimeline?.turnPausedAtMs ?? null,
+      });
       const currentTurn = turnTimeline?.currentTurn ?? 0;
       const turnStartedAt = turnTimeline?.turnStartedAt ?? null;
       const travelAnimMs = Math.max(1, turnTimeline?.turnDurationMs ?? TRAVEL_ANIM_MS);

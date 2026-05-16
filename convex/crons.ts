@@ -1,12 +1,12 @@
 import { cronJobs } from "convex/server";
 import { internal } from "./_generated/api";
-import { DEFAULT_TURN_DURATION_SECONDS } from "./sim/turnTiming";
+import { TURN_RESOLUTION_POLL_INTERVAL_SECONDS } from "./sim/turnTiming";
 
 const crons = cronJobs();
 
 crons.interval(
   "advance running StarStrat games",
-  { seconds: DEFAULT_TURN_DURATION_SECONDS },
+  { seconds: TURN_RESOLUTION_POLL_INTERVAL_SECONDS },
   internal.sim.cron.tickRunningGames,
   {},
 );

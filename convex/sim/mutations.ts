@@ -15,7 +15,12 @@ import { findLinkBetweenSystems } from "../gal/linkUtils";
 import { getNpcEmpirePlayerByKey, normalizeNpcEmpireKeys } from "../seed/npcEmpirePlayers";
 import { getAutomationStrategyByKey } from "../usr/automationStrategyCatalog";
 import { getMissionByKey } from "../usr/missionCatalog";
-import { DEFAULT_TURN_DURATION_MS } from "./turnTiming";
+import {
+  DEFAULT_TURN_DURATION_MS,
+  msUntilTurnBoundary,
+  resumedTurnStartedAt,
+  shiftPausedDeadline,
+} from "./turnTiming";
 import { touchGameMeaningfulActivity } from "./helpers";
 import { createUniqueGameUrlCode } from "./urlCodes";
 
@@ -439,6 +444,16 @@ export const startGame = mutation({
       payload: JSON.stringify({}),
     });
 
+    await ctx.scheduler.runAfter(
+      msUntilTurnBoundary({
+        nowMs: now,
+        turnStartedAtMs: now,
+        turnDurationMs: game.turnDurationMs,
+      }),
+      internal.sim.actions.attemptResolveTurnBoundary,
+      { gameId: args.gameId },
+    );
+
     await touchGameMeaningfulActivity(ctx, args.gameId, {
       humanAction: true,
       now,
@@ -725,7 +740,19 @@ export const pauseGame = mutation({
     if (game.status !== "running") {
       throw new Error("Only a running game can be paused.");
     }
-    await ctx.db.patch("sim_games", args.gameId, { status: "paused" });
+    const turnRow = await ctx.db
+      .query("sim_turns")
+      .withIndex("by_gameId_and_turnNumber", (q) =>
+        q.eq("gameId", args.gameId).eq("turnNumber", game.currentTurn),
+      )
+      .unique();
+    if (turnRow?.state === "resolving") {
+      throw new Error("Cannot pause while the current turn is resolving.");
+    }
+    await ctx.db.patch("sim_games", args.gameId, {
+      status: "paused",
+      turnPausedAtMs: Date.now(),
+    });
     await touchGameMeaningfulActivity(ctx, args.gameId, { humanAction: true });
     return args.gameId;
   },
@@ -747,7 +774,54 @@ export const resumeGame = mutation({
     if (game.status !== "paused") {
       throw new Error("Only a paused game can be resumed.");
     }
-    await ctx.db.patch("sim_games", args.gameId, { status: "running" });
+    const resumedAt = Date.now();
+    const pausedAt = game.turnPausedAtMs;
+    let activeTurnStartedAt: number | null = null;
+    if (pausedAt !== undefined) {
+      const turnRow = await ctx.db
+        .query("sim_turns")
+        .withIndex("by_gameId_and_turnNumber", (q) =>
+          q.eq("gameId", args.gameId).eq("turnNumber", game.currentTurn),
+        )
+        .unique();
+      if (turnRow !== null && turnRow.state === "open") {
+        activeTurnStartedAt = resumedTurnStartedAt({
+          turnStartedAtMs: turnRow.startedAt,
+          pausedAtMs: pausedAt,
+          resumedAtMs: resumedAt,
+        });
+        await ctx.db.patch("sim_turns", turnRow._id, {
+          startedAt: activeTurnStartedAt,
+        });
+      } else if (turnRow !== null) {
+        activeTurnStartedAt = turnRow.startedAt;
+      }
+    }
+
+    await ctx.db.patch("sim_games", args.gameId, {
+      status: "running",
+      turnPausedAtMs: undefined,
+      turnPausedUntilMs:
+        pausedAt !== undefined && game.turnPausedUntilMs !== undefined
+          ? shiftPausedDeadline({
+              deadlineMs: game.turnPausedUntilMs,
+              pausedAtMs: pausedAt,
+              resumedAtMs: resumedAt,
+            })
+          : game.turnPausedUntilMs,
+    });
+
+    if (activeTurnStartedAt !== null) {
+      await ctx.scheduler.runAfter(
+        msUntilTurnBoundary({
+          nowMs: resumedAt,
+          turnStartedAtMs: activeTurnStartedAt,
+          turnDurationMs: game.turnDurationMs,
+        }),
+        internal.sim.actions.attemptResolveTurnBoundary,
+        { gameId: args.gameId },
+      );
+    }
     await touchGameMeaningfulActivity(ctx, args.gameId, { humanAction: true });
     return args.gameId;
   },

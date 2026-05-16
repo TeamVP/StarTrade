@@ -172,9 +172,12 @@ export const getTurnTimelineForGame = query({
       )
       .unique();
     return {
+      gameStatus: game.status,
+      serverNowMs: Date.now(),
       currentTurn: game.currentTurn,
       turnDurationMs: game.turnDurationMs,
       turnStartedAt: turnRow?.startedAt ?? null,
+      turnPausedAtMs: game.turnPausedAtMs,
       turnState: turnRow?.state ?? null,
       resolutionPhase: turnRow?.resolutionPhase ?? null,
       simCronTurnsDisabled: game.simCronTurnsDisabled === true,

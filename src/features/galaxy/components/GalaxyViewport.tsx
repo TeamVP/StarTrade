@@ -15,6 +15,8 @@ import { useNavigate } from "react-router-dom";
 import { api } from "../../../../convex/_generated/api";
 import type { Id } from "../../../../convex/_generated/dataModel";
 import { useGalaxySoundscape } from "@/features/audio/hooks/useGalaxySoundscape";
+import { getTurnEffectiveNowMs } from "@/lib/time/turnClock";
+import { useTurnClock } from "@/lib/time/useTurnClock";
 import { formatPopulationPeople } from "@/lib/populationFormat";
 import { normalizeFleetDetachmentDisplayName } from "@/lib/fleetDisplayName";
 import { Button } from "@/components/ui/button";
@@ -335,14 +337,22 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
     api.admin.mutations.getGameSettings,
     activeGame ? { gameId: activeGame._id } : "skip",
   );
+  const turnClock = useTurnClock({
+    gameStatus: turnTimelineQuery?.gameStatus ?? activeGame?.status ?? null,
+    turnPausedAtMs: turnTimelineQuery?.turnPausedAtMs ?? null,
+    serverNowMs: turnTimelineQuery?.serverNowMs,
+  });
   const turnTimeline = useMemo((): TurnTimelineModel | null => {
     if (turnTimelineQuery === undefined || turnTimelineQuery === null) return null;
     return {
+      gameStatus: turnTimelineQuery.gameStatus,
       currentTurn: turnTimelineQuery.currentTurn,
+      serverClockOffsetMs: turnClock.serverClockOffsetMs,
       turnStartedAt: turnTimelineQuery.turnStartedAt,
       turnDurationMs: turnTimelineQuery.turnDurationMs,
+      turnPausedAtMs: turnTimelineQuery.turnPausedAtMs ?? null,
     };
-  }, [turnTimelineQuery]);
+  }, [turnTimelineQuery, turnClock.serverClockOffsetMs]);
 
   const issueFleetOrder = useMutation(api.flt.mutations.issueFleetOrder);
   const setGarrisonRoute = useMutation(api.flt.mutations.setGarrisonRoute);
@@ -1445,8 +1455,13 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
         if (from === undefined || to === undefined) return false;
         const turnStartedAt = turnTimeline?.turnStartedAt ?? null;
         const turnDurationMs = Math.max(1, turnTimeline?.turnDurationMs ?? 1);
+        const effectiveNow = getTurnEffectiveNowMs({
+          nowMs: turnClock.alignedNowMs,
+          gameStatus: turnTimeline?.gameStatus ?? activeGame?.status ?? null,
+          turnPausedAtMs: turnTimeline?.turnPausedAtMs ?? null,
+        });
         const fraction = turnTravelProgress({
-          now: Date.now(),
+          now: effectiveNow,
           currentTurn: turnTimeline?.currentTurn ?? activeGame?.currentTurn ?? ghost.dispatchedTurn,
           dispatchedTurn: ghost.dispatchedTurn,
           etaTurn: ghost.etaTurn,
