@@ -2217,6 +2217,25 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
     ? "size-7 shrink-0 border-st-border/80 bg-st-bg/95 p-0 shadow-md ring-1 ring-st-border/50 backdrop-blur-sm sm:size-8"
     : "size-7 shrink-0 p-0 sm:size-8";
 
+  const mapSoundStatusMessage =
+    mapPauseError !== null ? (
+      <div className="max-w-[min(72vw,20rem)] text-right text-[11px] leading-4 text-red-200" aria-live="polite">
+        {mapPauseError}
+      </div>
+    ) : soundscapeError !== null ? (
+      <div className="max-w-[min(72vw,20rem)] text-right text-[11px] leading-4 text-red-200" aria-live="polite">
+        {soundscapeError}
+      </div>
+    ) : soundscapeStatus === "starting" ? (
+      <div className="max-w-[min(72vw,20rem)] text-right text-[11px] leading-4 text-st-muted" aria-live="polite">
+        Starting sound...
+      </div>
+    ) : soundscapeNotice !== null ? (
+      <div className="max-w-[min(72vw,20rem)] text-right text-[11px] leading-4 text-st-muted" aria-live="polite">
+        {soundscapeNotice}
+      </div>
+    ) : null;
+
   const mapZoomControlButtons =
     activeGame !== null ? (
       <div className="flex w-full flex-col gap-1 sm:w-auto sm:items-end">
@@ -2483,23 +2502,7 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
             <Repeat2 className="size-4" aria-hidden />
           </Button>
         </div>
-        {mapPauseError !== null ? (
-          <div className="pointer-events-auto max-w-44 rounded-md border border-red-500/40 bg-st-panel/95 px-2 py-1 text-[11px] text-red-200 shadow-lg">
-            {mapPauseError}
-          </div>
-        ) : soundscapeError !== null ? (
-          <div className="pointer-events-auto max-w-44 rounded-md border border-red-500/40 bg-st-panel/95 px-2 py-1 text-[11px] text-red-200 shadow-lg">
-            {soundscapeError}
-          </div>
-        ) : soundscapeStatus === "starting" ? (
-          <div className="pointer-events-none rounded-md border border-st-border/70 bg-st-panel/90 px-2 py-1 text-[11px] text-st-muted shadow-lg">
-            Starting sound…
-          </div>
-        ) : soundscapeNotice !== null ? (
-          <div className="pointer-events-none rounded-md border border-st-border/70 bg-st-panel/90 px-2 py-1 text-[11px] text-st-muted shadow-lg">
-            {soundscapeNotice}
-          </div>
-        ) : null}
+        {!playerHomeMapLayout ? mapSoundStatusMessage : null}
       </div>
     ) : null;
 
@@ -2724,8 +2727,13 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
                     )}
                   </div>
                 ) : null}
+                {playerHomeMapLayout && mapSoundStatusMessage !== null ? (
+                  <div className="pointer-events-none absolute inset-x-3 top-3 flex justify-end sm:inset-x-auto sm:right-3 sm:top-12">
+                    {mapSoundStatusMessage}
+                  </div>
+                ) : null}
                 {mapZoomControlButtons !== null ? (
-                  <div className="pointer-events-auto absolute inset-x-3 top-3 sm:inset-x-auto sm:right-3">
+                  <div className="pointer-events-auto absolute inset-x-3 top-11 sm:top-3 sm:inset-x-auto sm:right-3">
                     {mapZoomControlButtons}
                   </div>
                 ) : null}
