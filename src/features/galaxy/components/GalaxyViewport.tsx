@@ -1106,6 +1106,7 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
     soundscapeEnabled,
     soundscapeStatus,
     soundscapeError,
+    soundscapeNotice,
     enableSoundscape,
     disableSoundscape,
   } = useGalaxySoundscape({
@@ -2145,6 +2146,10 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
         ) : soundscapeStatus === "starting" ? (
           <div className="pointer-events-none rounded-md border border-st-border/70 bg-st-panel/90 px-2 py-1 text-[11px] text-st-muted shadow-lg">
             Starting sound…
+          </div>
+        ) : soundscapeNotice !== null ? (
+          <div className="pointer-events-none rounded-md border border-st-border/70 bg-st-panel/90 px-2 py-1 text-[11px] text-st-muted shadow-lg">
+            {soundscapeNotice}
           </div>
         ) : null}
       </div>

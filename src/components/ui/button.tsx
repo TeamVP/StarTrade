@@ -1,5 +1,6 @@
 import { Slot } from "@radix-ui/react-slot";
-import type { ButtonHTMLAttributes } from "react";
+import type { ButtonHTMLAttributes, MouseEventHandler } from "react";
+import { playUiSound, type UiSoundKind } from "@/lib/audio/uiSounds";
 import { cn } from "@/lib/utils";
 
 type ButtonVariant = "primary" | "secondary" | "outline" | "ghost";
@@ -7,6 +8,7 @@ type ButtonVariant = "primary" | "secondary" | "outline" | "ghost";
 type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
   variant?: ButtonVariant;
   asChild?: boolean;
+  uiSound?: UiSoundKind | "none";
 };
 
 const variantClasses: Record<ButtonVariant, string> = {
@@ -21,9 +23,18 @@ export function Button({
   variant = "primary",
   type = "button",
   asChild = false,
+  uiSound = "button_press",
+  onClick,
+  disabled,
   ...props
 }: ButtonProps) {
   const Comp = asChild ? Slot : "button";
+  const handleClick: MouseEventHandler<HTMLButtonElement> = (event) => {
+    if (!disabled && uiSound !== "none") {
+      playUiSound(uiSound);
+    }
+    onClick?.(event);
+  };
 
   return (
     <Comp
@@ -33,6 +44,8 @@ export function Button({
         variantClasses[variant],
         className,
       )}
+      onClick={handleClick}
+      disabled={disabled}
       {...props}
     />
   );

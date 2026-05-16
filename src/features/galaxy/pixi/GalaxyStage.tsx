@@ -28,6 +28,10 @@ import {
   resolveGhostRenderState,
   shouldFadeInFleetMarker,
 } from "@/features/galaxy/utils/fleetRenderHandoff";
+import {
+  playUiSound,
+  setFleetDragHoverSoundActive,
+} from "@/lib/audio/uiSounds";
 import { getServerAlignedNowMs, getTurnEffectiveNowMs } from "@/lib/time/turnClock";
 
 extend({ Graphics, Container });
@@ -401,6 +405,7 @@ function GalaxyStageInner({
   const [dragCursorPos, setDragCursorPos] = useState<{ x: number; y: number } | null>(
     null,
   );
+  const dragFleetValidHoverRef = useRef(false);
   const dragShipCountRef = useRef(1);
   const dragRecurringRef = useRef(false);
 
@@ -621,6 +626,7 @@ function GalaxyStageInner({
         return;
       }
       if (onStarPointerTap !== undefined) {
+        playUiSound("select_star");
         onStarPointerTap(node.id);
       }
     },
@@ -737,8 +743,30 @@ function GalaxyStageInner({
   useEffect(() => {
     if (!dragFleetId || !isInitialised) return;
 
+    const syncValidHoverSound = (active: boolean) => {
+      if (dragFleetValidHoverRef.current === active) {
+        return;
+      }
+      dragFleetValidHoverRef.current = active;
+      setFleetDragHoverSoundActive(active);
+    };
+
     const onMove = (ev: PointerEvent) => {
-      setDragCursorPos(clientToWorld(ev.clientX, ev.clientY));
+      const world = clientToWorld(ev.clientX, ev.clientY);
+      setDragCursorPos(world);
+      const {
+        fleetMarkers: fm,
+        galaxyLinks: gl,
+        nodes: nd,
+      } = propsRef.current;
+      const dropSystemId = hitTestSystem(nd, world.x, world.y);
+      const fleet = fm.find((marker) => marker.fleetId === dragFleetId);
+      const validHover =
+        fleet !== undefined &&
+        dropSystemId !== null &&
+        dropSystemId !== fleet.originSystemId &&
+        systemsShareLink(gl, fleet.originSystemId, dropSystemId);
+      syncValidHoverSound(validHover);
     };
 
     const onUp = (ev: PointerEvent) => {
@@ -753,6 +781,7 @@ function GalaxyStageInner({
       const fleet = fm.find((marker) => marker.fleetId === dragFleetId);
       const shipCount = dragShipCountRef.current;
       const recurring = dragRecurringRef.current;
+      syncValidHoverSound(false);
 
       void (async () => {
         if (
@@ -771,10 +800,13 @@ function GalaxyStageInner({
               originSystemId: fleet.originSystemId,
               establishRecurring: recurring,
             });
+            playUiSound("drag_commit_success");
+            return;
           } catch (error) {
             console.error(error);
           }
         }
+        playUiSound("drag_commit_cancel");
       })();
 
       setDragFleetId(null);
@@ -785,11 +817,20 @@ function GalaxyStageInner({
     window.addEventListener("pointerup", onUp);
     window.addEventListener("pointercancel", onUp);
     return () => {
+      syncValidHoverSound(false);
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
       window.removeEventListener("pointercancel", onUp);
     };
   }, [dragFleetId, clientToWorld, isInitialised]);
+
+  useEffect(() => {
+    if (dragFleetId !== null) {
+      return;
+    }
+    dragFleetValidHoverRef.current = false;
+    setFleetDragHoverSoundActive(false);
+  }, [dragFleetId]);
 
   useEffect(() => {
     if (!dragColonyShipId || !isInitialised) return;
@@ -853,6 +894,7 @@ function GalaxyStageInner({
     (ship: ColonyShipMarkerModel, event: FederatedPointerEvent) => {
       if (!canIssueOrders) return;
       event.stopPropagation();
+      playUiSound("select_colony_ship");
       onSelectedColonyShipChange(ship.colonyShipId);
       if (ship.canDragDispatchRoute === true && onColonyShipRouteCommit !== undefined) {
         setDragFleetId(null);
@@ -885,6 +927,7 @@ function GalaxyStageInner({
         return;
       }
       event.stopPropagation();
+      playUiSound("select_fleet");
       onSelectedFleetChange(fleet.fleetId);
       const n = Math.max(0, Math.floor(shipsToDispatch));
       dragShipCountRef.current = n;
@@ -1040,6 +1083,7 @@ function GalaxyStageInner({
             turnTimeline={turnTimeline}
             selected={selectedTraderId === trader.traderId}
             onTap={() => {
+              playUiSound("select_trader_ship");
               onSelectedTraderChange(trader.traderId);
             }}
           />

@@ -151,6 +151,243 @@ What still needs to be built:
 - Add team or empire buses for stronger mix control and clearer ownership identity.
 - Add authoring or import support for motifs and optional MIDI-shaped pattern infrastructure.
 
+## Detailed remediation plan for current silent-start behavior
+
+The current soundscape behavior has an important usability failure mode: the player can click the speaker toggle, see the "Starting sound" affordance, receive no runtime error, and still hear nothing. That can happen even when the audio engine starts correctly, because the present flow treats the already-loaded event batch as old history and then schedules future sounds later across the turn.
+
+The next implementation pass should explicitly solve two separate problems:
+
+- No immediate audible confirmation after enabling sound.
+- Silent no-op states that are operationally valid but indistinguishable from breakage.
+
+### Root causes to address
+
+The plan should treat these as distinct root causes rather than one generic bug:
+
+- The current enable path arms the audio engine but does not play an immediate confirmation sound.
+- The current enable path should not replay the entire historical feed, but it also should not leave the player with zero audible evidence that sound is working.
+- The current event feed may already contain supported combat or movement events when sound is enabled, yet those events can be skipped because they are marked as already seen.
+- The newer turn-spread scheduler intentionally delays playback across the active turn, which is musically useful but makes the lack of immediate feedback much more noticeable.
+- Unsupported event types or events that cannot resolve to a known map system are currently dropped silently, which is reasonable for runtime stability but poor for diagnosability.
+
+### Phase A: immediate audible confirmation
+
+The first fix should be a dedicated confirmation sound that does not depend on `sim_events` at all.
+
+- Add a short, soft "sound armed" confirmation cue that plays immediately when the speaker toggle successfully transitions from off to ready.
+- This cue should be routed through a lightweight UI sound path, not through the world event scheduler, so it can never be delayed by turn timing.
+- The cue should be quiet, warm, and unmistakable, more like a soft glass tick or airy chime than a gamey notification.
+- The cue should only play after the browser audio context is actually running and sample buffers are available, so it becomes a truthful confirmation rather than a speculative one.
+- The cue should also play when the user re-enables sound later in the session, because the problem is about reassurance at the moment of activation, not just first-run onboarding.
+
+This keeps the original product constraint intact: do not replay old world history on enable. Instead, confirm that audio is now armed and waiting.
+
+### Phase B: replace silent no-op states with explicit audio state reporting
+
+The next fix should make "nothing heard" explainable without requiring a console.
+
+- Expand the sound status model beyond `off`, `starting`, `ready`, and `error` to include states such as `armed_waiting_for_events`, `ready_with_scheduled_events`, and `ready_no_playable_recent_events`.
+- Show a compact user-facing status line near the speaker control for a few seconds after enable. Examples: "Sound on. Waiting for next event." or "Sound on. Next map sound scheduled this turn.".
+- In development builds, expose a small debug payload behind the same control or a hidden debug affordance showing: event rows received, event rows classified, events dropped for unsupported type, events dropped for missing system position, events scheduled, and timestamp of last sound played.
+- Add internal counters for the audio hook so product debugging can answer whether the failure is: no events, unsupported events, missing map coordinates, muted UI category, blocked audio context, or delayed scheduler.
+- Preserve graceful runtime behavior. These states should not throw exceptions just to create visibility.
+
+This addresses the "no runtime error exists" issue by treating the lack of sound as an observable state, not just the absence of exceptions.
+
+### Phase C: replay strategy for the already-loaded event batch
+
+The existing design explicitly avoids replaying old history on enable, and that is still the right default. The fix should therefore use a constrained replay strategy rather than a broad replay.
+
+Recommended approach:
+
+- On enable, do not mark the entire current `listRecentEvents` payload as permanently consumed before evaluation.
+- Build a small "eligible activation batch" from the already-loaded event rows, but only from events that are both recent and musically relevant.
+- Limit this activation batch to a small capped subset such as the newest 1-3 playable events.
+- Prefer events from the current turn first, then fall back to the immediately previous turn only if no current-turn playable event exists.
+- Filter out low-information events if needed so activation does not produce a sudden clutter burst.
+- Route the activation batch through a dedicated enable-time pacing rule that plays almost immediately, with a short stagger of perhaps 100-300 ms between cues.
+
+The effect should be: when sound is enabled mid-turn, the player gets an immediate confirmation cue, then a tiny curated glimpse of the currently active map state if appropriate, not a backlog dump.
+
+### Phase D: scheduler changes so responsiveness and musical spread can coexist
+
+The turn-wide scheduling work is still directionally correct, but it needs a faster foreground path.
+
+- Split scheduled playback into at least two lanes: `foreground_immediate` and `ambient_spread`.
+- Foreground-immediate lane: high-importance events near the camera center, newly selected entities, or events belonging to the listener's own empire should be eligible for near-immediate playback.
+- Ambient-spread lane: distant, lower-priority, or enemy-only events can continue to be distributed across the turn for texture.
+- Add a maximum first-audible delay budget. For example, once sound is enabled and a playable event exists, at least one event should be audible within a short bounded window.
+- Do not let all current-turn events be pushed toward the latter half of the turn if the player is waiting for proof that audio works.
+
+The scheduler should optimize for legibility first, then musical spacing.
+
+### Phase E: longer tails without obscuring control feedback
+
+The reverb-over-turn design should remain, but it should be isolated from the activation and UI feedback problem.
+
+- Keep the long shared reverb tail so world sounds can overlap across turn boundaries.
+- Ensure the confirmation cue and UI cues remain relatively dry compared with the world-event bus so they stay readable.
+- Keep a separate dry path for confirmation and UI interactions even if the world bus is lush and overlapping.
+- Consider a dedicated world reverb bus plus a lighter UI ambience bus instead of forcing all sound families through the same tail behavior.
+
+This preserves the desired slower, smoother decay while preventing the interface feedback layer from becoming vague or muddy.
+
+### Phase F: acceptance criteria for the sound-start fix
+
+This work should not be considered done until all of the following are true:
+
+- Toggling sound on always produces an immediate audible confirmation if audio is actually armed.
+- Enabling sound mid-turn can produce either a small curated activation batch or a clear "waiting for next event" status, never silent ambiguity.
+- Supported current-turn events near the player or in the current focus area are not all deferred deep into the turn.
+- The UI can distinguish between engine-ready-but-idle and actual startup failure.
+- Developers can inspect why no sound played without relying on console exceptions.
+
+## Detailed plan for soft UI interaction sounds
+
+The project should treat short interaction feedback as a second audio layer separate from the strategic world soundscape.
+
+### Audio architecture split
+
+Use two audio families with distinct responsibilities:
+
+- World soundscape: Tone.js, spatialized, camera-aware, event-driven, musically paced.
+- UI interaction sounds: Howler or a similarly lightweight low-latency path for short non-spatial interface feedback.
+
+This repo already has an initial UI SFX seam in `src/lib/audio/sfx.ts`, so the recommended direction is to expand that into a small UI audio service rather than forcing all button and hover sounds through the Tone world engine.
+
+### UI sound categories
+
+The UI layer should define separate named cues rather than one generic click.
+
+Recommended starting cue set:
+
+- `select_star`
+- `select_fleet`
+- `select_colony_ship`
+- `select_trader_ship`
+- `button_press`
+- `drag_valid_hover_loop`
+- `drag_commit_success`
+- `drag_commit_cancel`
+- `sound_enabled_confirm`
+
+Each cue should have its own volume trim, cooldown behavior, and category metadata.
+
+### Selection sounds on the galaxy map
+
+These interactions should sound subtly different so the player learns what was selected without reading the panel immediately.
+
+- Clicking a star system: soft, luminous, slightly resonant ping.
+- Clicking a fleet: slightly more metallic and directional than the star sound, suggesting ships and intent.
+- Clicking a colony ship: softer and more sheltered, slightly warmer than fleet selection.
+- Clicking a trader ship: lighter, quicker, and more nimble, suggesting motion and commerce.
+
+Owning surfaces for this work:
+
+- Star selection already flows through the `GalaxyStage` star pointer handlers and then through `GalaxyViewport` selection state.
+- Fleet selection already flows through `handleFleetPointerDown` in `GalaxyStage` and `handleSelectedFleetChange` in `GalaxyViewport`.
+- Colony ship selection already flows through `handleColonyShipPointerDown` in `GalaxyStage` and `handleSelectedColonyShipChange` in `GalaxyViewport`.
+- Trader selection already flows through the `TraderShipMarker` tap handler in `GalaxyStage` and `handleTraderSelect` in `GalaxyViewport`.
+
+The plan should attach the audible feedback at the point where selection is confirmed, not merely at pointer down if selection will be rejected.
+
+### Drag hover magnetic buzz for valid fleet destinations
+
+This should be treated as a looping state sound, not as a repeated click.
+
+Desired behavior:
+
+- When a fleet drag is active and the cursor is hovering a legitimate destination star that already shows the yellow dashed destination circle, begin a soft magnetic or energized buzz.
+- Keep that buzz running continuously as long as the cursor remains over a valid drop target.
+- If the cursor leaves the valid target, fade the buzz out quickly rather than hard-stopping it.
+- If the cursor re-enters a valid target during the same drag, fade it back in without restarting from a harsh transient.
+
+Implementation surface:
+
+- `GalaxyStage` already computes `dropSystemId` during drag and already knows when the dashed destination circle should be drawn.
+- The UI audio plan should expose a `setDragHoverState({ kind, targetId, isValid })` style API so the drag loop can be controlled as a state machine rather than as one-shot sounds.
+
+### Success and disappointment sounds for releasing a fleet drag
+
+The release sound should depend on whether the drop produced a valid committed order.
+
+- Successful fleet drop: a quick positive affirmation, like a soft exhale, approval chirp, or tiny harmonic lift.
+- Unsuccessful release: a tiny disappointment sigh, air drop, or downward gesture that communicates "not accepted" without feeling punitive.
+- The unsuccessful cue should only play when the player attempted an actionable drag and released without a valid destination, not when they simply click a fleet with zero ships selected or when dragging was never allowed.
+
+The same success-failure pair should be considered for colony ship dispatch drags, because the interaction pattern is nearly identical.
+
+### Button press sounds across the game page
+
+General UI buttons should produce subtle confirmation sounds, but not every control should sound identical.
+
+Recommended grouping:
+
+- Primary actions: slightly firmer confirmation.
+- Secondary buttons and tabs: softer click.
+- Toggle buttons: small on/off timbral difference.
+- Destructive or risky actions: more restrained, lower-pitched confirmation rather than cheerful approval.
+
+The implementation should avoid hand-wiring every button instance one by one where possible. Prefer a shared hook or wrapper strategy for common button primitives, then add opt-out or override behavior for exceptions.
+
+### UX rules to prevent spam and fatigue
+
+The UI sound layer needs explicit anti-annoyance rules.
+
+- Add cooldowns so repeated rapid clicks do not stack into harsh chatter.
+- Do not replay selection sounds if the user re-clicks the already selected object unless the interaction visibly changes state.
+- Keep hover-loop sounds on a dedicated low-volume bus.
+- Duck or trim UI sounds slightly when strong world-event bells are playing nearby so the mix stays readable.
+- Respect a global mute and separate category volumes for world sounds and UI sounds.
+
+### Asset plan for UI sounds
+
+The UI set should use a different timbral family from the strategic bell soundscape.
+
+- World soundscape should remain more resonant, spatial, and atmospheric.
+- UI sounds should be shorter, drier, and more tactile.
+- The drag-valid buzz should be loopable and seamless.
+- Success and failure cues should be short and expressive, but never cartoonish or overly gamey.
+
+### Settings and accessibility plan
+
+UI sounds should not be bundled into the same single toggle as world ambience forever.
+
+Recommended settings model:
+
+- Master audio toggle.
+- World soundscape toggle or volume.
+- UI sound effects toggle or volume.
+- Optional reduced-feedback mode for users who want the world soundscape but not frequent interface reinforcement.
+
+Accessibility and predictability requirements:
+
+- UI sounds should reinforce state change, not replace visible confirmation.
+- Success and failure cues should be distinct in contour, not just louder or softer.
+- Hover-loop sounds should never be the only indication that a destination is valid.
+
+### Rollout plan for UI sound work
+
+Recommended implementation order:
+
+1. Add the UI audio service and settings split.
+2. Ship the immediate `sound_enabled_confirm` cue.
+3. Add map selection sounds for star, fleet, colony ship, and trader ship.
+4. Add a generic subtle button press cue on shared button primitives.
+5. Add valid-destination drag hover loop plus success and cancel drop cues.
+6. Tune cooldowns, category volumes, and mix interaction with the world soundscape.
+
+### Acceptance checklist for UI sounds
+
+This part of the audio roadmap should be considered complete only when:
+
+- Clicking a star, fleet, colony ship, or trader ship gives a distinct but subtle cue.
+- Valid drag hover produces a continuous magnetic buzz only while a valid destination is actively hovered.
+- Successful drag release and failed drag release produce clearly different one-shot cues.
+- Buttons across the game page confirm interaction without becoming noisy or repetitive.
+- UI sounds can be tuned or muted separately from the strategic world soundscape.
+- None of these sounds interfere with the legibility of the map event audio layer.
+
 ## Event model
 
 Gameplay systems should emit a high-level event object rather than raw audio instructions. A typical event might include:
