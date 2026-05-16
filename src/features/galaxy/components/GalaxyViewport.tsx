@@ -775,6 +775,10 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
     }
     return merged;
   }, [serverPriorityStarIds, priorityStarOverrideState, activeGameId, priorityEmpireId]);
+  const selectedSystemIsPriorityStar = useMemo(
+    () => (selectedSystem === null ? false : priorityStarIds.has(selectedSystem._id)),
+    [priorityStarIds, selectedSystem],
+  );
 
   const togglePriorityStar = useCallback(
     async (systemId: Id<"gal_systems">, enabled: boolean) => {
@@ -2128,6 +2132,43 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
           >
             <Minus className="size-4" aria-hidden />
           </Button>
+          {selectedSystem !== null ? (
+            <Button
+              variant="secondary"
+              className={cn(
+                mapControlBtnClass,
+                selectedSystemIsPriorityStar
+                  ? "border-cyan-400/70 bg-cyan-950/50 text-cyan-100 hover:border-cyan-300"
+                  : "",
+              )}
+              title={
+                canMarkPriorityStars
+                  ? selectedSystemIsPriorityStar
+                    ? "Unmark selected star as a Priority star"
+                    : "Mark selected star as a Priority star"
+                  : (priorityStarDisabledReason ?? "Priority stars are unavailable right now")
+              }
+              aria-label={
+                selectedSystemIsPriorityStar
+                  ? "Unmark selected star as a Priority star"
+                  : "Mark selected star as a Priority star"
+              }
+              aria-pressed={selectedSystemIsPriorityStar}
+              type="button"
+              disabled={!canMarkPriorityStars}
+              onClick={() => {
+                void togglePriorityStar(
+                  selectedSystem._id,
+                  !selectedSystemIsPriorityStar,
+                );
+              }}
+            >
+              <Star
+                className={selectedSystemIsPriorityStar ? "size-4 fill-current" : "size-4"}
+                aria-hidden
+              />
+            </Button>
+          ) : null}
           <Button
             variant="secondary"
             className={mapControlBtnClass}

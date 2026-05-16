@@ -32,6 +32,8 @@ function nowMs(): number {
 class UiAudioEngine {
   private context: AudioContext | null = null;
   private masterGain: GainNode | null = null;
+  private masterHighpass: BiquadFilterNode | null = null;
+  private masterCompressor: DynamicsCompressorNode | null = null;
   private lastPlayedAt = new Map<UiSoundKind, number>();
   private hoverOscillator: OscillatorNode | null = null;
   // @ts-ignore
@@ -53,8 +55,20 @@ class UiAudioEngine {
       }
       this.context = new AudioContextCtor();
       this.masterGain = this.context.createGain();
-      this.masterGain.gain.value = 0.22;
-      this.masterGain.connect(this.context.destination);
+      this.masterGain.gain.value = 0.16;
+      this.masterHighpass = this.context.createBiquadFilter();
+      this.masterHighpass.type = "highpass";
+      this.masterHighpass.frequency.value = 180;
+      this.masterHighpass.Q.value = 0.7;
+      this.masterCompressor = this.context.createDynamicsCompressor();
+      this.masterCompressor.threshold.value = -24;
+      this.masterCompressor.knee.value = 18;
+      this.masterCompressor.ratio.value = 2.5;
+      this.masterCompressor.attack.value = 0.003;
+      this.masterCompressor.release.value = 0.14;
+      this.masterGain.connect(this.masterHighpass);
+      this.masterHighpass.connect(this.masterCompressor);
+      this.masterCompressor.connect(this.context.destination);
     }
     if (this.context.state === "suspended") {
       void this.context.resume();
@@ -328,21 +342,20 @@ class UiAudioEngine {
 
     if (active) {
       if (this.hoverOscillator === null || this.hoverGain === null || this.hoverFilter === null) {
-        // Two slightly-detuned square waves — the beating between them creates
-        // a natural, organic buzz that reads unmistakably as "hovering over target".
+        // Keep the hover cue in the low-mid band so phone speakers do not choke on sub-bass.
         const oscA = context.createOscillator();
-        oscA.type = "square";
-        oscA.frequency.value = 68;
+        oscA.type = "triangle";
+        oscA.frequency.value = 196;
 
         const oscB = context.createOscillator();
-        oscB.type = "square";
-        oscB.frequency.value = 72; // ~4 Hz beat creates the buzz
+        oscB.type = "triangle";
+        oscB.frequency.value = 202; // ~6 Hz beat keeps the hover buzz present without rumble
 
-        // Gentle low-pass keeps the buzz warm rather than harsh
+        // Gentle low-pass keeps the hover warm rather than harsh.
         const filter = context.createBiquadFilter();
         filter.type = "lowpass";
-        filter.frequency.value = 220;
-        filter.Q.value = 1.2;
+        filter.frequency.value = 1200;
+        filter.Q.value = 0.8;
 
         const gain = context.createGain();
         gain.gain.value = 0.0001;
@@ -364,7 +377,7 @@ class UiAudioEngine {
       const g = this.hoverGain.gain;
       g.cancelScheduledValues(context.currentTime);
       g.setValueAtTime(g.value, context.currentTime);
-      g.linearRampToValueAtTime(0.055, context.currentTime + 0.07);
+      g.linearRampToValueAtTime(0.03, context.currentTime + 0.07);
       return;
     }
 

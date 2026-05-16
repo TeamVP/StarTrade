@@ -48,6 +48,21 @@ type DepartureCatchupState = {
   firstSeenAtMs: number;
 };
 
+type ActiveTouchPoint = {
+  clientX: number;
+  clientY: number;
+};
+
+type PinchSession = {
+  pointerIds: [number, number];
+  startDistance: number;
+  startScale: number;
+  startFocusX: number;
+  startFocusY: number;
+  startMidScreenX: number;
+  startMidScreenY: number;
+};
+
 function smoothFirstLegDepartureProgress(params: {
   key: string;
   progress: number;
@@ -461,6 +476,10 @@ function GalaxyStageInner({
   const panCleanupRef = useRef<(() => void) | null>(null);
   const pointerScratchRef = useRef(new Point());
   const panDeltaScratchRef = useRef({ cur: new Point(), origin: new Point() });
+  const touchPointScratchRef = useRef({ a: new Point(), b: new Point() });
+  const activeTouchPointersRef = useRef(new Map<number, ActiveTouchPoint>());
+  const pinchSessionRef = useRef<PinchSession | null>(null);
+  const gestureSuppressTapUntilRef = useRef(0);
 
   type DragResolveSnapshot = Pick<
     GalaxyStageProps,
@@ -557,6 +576,7 @@ function GalaxyStageInner({
 
       const onMove = (ev: PointerEvent) => {
         if (ev.pointerId !== pointerId) return;
+        if (pinchSessionRef.current !== null) return;
         const dragDist = Math.hypot(ev.clientX - startClientX, ev.clientY - startClientY);
         if (dragDist >= MAP_PAN_DRAG_THRESHOLD_PX) {
           movedPastTapThreshold = true;
@@ -607,6 +627,10 @@ function GalaxyStageInner({
 
   const handleStarPointerTap = useCallback(
     (node: GalaxyNode, event: FederatedPointerEvent) => {
+      if (performance.now() < gestureSuppressTapUntilRef.current) {
+        event.stopPropagation();
+        return;
+      }
       const suppressed = starDragSuppressTapRef.current;
       if (
         suppressed !== null &&
@@ -639,6 +663,8 @@ function GalaxyStageInner({
     const canvas = application.canvas;
     const events = application.renderer?.events;
     if (canvas === undefined || events === undefined) return;
+    const previousTouchAction = canvas.style.touchAction;
+    canvas.style.touchAction = "none";
 
     // Wheel zoom anchors on the world point under the cursor so players can hover over
     // a system and zoom toward it. mapPositionToPoint converts viewport client coords
@@ -656,7 +682,151 @@ function GalaxyStageInner({
 
     canvas.addEventListener("wheel", onWheel, { passive: false });
     return () => {
+      canvas.style.touchAction = previousTouchAction;
       canvas.removeEventListener("wheel", onWheel);
+    };
+  }, [isInitialised, viewW, viewH]);
+
+  useEffect(() => {
+    if (!isInitialised) return;
+    const application = appRef.current;
+    const canvas = application.canvas;
+    const events = application.renderer?.events;
+    if (canvas === undefined || events === undefined) return;
+
+    const scratch = touchPointScratchRef.current;
+    const activeTouchPointers = activeTouchPointersRef.current;
+
+    const beginPinchIfReady = () => {
+      if (activeTouchPointersRef.current.size !== 2) {
+        pinchSessionRef.current = null;
+        return;
+      }
+
+      const entries = [...activeTouchPointersRef.current.entries()];
+      const [firstPointerId, firstPointer] = entries[0] ?? [];
+      const [secondPointerId, secondPointer] = entries[1] ?? [];
+      if (
+        firstPointerId === undefined ||
+        secondPointerId === undefined ||
+        firstPointer === undefined ||
+        secondPointer === undefined
+      ) {
+        pinchSessionRef.current = null;
+        return;
+      }
+
+      events.mapPositionToPoint(scratch.a, firstPointer.clientX, firstPointer.clientY);
+      events.mapPositionToPoint(scratch.b, secondPointer.clientX, secondPointer.clientY);
+      const dx = scratch.b.x - scratch.a.x;
+      const dy = scratch.b.y - scratch.a.y;
+      const startDistance = Math.hypot(dx, dy);
+      if (startDistance < 12) {
+        pinchSessionRef.current = null;
+        return;
+      }
+
+      const cam = cameraRef.current;
+      pinchSessionRef.current = {
+        pointerIds: [firstPointerId, secondPointerId],
+        startDistance,
+        startScale: cam.scale,
+        startFocusX: cam.focusX,
+        startFocusY: cam.focusY,
+        startMidScreenX: (scratch.a.x + scratch.b.x) / 2,
+        startMidScreenY: (scratch.a.y + scratch.b.y) / 2,
+      };
+      gestureSuppressTapUntilRef.current = performance.now() + 250;
+      panCleanupRef.current?.();
+      panCleanupRef.current = null;
+    };
+
+    const updateTouchPointer = (event: PointerEvent) => {
+      if (event.pointerType !== "touch") return;
+      activeTouchPointers.set(event.pointerId, {
+        clientX: event.clientX,
+        clientY: event.clientY,
+      });
+    };
+
+    const removeTouchPointer = (event: PointerEvent) => {
+      if (event.pointerType !== "touch") return;
+      activeTouchPointers.delete(event.pointerId);
+      if (activeTouchPointers.size === 2) {
+        beginPinchIfReady();
+      } else {
+        pinchSessionRef.current = null;
+      }
+    };
+
+    const onPointerDown = (event: PointerEvent) => {
+      updateTouchPointer(event);
+      if (event.pointerType === "touch" && activeTouchPointers.size === 2) {
+        beginPinchIfReady();
+      }
+    };
+
+    const onPointerMove = (event: PointerEvent) => {
+      updateTouchPointer(event);
+      const pinch = pinchSessionRef.current;
+      if (pinch === null || event.pointerType !== "touch") return;
+      if (!pinch.pointerIds.includes(event.pointerId)) return;
+
+      const firstPointer = activeTouchPointers.get(pinch.pointerIds[0]);
+      const secondPointer = activeTouchPointers.get(pinch.pointerIds[1]);
+      if (firstPointer === undefined || secondPointer === undefined) {
+        pinchSessionRef.current = null;
+        return;
+      }
+
+      event.preventDefault();
+      events.mapPositionToPoint(scratch.a, firstPointer.clientX, firstPointer.clientY);
+      events.mapPositionToPoint(scratch.b, secondPointer.clientX, secondPointer.clientY);
+      const dx = scratch.b.x - scratch.a.x;
+      const dy = scratch.b.y - scratch.a.y;
+      const distance = Math.max(12, Math.hypot(dx, dy));
+      const midScreenX = (scratch.a.x + scratch.b.x) / 2;
+      const midScreenY = (scratch.a.y + scratch.b.y) / 2;
+      const nextScale = clampMapScale((pinch.startScale * distance) / pinch.startDistance);
+      const anchorCamera = zoomCameraTowardScreenPoint(
+        {
+          focusX: pinch.startFocusX,
+          focusY: pinch.startFocusY,
+          scale: pinch.startScale,
+        },
+        pinch.startMidScreenX,
+        pinch.startMidScreenY,
+        nextScale,
+        viewW,
+        viewH,
+      );
+      onCameraChangeRef.current({
+        focusX: anchorCamera.focusX - (midScreenX - pinch.startMidScreenX) / nextScale,
+        focusY: anchorCamera.focusY - (midScreenY - pinch.startMidScreenY) / nextScale,
+        scale: nextScale,
+      });
+      gestureSuppressTapUntilRef.current = performance.now() + 250;
+    };
+
+    const onPointerUpOrCancel = (event: PointerEvent) => {
+      removeTouchPointer(event);
+      if (event.pointerType === "touch") {
+        gestureSuppressTapUntilRef.current = performance.now() + 150;
+      }
+    };
+
+    canvas.addEventListener("pointerdown", onPointerDown, { passive: true });
+    window.addEventListener("pointermove", onPointerMove, { passive: false });
+    window.addEventListener("pointerup", onPointerUpOrCancel);
+    window.addEventListener("pointercancel", onPointerUpOrCancel);
+
+    return () => {
+      canvas.removeEventListener("pointerdown", onPointerDown);
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", onPointerUpOrCancel);
+      window.removeEventListener("pointercancel", onPointerUpOrCancel);
+      activeTouchPointers.clear();
+      pinchSessionRef.current = null;
     };
   }, [isInitialised, viewW, viewH]);
 
@@ -690,6 +860,7 @@ function GalaxyStageInner({
 
       const onMove = (ev: PointerEvent) => {
         if (ev.pointerId !== panSession.pointerId || !isInitialised) return;
+        if (pinchSessionRef.current !== null) return;
         events.mapPositionToPoint(scratch.cur, ev.clientX, ev.clientY);
         events.mapPositionToPoint(scratch.origin, panSession.startClientX, panSession.startClientY);
         const dSx = scratch.cur.x - scratch.origin.x;
@@ -716,7 +887,11 @@ function GalaxyStageInner({
           ev.clientX - panSession.startClientX,
           ev.clientY - panSession.startClientY,
         );
-        if (!panSession.dragging && dist < MAP_PAN_DRAG_THRESHOLD_PX) {
+        if (
+          !panSession.dragging &&
+          dist < MAP_PAN_DRAG_THRESHOLD_PX &&
+          performance.now() >= gestureSuppressTapUntilRef.current
+        ) {
           onStageBackgroundTapRef.current?.();
         }
         window.removeEventListener("pointermove", onMove);
