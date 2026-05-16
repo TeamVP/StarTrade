@@ -82,8 +82,7 @@ export async function createGalaxySoundscapeEngine(params?: {
   return {
     playBell(intent) {
       const eventGain = intent.gain * clamp(intent.velocity, 0.2, 1);
-      const player: BellPlayer = new Tone.Player({
-        url: sampleBuffers.get(intent.sampleKey),
+      const player: BellPlayer = new Tone.Player(sampleBuffers.get(intent.sampleKey)).set({
         fadeOut: Math.min(1.4, Math.max(0.4, intent.releaseSeconds * 0.35)),
       });
       const filter = new Tone.Filter(intent.cutoffHz, "lowpass");
