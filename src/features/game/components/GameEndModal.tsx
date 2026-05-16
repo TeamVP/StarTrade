@@ -84,7 +84,7 @@ function VictoryModal({
         <div className="space-y-3 text-center leading-relaxed text-st-muted">
           <p>
             The last enemy banner has fallen. From the core worlds to the outermost
-            frontier, every star now burns in the light of your dominion.
+            frontier, every star shines forth your dominion.
           </p>
           <p className="italic text-st-fg/80">
             History will remember this day — and call it the beginning of your age.
