@@ -1,6 +1,6 @@
 import { FormEvent, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
-import { Pencil } from "lucide-react";
+import { Copy, Pencil, Trash2 } from "lucide-react";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
 import { Button } from "@/components/ui/button";
@@ -58,6 +58,13 @@ function stringFromFormData(formData: FormData, key: string): string {
   return typeof value === "string" ? value : "";
 }
 
+async function copyTextToClipboard(text: string): Promise<void> {
+  if (typeof navigator === "undefined" || navigator.clipboard?.writeText === undefined) {
+    throw new Error("Clipboard access is unavailable in this browser.");
+  }
+  await navigator.clipboard.writeText(text);
+}
+
 function readAdminUserMutationFields(formData: FormData): AdminUserMutationFields {
   const name = stringFromFormData(formData, "name").trim();
   const email = stringFromFormData(formData, "email").trim();
@@ -99,6 +106,8 @@ function AdminUserModal(props: {
   defaults: AdminUserFormDefaults;
   onClose: () => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+  onDelete?: () => void;
+  deleteDisabled?: boolean;
 }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 px-4 py-6">
@@ -202,13 +211,30 @@ function AdminUserModal(props: {
 
           {props.error !== null ? <p className="text-sm text-red-300">{props.error}</p> : null}
 
-          <div className="flex items-center justify-end gap-2">
-            <Button type="button" variant="ghost" onClick={props.onClose} disabled={props.submitting}>
-              Cancel
-            </Button>
-            <Button type="submit" disabled={props.submitting}>
-              {props.submitting ? props.submittingLabel : props.submitLabel}
-            </Button>
+          <div className="flex items-center justify-between gap-2">
+            <div>
+              {props.onDelete ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  className="px-2 py-2 text-red-200 hover:text-red-100"
+                  aria-label="Delete user"
+                  title="Delete user"
+                  disabled={props.deleteDisabled}
+                  onClick={props.onDelete}
+                >
+                  <Trash2 className="h-4 w-4" />
+                </Button>
+              ) : null}
+            </div>
+            <div className="flex items-center gap-2">
+              <Button type="button" variant="ghost" onClick={props.onClose} disabled={props.submitting}>
+                Cancel
+              </Button>
+              <Button type="submit" disabled={props.submitting}>
+                {props.submitting ? props.submittingLabel : props.submitLabel}
+              </Button>
+            </div>
           </div>
         </form>
       </div>
@@ -236,6 +262,7 @@ export function AdminUsersPage() {
   const [passwordUser, setPasswordUser] = useState<AdminUserRow | null>(null);
   const [createModalOpen, setCreateModalOpen] = useState(false);
   const [editingUser, setEditingUser] = useState<AdminUserRow | null>(null);
+  const [deleteConfirmUser, setDeleteConfirmUser] = useState<AdminUserRow | null>(null);
   const [modalError, setModalError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
@@ -338,20 +365,33 @@ export function AdminUsersPage() {
     }
   }
 
+  async function onCopyUserId(user: AdminUserRow) {
+    setError(null);
+    setSuccess(null);
+    try {
+      await copyTextToClipboard(user._id);
+      setSuccess(`Copied user id for ${user.email ?? user.name ?? user._id}.`);
+    } catch (copyError) {
+      setError(mutationErrorMessage(copyError));
+    }
+  }
+
   async function onDeleteUser(user: AdminUserRow) {
     const label = user.email ?? user.name ?? user._id;
-    if (!window.confirm(`Delete user ${label}? This removes the users row and linked auth/profile records.`)) {
-      return;
-    }
 
     setDeletingUserId(user._id);
+    setModalError(null);
     setError(null);
     setSuccess(null);
     try {
       await deleteUser({ userId: user._id });
+      setDeleteConfirmUser(null);
+      setEditingUser((current) => (current?._id === user._id ? null : current));
       setSuccess(`Deleted user ${label}.`);
     } catch (deleteError) {
-      setError(mutationErrorMessage(deleteError));
+      const message = mutationErrorMessage(deleteError);
+      setModalError(message);
+      setError(message);
     } finally {
       setDeletingUserId(null);
     }
@@ -427,10 +467,54 @@ export function AdminUsersPage() {
               return;
             }
             setModalError(null);
+            setDeleteConfirmUser(null);
             setEditingUser(null);
           }}
           onSubmit={(event) => void onEditUser(event)}
+          onDelete={() => {
+            setModalError(null);
+            setDeleteConfirmUser(editingUser);
+          }}
+          deleteDisabled={editSubmitting || deletingUserId === editingUser._id}
         />
+      ) : null}
+
+      {deleteConfirmUser !== null ? (
+        <div className="fixed inset-0 z-60 flex items-center justify-center bg-slate-950/80 px-4 py-6">
+          <div
+            role="dialog"
+            aria-modal="true"
+            className="w-full max-w-md rounded-xl border border-st-border bg-st-panel p-5 shadow-2xl shadow-black/40"
+          >
+            <h2 className="text-base font-semibold text-st-fg">Delete user?</h2>
+            <p className="mt-2 text-sm text-st-muted">
+              This removes the users row and linked auth/profile records for {deleteConfirmUser.email ?? deleteConfirmUser.name ?? deleteConfirmUser._id}.
+            </p>
+            {modalError !== null ? <p className="mt-3 text-sm text-red-300">{modalError}</p> : null}
+            <div className="mt-4 flex items-center justify-end gap-2">
+              <Button
+                type="button"
+                variant="ghost"
+                disabled={deletingUserId === deleteConfirmUser._id}
+                onClick={() => {
+                  setModalError(null);
+                  setDeleteConfirmUser(null);
+                }}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                className="border-red-400 text-red-200 hover:border-red-300 hover:text-red-100"
+                disabled={deletingUserId === deleteConfirmUser._id}
+                onClick={() => void onDeleteUser(deleteConfirmUser)}
+              >
+                {deletingUserId === deleteConfirmUser._id ? "Deleting..." : "Delete user"}
+              </Button>
+            </div>
+          </div>
+        </div>
       ) : null}
 
       {passwordUser !== null ? (
@@ -495,8 +579,8 @@ export function AdminUsersPage() {
                   <th className="border-b border-st-border px-3 py-2 font-medium">Phone</th>
                   <th className="border-b border-st-border px-3 py-2 font-medium">Email Verified</th>
                   <th className="border-b border-st-border px-3 py-2 font-medium">Phone Verified</th>
-                  <th className="border-b border-st-border px-3 py-2 font-medium">Password Sign-In</th>
-                  <th className="border-b border-st-border px-3 py-2 font-medium">Anonymous</th>
+                  <th className="border-b border-st-border px-3 py-2 font-medium">Pwd Sign-In</th>
+                  <th className="border-b border-st-border px-3 py-2 font-medium">Anon</th>
                   <th className="border-b border-st-border px-3 py-2 font-medium">Image</th>
                   <th className="border-b border-st-border px-3 py-2 font-medium">Actions</th>
                 </tr>
@@ -505,9 +589,16 @@ export function AdminUsersPage() {
                 {userResult.users.map((user: AdminUserRow) => (
                   <tr key={user._id} className="align-top">
                     <td className="border-b border-st-border/60 px-3 py-2">
-                      <code className="break-all rounded bg-st-bg px-1.5 py-0.5 text-xs text-st-fg">
-                        {user._id}
-                      </code>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        className="px-2 py-1"
+                        aria-label={`Copy user id for ${user.email ?? user.name ?? user._id}`}
+                        title="Copy user id"
+                        onClick={() => void onCopyUserId(user)}
+                      >
+                        <Copy className="h-4 w-4" />
+                      </Button>
                     </td>
                     <td className="border-b border-st-border/60 px-3 py-2 text-st-muted">
                       {formatTimestamp(user.createdAt)}
@@ -559,15 +650,6 @@ export function AdminUsersPage() {
                           onClick={() => setPasswordUser(user)}
                         >
                           {user.hasPasswordAccount ? "Reset password" : "Set password"}
-                        </Button>
-                        <Button
-                          type="button"
-                          variant="outline"
-                          className="px-2 py-1 text-xs text-red-200 hover:border-red-400 hover:text-red-100"
-                          disabled={deletingUserId === user._id}
-                          onClick={() => void onDeleteUser(user)}
-                        >
-                          {deletingUserId === user._id ? "Deleting..." : "Delete"}
                         </Button>
                       </div>
                     </td>
