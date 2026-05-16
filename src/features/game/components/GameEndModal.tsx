@@ -1,6 +1,11 @@
 import { useState, useEffect } from "react";
+import { useMutation } from "convex/react";
+import { useNavigate } from "react-router-dom";
 import { Link } from "react-router-dom";
 import { Button } from "@/components/ui/button";
+import { api } from "../../../../convex/_generated/api";
+import type { Id } from "../../../../convex/_generated/dataModel";
+import { getGamePath } from "@/features/games/gameRoutes";
 import { useGalaxyData } from "@/features/galaxy/hooks/useGalaxyData";
 import { usePlayerEmpireId, usePlayerGameMembership } from "@/features/player/PlayerPreviewContext";
 
@@ -8,11 +13,36 @@ import { usePlayerEmpireId, usePlayerGameMembership } from "@/features/player/Pl
 
 function VictoryModal({
   empireName,
+  missionKey,
   onDismiss,
 }: {
   empireName: string | null;
+  missionKey: string | null;
   onDismiss: () => void;
 }) {
+  const navigate = useNavigate();
+  const resetMyStarterGame = useMutation(api.usr.mutations.resetMyStarterGame);
+  const [playAgainBusy, setPlayAgainBusy] = useState(false);
+  const [playAgainError, setPlayAgainError] = useState<string | null>(null);
+
+  async function handlePlayAgain() {
+    if (missionKey === null || playAgainBusy) {
+      return;
+    }
+
+    setPlayAgainBusy(true);
+    setPlayAgainError(null);
+    try {
+      const result = await resetMyStarterGame({ scenarioKey: missionKey });
+      navigate(getGamePath({ gameId: result.gameId as Id<"sim_games"> }), { replace: true });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setPlayAgainError(message.replace(/^[\s\S]*?Error:\s*/g, "").trim());
+    } finally {
+      setPlayAgainBusy(false);
+    }
+  }
+
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4"
@@ -70,11 +100,19 @@ function VictoryModal({
           </Button>
           <button
             type="button"
-            className="text-xs text-st-muted transition-colors hover:text-st-fg"
-            onClick={onDismiss}
+            className="text-xs text-st-muted transition-colors hover:text-st-fg disabled:cursor-not-allowed disabled:opacity-50"
+            disabled={missionKey === null || playAgainBusy}
+            onClick={() => {
+              void handlePlayAgain();
+            }}
           >
-            Continue playing anyway
+            {playAgainBusy ? "Working..." : "Play again!"}
           </button>
+          {playAgainError !== null ? (
+            <p className="max-w-xs text-center text-[11px] text-red-300" role="alert">
+              {playAgainError}
+            </p>
+          ) : null}
         </div>
       </div>
     </div>
@@ -174,10 +212,11 @@ export function GameEndModal() {
   const empireId = usePlayerEmpireId();
   const membership = usePlayerGameMembership();
   const { activeGame, empires } = useGalaxyData();
+  const activeMissionKey = activeGame?.missionKey ?? activeGame?.lobbyScenarioKey ?? null;
 
   // Latched end-condition (set once, never reset)
   const [pendingKind, setPendingKind] = useState<"victory" | "defeat" | null>(null);
-  // What the modal is currently showing (set after 1 s delay)
+  // What the modal is currently showing (set after 1.5 s delay)
   const [modalKind, setModalKind] = useState<"victory" | "defeat" | null>(null);
   // True once the player has dismissed the modal (prevents re-showing)
   const [dismissed, setDismissed] = useState(false);
@@ -199,10 +238,10 @@ export function GameEndModal() {
     else if (isDefeated) setPendingKind("defeat");
   }, [isVictory, isDefeated, pendingKind, dismissed]);
 
-  // Effect 2 — show the modal after a 1 second delay once latched
+  // Effect 2 — show the modal after a 1.5 second delay once latched
   useEffect(() => {
     if (pendingKind === null) return;
-    const timer = setTimeout(() => setModalKind(pendingKind), 1000);
+    const timer = setTimeout(() => setModalKind(pendingKind), 1500);
     return () => clearTimeout(timer);
   }, [pendingKind]);
 
@@ -214,7 +253,7 @@ export function GameEndModal() {
   const empireName = membership.empireName ?? playerEmpire?.name ?? null;
 
   if (modalKind === "victory")
-    return <VictoryModal empireName={empireName} onDismiss={handleDismiss} />;
+    return <VictoryModal empireName={empireName} missionKey={activeMissionKey} onDismiss={handleDismiss} />;
   if (modalKind === "defeat")
     return <DefeatModal empireName={empireName} onDismiss={handleDismiss} />;
   return null;
