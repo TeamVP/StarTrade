@@ -131,7 +131,7 @@ export function LobbyPage() {
                 Lobby
               </h1>
               <p className="mt-2 max-w-3xl text-sm text-st-muted">
-                Manage the mission runs tied to <span className="font-medium text-st-fg">{profileLabel}</span>. Mission wins unlock later missions, and the selected game follows the same flow used in the preview lobby.
+                Manage the mission runs tied to <span className="font-medium text-st-fg">{profileLabel}</span>. Mission wins unlock later missions, and the selected game follows the same flow used in the player lobby.
               </p>
             </div>
             <div className="rounded-md border border-st-border bg-st-bg px-3 py-2 text-xs text-st-muted">
