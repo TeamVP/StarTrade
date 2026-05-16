@@ -200,6 +200,11 @@ async function findPasswordAccountByEmail(ctx: MutationCtx, email: string) {
     .unique();
 }
 
+function omitSystemFields<T extends { _id: unknown; _creationTime: number }>(doc: T): Omit<T, "_id" | "_creationTime"> {
+  const { _id: _ignoredId, _creationTime: _ignoredCreationTime, ...fields } = doc;
+  return fields;
+}
+
 export const reseedGame = mutation({
   args: {
     gameId: v.id("sim_games"),
@@ -595,6 +600,118 @@ export const createUser = mutation({
     return {
       userId: createdUserId,
     };
+  },
+});
+
+export const updateUser = mutation({
+  args: {
+    userId: v.id("users"),
+    name: v.optional(v.union(v.string(), v.null())),
+    email: v.optional(v.union(v.string(), v.null())),
+    phone: v.optional(v.union(v.string(), v.null())),
+    image: v.optional(v.union(v.string(), v.null())),
+    isAnonymous: v.boolean(),
+    emailVerified: v.boolean(),
+    phoneVerified: v.boolean(),
+  },
+  handler: async (ctx, args): Promise<{ userId: Id<"users"> }> => {
+    const viewerUserId = await getAuthUserId(ctx);
+    if (viewerUserId === null) {
+      throw new Error("Authentication required.");
+    }
+
+    const user = await ctx.db.get("users", args.userId);
+    if (user === null) {
+      throw new Error("User not found.");
+    }
+
+    const name = normalizeOptionalUserField(args.name);
+    const email = normalizeOptionalUserField(args.email)?.toLowerCase();
+    const phone = normalizeOptionalUserField(args.phone);
+    const image = normalizeOptionalUserField(args.image);
+    const now = Date.now();
+
+    if (args.emailVerified && email === undefined) {
+      throw new Error("Email verification requires an email address.");
+    }
+    if (args.phoneVerified && phone === undefined) {
+      throw new Error("Phone verification requires a phone number.");
+    }
+
+    const passwordAccount = await ctx.db
+      .query("authAccounts")
+      .withIndex("userIdAndProvider", (q) => q.eq("userId", args.userId).eq("provider", PASSWORD_PROVIDER_ID))
+      .unique();
+
+    if (passwordAccount !== null && email === undefined) {
+      throw new Error("Users with password sign-in must keep an email address.");
+    }
+
+    if (email !== undefined) {
+      const existingPasswordAccount = await findPasswordAccountByEmail(ctx, email);
+      if (existingPasswordAccount !== null && existingPasswordAccount.userId !== args.userId) {
+        throw new Error("That email already belongs to another password sign-in account.");
+      }
+    }
+
+    const nextUser = omitSystemFields(user);
+
+    if (name === undefined) {
+      delete nextUser.name;
+    } else {
+      nextUser.name = name;
+    }
+
+    if (email === undefined) {
+      delete nextUser.email;
+    } else {
+      nextUser.email = email;
+    }
+
+    if (phone === undefined) {
+      delete nextUser.phone;
+    } else {
+      nextUser.phone = phone;
+    }
+
+    if (image === undefined) {
+      delete nextUser.image;
+    } else {
+      nextUser.image = image;
+    }
+
+    if (args.emailVerified) {
+      nextUser.emailVerificationTime = user.emailVerificationTime ?? now;
+    } else {
+      delete nextUser.emailVerificationTime;
+    }
+
+    if (args.phoneVerified) {
+      nextUser.phoneVerificationTime = user.phoneVerificationTime ?? now;
+    } else {
+      delete nextUser.phoneVerificationTime;
+    }
+
+    if (args.isAnonymous) {
+      nextUser.isAnonymous = true;
+    } else {
+      delete nextUser.isAnonymous;
+    }
+
+    await ctx.db.replace("users", args.userId, nextUser);
+
+    if (passwordAccount !== null && email !== undefined) {
+      const nextPasswordAccount = omitSystemFields(passwordAccount);
+      nextPasswordAccount.providerAccountId = email;
+      if (nextUser.emailVerificationTime !== undefined) {
+        nextPasswordAccount.emailVerified = email;
+      } else {
+        delete nextPasswordAccount.emailVerified;
+      }
+      await ctx.db.replace("authAccounts", passwordAccount._id, nextPasswordAccount);
+    }
+
+    return { userId: args.userId };
   },
 });
 
