@@ -2098,53 +2098,55 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
 
   const mapZoomControlButtons =
     activeGame !== null ? (
-      <div className="flex items-center gap-1">
-        <Button
-          variant="secondary"
-          className={cn(mapControlBtnClass, "hidden sm:inline-flex")}
-          title={soundscapeEnabled ? "Disable event bell soundscape" : "Enable event bell soundscape"}
-          aria-label={soundscapeEnabled ? "Disable event bell soundscape" : "Enable event bell soundscape"}
-          type="button"
-          onClick={() => {
-            if (soundscapeEnabled || soundscapeStatus === "starting") {
-              disableSoundscape();
-              return;
-            }
-            void enableSoundscape();
-          }}
-        >
-          {soundscapeEnabled ? <Volume2 className="size-4" aria-hidden /> : <VolumeX className="size-4" aria-hidden />}
-        </Button>
-        <Button
-          variant="secondary"
-          className={mapControlBtnClass}
-          title="Zoom out"
-          aria-label="Zoom out"
-          type="button"
-          onClick={() => zoomFromCenter(1 / MAP_BUTTON_ZOOM_FACTOR)}
-        >
-          <Minus className="size-4" aria-hidden />
-        </Button>
-        <Button
-          variant="secondary"
-          className={mapControlBtnClass}
-          title="Zoom in"
-          aria-label="Zoom in"
-          type="button"
-          onClick={() => zoomFromCenter(MAP_BUTTON_ZOOM_FACTOR)}
-        >
-          <Plus className="size-4" aria-hidden />
-        </Button>
-        <Button
-          variant="secondary"
-          className={mapControlBtnClass}
-          title={nextFitAxis === "h" ? "Fit galaxy width" : "Fit galaxy height"}
-          aria-label={nextFitAxis === "h" ? "Fit galaxy width" : "Fit galaxy height"}
-          type="button"
-          onClick={resetMapView}
-        >
-          <Expand className="size-4" aria-hidden />
-        </Button>
+      <div className="flex flex-col items-end gap-1">
+        <div className="flex items-center gap-1">
+          <Button
+            variant="secondary"
+            className={cn(mapControlBtnClass, "hidden sm:inline-flex")}
+            title={soundscapeEnabled ? "Disable event bell soundscape" : "Enable event bell soundscape"}
+            aria-label={soundscapeEnabled ? "Disable event bell soundscape" : "Enable event bell soundscape"}
+            type="button"
+            onClick={() => {
+              if (soundscapeEnabled || soundscapeStatus === "starting") {
+                disableSoundscape();
+                return;
+              }
+              void enableSoundscape();
+            }}
+          >
+            {soundscapeEnabled ? <Volume2 className="size-4" aria-hidden /> : <VolumeX className="size-4" aria-hidden />}
+          </Button>
+          <Button
+            variant="secondary"
+            className={mapControlBtnClass}
+            title="Zoom out"
+            aria-label="Zoom out"
+            type="button"
+            onClick={() => zoomFromCenter(1 / MAP_BUTTON_ZOOM_FACTOR)}
+          >
+            <Minus className="size-4" aria-hidden />
+          </Button>
+          <Button
+            variant="secondary"
+            className={mapControlBtnClass}
+            title="Zoom in"
+            aria-label="Zoom in"
+            type="button"
+            onClick={() => zoomFromCenter(MAP_BUTTON_ZOOM_FACTOR)}
+          >
+            <Plus className="size-4" aria-hidden />
+          </Button>
+          <Button
+            variant="secondary"
+            className={mapControlBtnClass}
+            title={nextFitAxis === "h" ? "Fit galaxy width" : "Fit galaxy height"}
+            aria-label={nextFitAxis === "h" ? "Fit galaxy width" : "Fit galaxy height"}
+            type="button"
+            onClick={resetMapView}
+          >
+            <Expand className="size-4" aria-hidden />
+          </Button>
+        </div>
         {soundscapeError !== null ? (
           <div className="pointer-events-auto max-w-44 rounded-md border border-red-500/40 bg-st-panel/95 px-2 py-1 text-[11px] text-red-200 shadow-lg">
             {soundscapeError}
