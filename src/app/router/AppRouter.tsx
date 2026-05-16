@@ -21,10 +21,13 @@ function lazyNamedComponent<TProps>(
       // old URL and the server returns an HTML 404 instead of JS, producing a
       // MIME-type / fetch error.  Force a one-shot hard reload so the user
       // transparently picks up the new bundle instead of seeing a crash.
+      const errorMessage = error instanceof Error ? error.message : String(error);
       const isChunkError =
         error instanceof TypeError &&
-        (error.message.includes("Failed to fetch dynamically imported module") ||
-          error.message.includes("Importing a module script failed"));
+        (errorMessage.includes("Failed to fetch dynamically imported module") ||
+          errorMessage.includes("Importing a module script failed") ||
+          errorMessage.includes("Failed to load module script") ||
+          errorMessage.includes("Expected a JavaScript-or-Wasm module script"));
       if (isChunkError) {
         const RELOAD_KEY = `chunk_reload_${exportName}`;
         if (!sessionStorage.getItem(RELOAD_KEY)) {
