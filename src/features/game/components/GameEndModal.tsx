@@ -47,14 +47,12 @@ function VictoryModal({
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4"
       role="presentation"
-      onClick={onDismiss}
     >
       <div
         role="dialog"
         aria-modal="true"
         aria-labelledby="victory-title"
         className="pointer-events-auto w-full max-w-md rounded-xl border border-amber-500/50 bg-st-bg p-8 shadow-2xl shadow-amber-500/10"
-        onClick={(e) => e.stopPropagation()}
       >
         {/* Crown decoration */}
         <div className="mb-5 flex items-center justify-center gap-3 text-amber-500/60">
@@ -134,14 +132,12 @@ function DefeatModal({
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/88 p-4"
       role="presentation"
-      onClick={onDismiss}
     >
       <div
         role="dialog"
         aria-modal="true"
         aria-labelledby="defeat-title"
         className="pointer-events-auto w-full max-w-md rounded-xl border border-slate-700/40 bg-st-bg p-8 shadow-2xl shadow-black/80"
-        onClick={(e) => e.stopPropagation()}
       >
         {/* Cold silence decoration */}
         <div className="mb-7 flex items-center justify-center tracking-[0.6em] text-slate-700">

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useMutation } from "convex/react";
 import { useLocation } from "react-router-dom";
 import { api } from "../../../convex/_generated/api";
@@ -9,6 +9,7 @@ import { GalaxyMapNavProvider } from "@/features/galaxy/context/GalaxyMapNavCont
 import { EmpirePanel } from "@/features/empire/components/EmpirePanel";
 import { useActiveGame } from "@/features/galaxy/hooks/useActiveGame";
 import { usePlayerEmpireId, usePlayerGameMembership } from "@/features/player/PlayerPreviewContext";
+import type { Id } from "../../../convex/_generated/dataModel";
 
 function focusFleetIdFromState(state: unknown): string | null {
   if (state === null || typeof state !== "object") return null;
@@ -26,8 +27,20 @@ export function PlayerHomePage() {
   const [newGameError, setNewGameError] = useState<string | null>(null);
   const focusFleetId = focusFleetIdFromState(location.state);
   const activeMissionKey = activeGame?.missionKey ?? activeGame?.lobbyScenarioKey ?? null;
+
+  // Latch the last known empire ID so the map and empire panel stay intact
+  // when the game ends and the empire record is cleaned up (game-end modal flow).
+  const [lastKnownEmpireId, setLastKnownEmpireId] = useState<Id<"sim_empires"> | null>(empireId);
+  useEffect(() => {
+    if (empireId !== null) setLastKnownEmpireId(empireId);
+  }, [empireId]);
+  // Use the real empireId when available; fall back to last-known only when we
+  // previously had one (i.e. the player was not a spectator to begin with).
+  const displayEmpireId = empireId ?? lastKnownEmpireId;
+
   const canCreateNewStarterGame =
     empireId === null &&
+    lastKnownEmpireId === null &&
     activeGame !== null &&
     activeMissionKey !== null &&
     (activeGame.status === "finished" || membership.isSpectator);
@@ -50,8 +63,8 @@ export function PlayerHomePage() {
   }
 
   const aside =
-    empireId !== null ? (
-      <EmpirePanel focusEmpireId={empireId} />
+    displayEmpireId !== null ? (
+      <EmpirePanel focusEmpireId={displayEmpireId} />
     ) : (
       <Card className="p-4">
         <h2 className="text-sm font-semibold uppercase tracking-wide text-st-muted">
@@ -99,7 +112,7 @@ export function PlayerHomePage() {
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <GalaxyViewport
           playerHomeMapLayout
-          playerEmpireId={empireId}
+          playerEmpireId={displayEmpireId}
           starPanelAside={aside}
           initialFocusFleetId={focusFleetId}
         />
