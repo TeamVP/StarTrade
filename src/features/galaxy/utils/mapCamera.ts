@@ -114,6 +114,72 @@ export function computeFitAllSystemsCamera(
   };
 }
 
+/** Fit the galaxy to the full width of the viewport (scale driven by horizontal extent). */
+export function computeFitGalaxyHorizontal(
+  positions: readonly { x: number; y: number }[],
+  viewWidth: number = GALAXY_STAGE_WIDTH,
+  viewHeight: number = GALAXY_STAGE_HEIGHT,
+): GalaxyMapCamera {
+  const pad = MAP_ZOOM_MARGIN_PX;
+  const W = Math.max(viewWidth, 1);
+  const H = Math.max(viewHeight, 1);
+  if (positions.length === 0) {
+    return { focusX: W / 2, focusY: H / 2, scale: 1 };
+  }
+  let minX = positions[0].x;
+  let maxX = positions[0].x;
+  let minY = positions[0].y;
+  let maxY = positions[0].y;
+  for (let i = 1; i < positions.length; i++) {
+    const p = positions[i];
+    minX = Math.min(minX, p.x);
+    maxX = Math.max(maxX, p.x);
+    minY = Math.min(minY, p.y);
+    maxY = Math.max(maxY, p.y);
+  }
+  const bw = Math.max(maxX - minX, 80);
+  const usableW = Math.max(W - 2 * pad, 1);
+  const scale = clampMapScale(usableW / bw);
+  return {
+    focusX: (minX + maxX) / 2,
+    focusY: (minY + maxY) / 2,
+    scale,
+  };
+}
+
+/** Fit the galaxy to the full height of the viewport (scale driven by vertical extent). */
+export function computeFitGalaxyVertical(
+  positions: readonly { x: number; y: number }[],
+  viewWidth: number = GALAXY_STAGE_WIDTH,
+  viewHeight: number = GALAXY_STAGE_HEIGHT,
+): GalaxyMapCamera {
+  const pad = MAP_ZOOM_MARGIN_PX;
+  const W = Math.max(viewWidth, 1);
+  const H = Math.max(viewHeight, 1);
+  if (positions.length === 0) {
+    return { focusX: W / 2, focusY: H / 2, scale: 1 };
+  }
+  let minX = positions[0].x;
+  let maxX = positions[0].x;
+  let minY = positions[0].y;
+  let maxY = positions[0].y;
+  for (let i = 1; i < positions.length; i++) {
+    const p = positions[i];
+    minX = Math.min(minX, p.x);
+    maxX = Math.max(maxX, p.x);
+    minY = Math.min(minY, p.y);
+    maxY = Math.max(maxY, p.y);
+  }
+  const bh = Math.max(maxY - minY, 80);
+  const usableH = Math.max(H - 2 * pad, 1);
+  const scale = clampMapScale(usableH / bh);
+  return {
+    focusX: (minX + maxX) / 2,
+    focusY: (minY + maxY) / 2,
+    scale,
+  };
+}
+
 /** Max scale so selected star + up to `hopDepth` graph hops stay in view (radius from selected center). */
 export function computeMaxScaleForNeighborhood(
   systemId: string,

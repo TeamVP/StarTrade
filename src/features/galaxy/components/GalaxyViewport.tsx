@@ -32,6 +32,8 @@ import {
 import {
   clampMapScale,
   computeFitAllSystemsCamera,
+  computeFitGalaxyHorizontal,
+  computeFitGalaxyVertical,
   easeOutCubic,
   type GalaxyMapCamera,
 } from "../utils/mapCamera";
@@ -380,6 +382,11 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
 
   const [camera, setCamera] = useState<GalaxyMapCamera>(() =>
     computeFitAllSystemsCamera([]),
+  );
+  // Tracks which axis the next "Fit galaxy" click will fill.
+  // Wide screens default to horizontal-first; portrait/mobile default to vertical-first.
+  const [nextFitAxis, setNextFitAxis] = useState<"h" | "v">(() =>
+    typeof window !== "undefined" && window.innerWidth <= window.innerHeight ? "v" : "h",
   );
   const fittedGameRef = useRef<string | null>(null);
   const focusedInitialFleetRef = useRef<string | null>(null);
@@ -1184,8 +1191,13 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
     if (stageNodes.length === 0) return;
     cancelCameraTween();
     const { width, height } = viewSizeRef.current;
-    setCamera(computeFitAllSystemsCamera(stageNodes, width, height));
-  }, [stageNodes, cancelCameraTween]);
+    if (nextFitAxis === "h") {
+      setCamera(computeFitGalaxyHorizontal(stageNodes, width, height));
+    } else {
+      setCamera(computeFitGalaxyVertical(stageNodes, width, height));
+    }
+    setNextFitAxis((prev) => (prev === "h" ? "v" : "h"));
+  }, [stageNodes, cancelCameraTween, nextFitAxis]);
 
   const fleetMarkers = useMemo<FleetMarkerModel[]>(() => {
     if (!simAllowsPlayerOrders) return [];
@@ -2019,8 +2031,8 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
         <Button
           variant="secondary"
           className={mapControlBtnClass}
-          title="Fit entire galaxy"
-          aria-label="Fit entire galaxy"
+          title={nextFitAxis === "h" ? "Fit galaxy width" : "Fit galaxy height"}
+          aria-label={nextFitAxis === "h" ? "Fit galaxy width" : "Fit galaxy height"}
           type="button"
           onClick={resetMapView}
         >
