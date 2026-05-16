@@ -2365,7 +2365,7 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
           </Button>
           <Button
             variant="secondary"
-            className={mapControlBtnClass}
+            className={cn(mapControlBtnClass, "hidden sm:inline-flex")}
             title="Zoom out"
             aria-label="Zoom out"
             type="button"
