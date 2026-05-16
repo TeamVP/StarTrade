@@ -39,3 +39,12 @@ export const MAP_BUTTON_ZOOM_FACTOR = 1.2;
 
 /** Duration for ease-out camera glide when double-clicking a star (ms). */
 export const MAP_CAMERA_TWEEN_MS = 480;
+
+/** Full duration of the clockwise quarter-turn rotation button animation (ms). */
+export const MAP_ROTATION_SPIN_MS = 4000;
+/** Initial acceleration window for the long clockwise spin (ms). */
+export const MAP_ROTATION_EASE_IN_MS = 500;
+/** Final deceleration window for the long clockwise spin (ms). */
+export const MAP_ROTATION_EASE_OUT_MS = 1000;
+/** Minimum two-finger twist before touch free-spin engages. */
+export const MAP_TOUCH_ROTATE_THRESHOLD_RAD = Math.PI / 12;

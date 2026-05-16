@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   FLEET_ORBIT_RADIUS,
   MAP_PAN_DRAG_THRESHOLD_PX,
+  MAP_TOUCH_ROTATE_THRESHOLD_RAD,
   MAP_WHEEL_ZOOM_SENSITIVITY,
   STAR_HIT_RADIUS,
   TRAVEL_ANIM_MS,
@@ -12,6 +13,8 @@ import {
 import {
   clampMapScale,
   easeOutCubic,
+  setCameraScaleAndRotationTowardScreenPoint,
+  translateCameraByScreenDelta,
   type GalaxyMapCamera,
   screenToWorld,
   zoomCameraTowardScreenPoint,
@@ -59,9 +62,20 @@ type PinchSession = {
   startScale: number;
   startFocusX: number;
   startFocusY: number;
+  startRotation: number;
+  startAngleRad: number;
   startMidScreenX: number;
   startMidScreenY: number;
+  rotationUnlocked: boolean;
 };
+
+function normalizeSignedAngleDelta(angle: number): number {
+  const fullTurn = Math.PI * 2;
+  let normalized = angle % fullTurn;
+  if (normalized <= -Math.PI) normalized += fullTurn;
+  if (normalized > Math.PI) normalized -= fullTurn;
+  return normalized;
+}
 
 function smoothFirstLegDepartureProgress(params: {
   key: string;
@@ -331,6 +345,7 @@ export type GalaxyStageProps = {
   onColonyRouteDraftChange?: unknown;
   onColonyRouteDragActiveChange?: unknown;
   colonyRouteDismissNonce?: unknown;
+  allowTouchFreeSpin?: boolean;
 };
 
 export function GalaxyStage(props: GalaxyStageProps) {
@@ -390,6 +405,7 @@ function GalaxyStageInner({
   onColonyRouteDraftChange,
   onColonyRouteDragActiveChange,
   colonyRouteDismissNonce,
+  allowTouchFreeSpin = true,
 }: GalaxyStageProps) {
   void onColonyRouteDraftChange;
   void onColonyRouteDragActiveChange;
@@ -414,7 +430,7 @@ function GalaxyStageInner({
     if (renderer.width !== viewW || renderer.height !== viewH) {
       renderer.resize(viewW, viewH);
     }
-  }, [isInitialised, viewW, viewH]);
+  }, [allowTouchFreeSpin, isInitialised, viewW, viewH]);
 
   const [dragFleetId, setDragFleetId] = useState<string | null>(null);
   const [dragCursorPos, setDragCursorPos] = useState<{ x: number; y: number } | null>(
@@ -685,7 +701,7 @@ function GalaxyStageInner({
       canvas.style.touchAction = previousTouchAction;
       canvas.removeEventListener("wheel", onWheel);
     };
-  }, [isInitialised, viewW, viewH]);
+  }, [allowTouchFreeSpin, isInitialised, viewW, viewH]);
 
   useEffect(() => {
     if (!isInitialised) return;
@@ -733,8 +749,11 @@ function GalaxyStageInner({
         startScale: cam.scale,
         startFocusX: cam.focusX,
         startFocusY: cam.focusY,
+        startRotation: cam.rotation,
+        startAngleRad: Math.atan2(dy, dx),
         startMidScreenX: (scratch.a.x + scratch.b.x) / 2,
         startMidScreenY: (scratch.a.y + scratch.b.y) / 2,
+        rotationUnlocked: false,
       };
       gestureSuppressTapUntilRef.current = performance.now() + 250;
       panCleanupRef.current?.();
@@ -788,25 +807,37 @@ function GalaxyStageInner({
       const midScreenX = (scratch.a.x + scratch.b.x) / 2;
       const midScreenY = (scratch.a.y + scratch.b.y) / 2;
       const nextScale = clampMapScale((pinch.startScale * distance) / pinch.startDistance);
-      const anchorCamera = zoomCameraTowardScreenPoint(
+      const angleDelta = normalizeSignedAngleDelta(
+        Math.atan2(dy, dx) - pinch.startAngleRad,
+      );
+      const rotationUnlocked =
+        pinch.rotationUnlocked ||
+        (allowTouchFreeSpin && Math.abs(angleDelta) >= MAP_TOUCH_ROTATE_THRESHOLD_RAD);
+      const nextRotation = rotationUnlocked
+        ? pinch.startRotation + angleDelta
+        : pinch.startRotation;
+      const anchorCamera = setCameraScaleAndRotationTowardScreenPoint(
         {
           focusX: pinch.startFocusX,
           focusY: pinch.startFocusY,
           scale: pinch.startScale,
-          rotation: cameraRef.current.rotation,
+          rotation: pinch.startRotation,
         },
         pinch.startMidScreenX,
         pinch.startMidScreenY,
         nextScale,
+        nextRotation,
         viewW,
         viewH,
       );
-      onCameraChangeRef.current({
-        focusX: anchorCamera.focusX - (midScreenX - pinch.startMidScreenX) / nextScale,
-        focusY: anchorCamera.focusY - (midScreenY - pinch.startMidScreenY) / nextScale,
-        scale: nextScale,
-        rotation: anchorCamera.rotation,
-      });
+      pinch.rotationUnlocked = rotationUnlocked;
+      onCameraChangeRef.current(
+        translateCameraByScreenDelta(
+          anchorCamera,
+          midScreenX - pinch.startMidScreenX,
+          midScreenY - pinch.startMidScreenY,
+        ),
+      );
       gestureSuppressTapUntilRef.current = performance.now() + 250;
     };
 
@@ -875,13 +906,18 @@ function GalaxyStageInner({
           panSession.dragging = true;
         }
         if (!panSession.dragging) return;
-        const cam = cameraRef.current;
-        onCameraChangeRef.current({
-          focusX: panSession.startFocusX - dSx / cam.scale,
-          focusY: panSession.startFocusY - dSy / cam.scale,
-          scale: cam.scale,
-          rotation: cam.rotation,
-        });
+        onCameraChangeRef.current(
+          translateCameraByScreenDelta(
+            {
+              focusX: panSession.startFocusX,
+              focusY: panSession.startFocusY,
+              scale: cameraRef.current.scale,
+              rotation: cameraRef.current.rotation,
+            },
+            dSx,
+            dSy,
+          ),
+        );
       };
 
       const onUp = (ev: PointerEvent) => {
@@ -1203,6 +1239,7 @@ function GalaxyStageInner({
         y={viewH / 2}
         pivot={{ x: camera.focusX, y: camera.focusY }}
         scale={camera.scale}
+        rotation={camera.rotation}
         eventMode="passive"
       >
         <pixiGraphics

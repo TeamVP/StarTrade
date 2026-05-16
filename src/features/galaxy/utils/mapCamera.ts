@@ -11,7 +11,11 @@ export type GalaxyMapCamera = {
   focusX: number;
   focusY: number;
   scale: number;
+  rotation: number;
 };
+
+export const FULL_TURN_RAD = Math.PI * 2;
+export const QUARTER_TURN_RAD = Math.PI / 2;
 
 /** Ease-out cubic for camera tweens (slows into the target). */
 export function easeOutCubic(t: number): number {
@@ -21,6 +25,102 @@ export function easeOutCubic(t: number): number {
 
 export function clampMapScale(scale: number): number {
   return Math.min(MAX_MAP_SCALE, Math.max(MIN_MAP_SCALE, scale));
+}
+
+export function normalizeCameraRotation(rotation: number): number {
+  const turns = rotation % FULL_TURN_RAD;
+  return turns < 0 ? turns + FULL_TURN_RAD : turns;
+}
+
+export function nextQuarterTurnClockwise(rotation: number): number {
+  const normalized = normalizeCameraRotation(rotation);
+  const stepsCompleted = Math.floor(normalized / QUARTER_TURN_RAD);
+  const nextCanonical = (stepsCompleted + 1) * QUARTER_TURN_RAD;
+  const delta = nextCanonical - normalized;
+  return rotation + (delta > 1e-9 ? delta : QUARTER_TURN_RAD);
+}
+
+function rotateScreenVector(x: number, y: number, rotation: number): { x: number; y: number } {
+  const cos = Math.cos(rotation);
+  const sin = Math.sin(rotation);
+  return {
+    x: x * cos - y * sin,
+    y: x * sin + y * cos,
+  };
+}
+
+function inverseRotateScreenVector(
+  x: number,
+  y: number,
+  rotation: number,
+): { x: number; y: number } {
+  const cos = Math.cos(rotation);
+  const sin = Math.sin(rotation);
+  return {
+    x: x * cos + y * sin,
+    y: -x * sin + y * cos,
+  };
+}
+
+function computeRotatedExtent(
+  width: number,
+  height: number,
+  rotation: number,
+): { width: number; height: number } {
+  const cos = Math.abs(Math.cos(rotation));
+  const sin = Math.abs(Math.sin(rotation));
+  return {
+    width: width * cos + height * sin,
+    height: width * sin + height * cos,
+  };
+}
+
+export function translateCameraByScreenDelta(
+  camera: GalaxyMapCamera,
+  deltaScreenX: number,
+  deltaScreenY: number,
+): GalaxyMapCamera {
+  const translated = inverseRotateScreenVector(
+    -deltaScreenX / camera.scale,
+    -deltaScreenY / camera.scale,
+    camera.rotation,
+  );
+  return {
+    focusX: camera.focusX + translated.x,
+    focusY: camera.focusY + translated.y,
+    scale: camera.scale,
+    rotation: camera.rotation,
+  };
+}
+
+export function setCameraScaleAndRotationTowardScreenPoint(
+  camera: GalaxyMapCamera,
+  screenX: number,
+  screenY: number,
+  newScale: number,
+  newRotation: number,
+  viewWidth: number = GALAXY_STAGE_WIDTH,
+  viewHeight: number = GALAXY_STAGE_HEIGHT,
+): GalaxyMapCamera {
+  const s0 = camera.scale;
+  const s1 = clampMapScale(newScale);
+  if (Math.abs(s1 - s0) < 1e-9 && Math.abs(newRotation - camera.rotation) < 1e-9) {
+    return { ...camera, scale: s1, rotation: newRotation };
+  }
+  const { x: wx, y: wy } = screenToWorld(screenX, screenY, camera, viewWidth, viewHeight);
+  const cx = viewWidth / 2;
+  const cy = viewHeight / 2;
+  const rotated = inverseRotateScreenVector(
+    (screenX - cx) / s1,
+    (screenY - cy) / s1,
+    newRotation,
+  );
+  return {
+    focusX: wx - rotated.x,
+    focusY: wy - rotated.y,
+    scale: s1,
+    rotation: newRotation,
+  };
 }
 
 /**
@@ -38,9 +138,14 @@ export function screenToWorld(
   const cx = viewWidth / 2;
   const cy = viewHeight / 2;
   const s = camera.scale;
+  const rotated = inverseRotateScreenVector(
+    (screenX - cx) / s,
+    (screenY - cy) / s,
+    camera.rotation,
+  );
   return {
-    x: camera.focusX + (screenX - cx) / s,
-    y: camera.focusY + (screenY - cy) / s,
+    x: camera.focusX + rotated.x,
+    y: camera.focusY + rotated.y,
   };
 }
 
@@ -54,9 +159,14 @@ export function worldToScreen(
   const cx = viewWidth / 2;
   const cy = viewHeight / 2;
   const s = camera.scale;
+  const rotated = rotateScreenVector(
+    (worldX - camera.focusX) * s,
+    (worldY - camera.focusY) * s,
+    camera.rotation,
+  );
   return {
-    x: cx + (worldX - camera.focusX) * s,
-    y: cy + (worldY - camera.focusY) * s,
+    x: cx + rotated.x,
+    y: cy + rotated.y,
   };
 }
 
@@ -69,27 +179,29 @@ export function zoomCameraTowardScreenPoint(
   viewWidth: number = GALAXY_STAGE_WIDTH,
   viewHeight: number = GALAXY_STAGE_HEIGHT,
 ): GalaxyMapCamera {
-  const s0 = camera.scale;
-  const s1 = clampMapScale(newScale);
-  if (Math.abs(s1 - s0) < 1e-9) {
-    return { ...camera, scale: s1 };
-  }
-  const { x: wx, y: wy } = screenToWorld(screenX, screenY, camera, viewWidth, viewHeight);
-  const focusX = wx - ((wx - camera.focusX) * s0) / s1;
-  const focusY = wy - ((wy - camera.focusY) * s0) / s1;
-  return { focusX, focusY, scale: s1 };
+  return setCameraScaleAndRotationTowardScreenPoint(
+    camera,
+    screenX,
+    screenY,
+    newScale,
+    camera.rotation,
+    viewWidth,
+    viewHeight,
+  );
 }
 
 export function computeFitAllSystemsCamera(
   positions: readonly { x: number; y: number }[],
   viewWidth: number = GALAXY_STAGE_WIDTH,
   viewHeight: number = GALAXY_STAGE_HEIGHT,
+  rotation: number = 0,
 ): GalaxyMapCamera {
   const pad = MAP_ZOOM_MARGIN_PX;
   const W = Math.max(viewWidth, 1);
   const H = Math.max(viewHeight, 1);
+  const normalizedRotation = normalizeCameraRotation(rotation);
   if (positions.length === 0) {
-    return { focusX: W / 2, focusY: H / 2, scale: 1 };
+    return { focusX: W / 2, focusY: H / 2, scale: 1, rotation: normalizedRotation };
   }
   let minX = positions[0].x;
   let maxX = positions[0].x;
@@ -104,13 +216,17 @@ export function computeFitAllSystemsCamera(
   }
   const bw = Math.max(maxX - minX, 80);
   const bh = Math.max(maxY - minY, 80);
+  const rotatedExtent = computeRotatedExtent(bw, bh, normalizedRotation);
   const usableW = Math.max(W - 2 * pad, 1);
   const usableH = Math.max(H - 2 * pad, 1);
-  const scale = clampMapScale(Math.min(usableW / bw, usableH / bh));
+  const scale = clampMapScale(
+    Math.min(usableW / rotatedExtent.width, usableH / rotatedExtent.height),
+  );
   return {
     focusX: (minX + maxX) / 2,
     focusY: (minY + maxY) / 2,
     scale,
+    rotation: normalizedRotation,
   };
 }
 
@@ -119,12 +235,14 @@ export function computeFitGalaxyHorizontal(
   positions: readonly { x: number; y: number }[],
   viewWidth: number = GALAXY_STAGE_WIDTH,
   viewHeight: number = GALAXY_STAGE_HEIGHT,
+  rotation: number = 0,
 ): GalaxyMapCamera {
   const pad = MAP_ZOOM_MARGIN_PX;
   const W = Math.max(viewWidth, 1);
   const H = Math.max(viewHeight, 1);
+  const normalizedRotation = normalizeCameraRotation(rotation);
   if (positions.length === 0) {
-    return { focusX: W / 2, focusY: H / 2, scale: 1 };
+    return { focusX: W / 2, focusY: H / 2, scale: 1, rotation: normalizedRotation };
   }
   let minX = positions[0].x;
   let maxX = positions[0].x;
@@ -138,12 +256,15 @@ export function computeFitGalaxyHorizontal(
     maxY = Math.max(maxY, p.y);
   }
   const bw = Math.max(maxX - minX, 80);
+  const bh = Math.max(maxY - minY, 80);
+  const rotatedExtent = computeRotatedExtent(bw, bh, normalizedRotation);
   const usableW = Math.max(W - 2 * pad, 1);
-  const scale = clampMapScale(usableW / bw);
+  const scale = clampMapScale(usableW / Math.max(rotatedExtent.width, 1));
   return {
     focusX: (minX + maxX) / 2,
     focusY: (minY + maxY) / 2,
     scale,
+    rotation: normalizedRotation,
   };
 }
 
@@ -152,12 +273,14 @@ export function computeFitGalaxyVertical(
   positions: readonly { x: number; y: number }[],
   viewWidth: number = GALAXY_STAGE_WIDTH,
   viewHeight: number = GALAXY_STAGE_HEIGHT,
+  rotation: number = 0,
 ): GalaxyMapCamera {
   const pad = MAP_ZOOM_MARGIN_PX;
   const W = Math.max(viewWidth, 1);
   const H = Math.max(viewHeight, 1);
+  const normalizedRotation = normalizeCameraRotation(rotation);
   if (positions.length === 0) {
-    return { focusX: W / 2, focusY: H / 2, scale: 1 };
+    return { focusX: W / 2, focusY: H / 2, scale: 1, rotation: normalizedRotation };
   }
   let minX = positions[0].x;
   let maxX = positions[0].x;
@@ -170,13 +293,16 @@ export function computeFitGalaxyVertical(
     minY = Math.min(minY, p.y);
     maxY = Math.max(maxY, p.y);
   }
+  const bw = Math.max(maxX - minX, 80);
   const bh = Math.max(maxY - minY, 80);
+  const rotatedExtent = computeRotatedExtent(bw, bh, normalizedRotation);
   const usableH = Math.max(H - 2 * pad, 1);
-  const scale = clampMapScale(usableH / bh);
+  const scale = clampMapScale(usableH / Math.max(rotatedExtent.height, 1));
   return {
     focusX: (minX + maxX) / 2,
     focusY: (minY + maxY) / 2,
     scale,
+    rotation: normalizedRotation,
   };
 }
 

@@ -9,7 +9,7 @@ import {
   type ReactNode,
 } from "react";
 import { useMutation, useQuery } from "convex/react";
-import { ChevronLeft, ChevronRight, Expand, Info, Minus, Pause, Play, Plus, Repeat2, Star, Volume2, VolumeX } from "lucide-react";
+import { ChevronLeft, ChevronRight, Expand, Info, Minus, Pause, Play, Plus, Repeat2, RotateCw, Star, Volume2, VolumeX } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useNavigate } from "react-router-dom";
 import { api } from "../../../../convex/_generated/api";
@@ -30,6 +30,9 @@ import {
   GALAXY_STAGE_WIDTH,
   MAP_BUTTON_ZOOM_FACTOR,
   MAP_CAMERA_TWEEN_MS,
+  MAP_ROTATION_EASE_IN_MS,
+  MAP_ROTATION_EASE_OUT_MS,
+  MAP_ROTATION_SPIN_MS,
   MAX_MAP_SCALE,
   MIN_MAP_SCALE,
   STAR_CLICK_RECENTER_FRACTION,
@@ -41,6 +44,8 @@ import {
   computeFitGalaxyHorizontal,
   computeFitGalaxyVertical,
   easeOutCubic,
+  nextQuarterTurnClockwise,
+  normalizeCameraRotation,
   type GalaxyMapCamera,
 } from "../utils/mapCamera";
 import { turnTravelProgress } from "../utils/turnTravelProgress";
@@ -96,6 +101,38 @@ function finiteCombatCount(value: unknown, fallback: number): number {
   return typeof value === "number" && Number.isFinite(value)
     ? Math.max(0, Math.floor(value))
     : Math.max(0, Math.floor(fallback));
+}
+
+function rotationSpinProgress(elapsedMs: number): number {
+  const totalMs = Math.max(1, MAP_ROTATION_SPIN_MS);
+  const easeInMs = Math.min(MAP_ROTATION_EASE_IN_MS, totalMs);
+  const easeOutMs = Math.min(MAP_ROTATION_EASE_OUT_MS, totalMs - easeInMs);
+  const steadyMs = Math.max(0, totalMs - easeInMs - easeOutMs);
+  const totalDistanceFactor = 0.5 * easeInMs + steadyMs + 0.5 * easeOutMs;
+  const peakVelocity = totalDistanceFactor > 0 ? 1 / totalDistanceFactor : 1 / totalMs;
+  const clamped = Math.max(0, Math.min(elapsedMs, totalMs));
+
+  if (clamped <= easeInMs && easeInMs > 0) {
+    return 0.5 * (peakVelocity / easeInMs) * clamped * clamped;
+  }
+
+  const easeInDistance = 0.5 * peakVelocity * easeInMs;
+  if (clamped <= easeInMs + steadyMs) {
+    return easeInDistance + peakVelocity * (clamped - easeInMs);
+  }
+
+  const decelElapsed = clamped - easeInMs - steadyMs;
+  const steadyDistance = peakVelocity * steadyMs;
+  if (easeOutMs <= 0) {
+    return 1;
+  }
+
+  return (
+    easeInDistance +
+    steadyDistance +
+    peakVelocity * decelElapsed -
+    0.5 * (peakVelocity / easeOutMs) * decelElapsed * decelElapsed
+  );
 }
 
 function isEditableKeyboardTarget(target: EventTarget | null): boolean {
@@ -254,6 +291,7 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
     starPanelAside,
     playerHomeMapLayout = false,
   } = props;
+  const touchMapFreeSpinEnabled = import.meta.env.VITE_ENABLE_MAP_FREE_SPIN !== "false";
   const { activeGame, systems, links, empires, empireColors } = useGalaxyData();
   const galaxyMapNav = useGalaxyMapNav();
   const setMobileTopNavControl = useOptionalPlayerTopNavControlSetter() ?? null;
@@ -509,6 +547,7 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
       setCamera({
         ...next,
         scale: clampMapScale(next.scale),
+        rotation: normalizeCameraRotation(next.rotation),
       });
     },
     [cancelCameraTween],
@@ -544,6 +583,35 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
     },
     [cancelCameraTween],
   );
+
+  const rotateMapClockwise = useCallback(() => {
+    cancelCameraTween();
+    const startSnapshot = cameraRef.current;
+    const targetRotation = nextQuarterTurnClockwise(startSnapshot.rotation);
+    const t0 = performance.now();
+
+    const step = (now: number) => {
+      const elapsed = now - t0;
+      const progress = rotationSpinProgress(elapsed);
+      setCamera({
+        ...startSnapshot,
+        rotation: normalizeCameraRotation(
+          startSnapshot.rotation + (targetRotation - startSnapshot.rotation) * progress,
+        ),
+      });
+      if (elapsed < MAP_ROTATION_SPIN_MS) {
+        tweenRafRef.current = requestAnimationFrame(step);
+      } else {
+        tweenRafRef.current = null;
+        setCamera({
+          ...startSnapshot,
+          rotation: normalizeCameraRotation(targetRotation),
+        });
+      }
+    };
+
+    tweenRafRef.current = requestAnimationFrame(step);
+  }, [cancelCameraTween]);
 
   const empireNames = useMemo(
     () => Object.fromEntries(empires.map((e) => [e._id, e.name])),
@@ -1348,9 +1416,13 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
     cancelCameraTween();
     const { width, height } = viewSizeRef.current;
     if (nextFitAxis === "h") {
-      setCamera(computeFitGalaxyHorizontal(stageNodes, width, height));
+      setCamera(
+        computeFitGalaxyHorizontal(stageNodes, width, height, cameraRef.current.rotation),
+      );
     } else {
-      setCamera(computeFitGalaxyVertical(stageNodes, width, height));
+      setCamera(
+        computeFitGalaxyVertical(stageNodes, width, height, cameraRef.current.rotation),
+      );
     }
     setNextFitAxis((prev) => (prev === "h" ? "v" : "h"));
   }, [stageNodes, cancelCameraTween, nextFitAxis]);
@@ -2404,6 +2476,16 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
               <Button
                 variant="secondary"
                 className={mapControlBtnClass}
+                title="Rotate map clockwise 90 degrees"
+                aria-label="Rotate map clockwise 90 degrees"
+                type="button"
+                onClick={rotateMapClockwise}
+              >
+                <RotateCw className="size-4" aria-hidden />
+              </Button>
+              <Button
+                variant="secondary"
+                className={mapControlBtnClass}
                 title={nextFitAxis === "h" ? "Fit galaxy width" : "Fit galaxy height"}
                 aria-label={nextFitAxis === "h" ? "Fit galaxy width" : "Fit galaxy height"}
                 type="button"
@@ -2550,6 +2632,16 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
             <Button
               variant="secondary"
               className={cn(mapControlBtnClass, "hidden sm:inline-flex")}
+              title="Rotate map clockwise 90 degrees"
+              aria-label="Rotate map clockwise 90 degrees"
+              type="button"
+              onClick={rotateMapClockwise}
+            >
+              <RotateCw className="size-4" aria-hidden />
+            </Button>
+            <Button
+              variant="secondary"
+              className={cn(mapControlBtnClass, "hidden sm:inline-flex")}
               title={nextFitAxis === "h" ? "Fit galaxy width" : "Fit galaxy height"}
               aria-label={nextFitAxis === "h" ? "Fit galaxy width" : "Fit galaxy height"}
               type="button"
@@ -2683,6 +2775,7 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
         simAllowsPlayerOrders && activeGame ? handleColonyShipRouteCommit : undefined
       }
       validateColonyShipRoute={validateColonyShipRouteForMap}
+      allowTouchFreeSpin={touchMapFreeSpinEnabled}
     />
   );
 
