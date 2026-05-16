@@ -336,6 +336,9 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
     api.sim.queries.getTurnTimelineForGame,
     activeGame ? { gameId: activeGame._id } : "skip",
   );
+  const queueMyEmpireStandingOrdersRefresh = useMutation(
+    api.usr.mutations.queueMyEmpireStandingOrdersRefresh,
+  );
   const gameSettingsQuery = useQuery(
     api.admin.mutations.getGameSettings,
     activeGame ? { gameId: activeGame._id } : "skip",
@@ -2145,6 +2148,18 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
             onClick={resetMapView}
           >
             <Expand className="size-4" aria-hidden />
+          </Button>
+          <Button
+            variant="secondary"
+            className={mapControlBtnClass}
+            title="Clear standing orders and rebuild from the selected strategy on the next planning pass"
+            aria-label="Rerun standing orders from selected strategy"
+            type="button"
+            onClick={() => {
+              void queueMyEmpireStandingOrdersRefresh({ gameId: activeGame._id });
+            }}
+          >
+            <Repeat2 className="size-4" aria-hidden />
           </Button>
         </div>
         {soundscapeError !== null ? (
