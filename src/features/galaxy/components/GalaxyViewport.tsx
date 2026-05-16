@@ -1387,8 +1387,14 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
       return;
     }
 
-    autoSelectedHomeworldGameRef.current = activeGameId;
-    handleStarTap(homeworldSystemId);
+    const timeoutId = window.setTimeout(() => {
+      autoSelectedHomeworldGameRef.current = activeGameId;
+      handleStarTap(homeworldSystemId);
+    }, 500);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
   }, [
     activeGame?.status,
     activeGameId,
