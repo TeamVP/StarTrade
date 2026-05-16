@@ -12,6 +12,32 @@ function formatDateTime(value: number | null): string {
   return new Date(value).toLocaleString();
 }
 
+function formatRelativeDateTime(value: number | null): string {
+  if (value === null) return "Not started";
+
+  const diffMs = value - Date.now();
+  const absDiffMs = Math.abs(diffMs);
+
+  if (absDiffMs < 60_000) {
+    return "Just now";
+  }
+
+  const formatter = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
+  const units = [
+    ["day", 86_400_000],
+    ["hour", 3_600_000],
+    ["minute", 60_000],
+  ] as const;
+
+  for (const [unit, unitMs] of units) {
+    if (absDiffMs >= unitMs) {
+      return formatter.format(Math.round(diffMs / unitMs), unit);
+    }
+  }
+
+  return "Just now";
+}
+
 function statusClassName(status: string): string {
   if (status === "running") return "border-emerald-500/30 bg-emerald-950/30 text-emerald-200";
   if (status === "paused") return "border-amber-500/30 bg-amber-950/30 text-amber-200";
@@ -26,7 +52,6 @@ function formatStatus(status: string): string {
 export function LobbyPage() {
   const { selectedGameId, setSelectedGameId } = useActiveGame();
   const navigate = useNavigate();
-  const account = useQuery(api.usr.queries.getMyAccount, {});
   const lobbyState = useQuery(api.usr.queries.getMyLobbyState, {});
   const ensureMyStarterGames = useMutation(api.usr.mutations.ensureMyStarterGames);
   const resetMyStarterGame = useMutation(api.usr.mutations.resetMyStarterGame);
@@ -101,7 +126,6 @@ export function LobbyPage() {
 
   const games = lobbyState?.games ?? [];
   const gamesLoading = lobbyState === undefined;
-  const profileLabel = account?.profile?.displayName ?? account?.user.email ?? "your account";
 
   function actionLabel(entry: (typeof games)[number]): string {
     if (!entry.unlocked) {
@@ -123,22 +147,6 @@ export function LobbyPage() {
     <div className="w-full px-4 py-4 sm:px-6">
       <div className="mx-auto flex w-full max-w-6xl flex-col gap-4">
         <Card>
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div>
-              <h1 className="text-sm font-semibold uppercase tracking-wide text-st-muted">
-                Lobby
-              </h1>
-              <p className="mt-2 max-w-3xl text-sm text-st-muted">
-                Manage the mission runs tied to <span className="font-medium text-st-fg">{profileLabel}</span>. Mission wins unlock later missions, and the selected game follows the same flow used in the player lobby.
-              </p>
-            </div>
-            <div className="rounded-md border border-st-border bg-st-bg px-3 py-2 text-xs text-st-muted">
-              {gamesLoading ? "Loading..." : `${games.length} missions`}
-            </div>
-          </div>
-        </Card>
-
-        <Card>
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <h2 className="text-sm font-semibold uppercase tracking-wide text-st-muted">
@@ -150,7 +158,7 @@ export function LobbyPage() {
             </div>
             <div className="grid gap-2 text-sm text-st-muted sm:grid-cols-2">
               <div className="rounded border border-st-border bg-st-bg px-3 py-2">
-                Level: <span className="font-medium text-st-fg">{lobbyState?.progression.currentLevel ?? 1}</span>
+                You have reached Level: <span className="font-medium text-st-fg">{lobbyState?.progression.currentLevel ?? 1}</span>
               </div>
               <div className="rounded border border-st-border bg-st-bg px-3 py-2">
                 Completed: <span className="font-medium text-st-fg">{lobbyState?.progression.completedMissionCount ?? 0}</span>/{lobbyState?.progression.totalMissionCount ?? 0}
@@ -240,24 +248,14 @@ export function LobbyPage() {
                         ) : null}
                       </div>
                       <p className="mt-2 text-sm text-st-muted">{entry.description}</p>
-                      <dl className="mt-3 grid gap-2 text-sm text-st-muted sm:grid-cols-4">
-                        <div>
-                          <dt className="text-xs uppercase tracking-wide">Map</dt>
-                          <dd className="mt-0.5 font-mono text-st-fg">{entry.mapKey}</dd>
-                        </div>
+                      <dl className="mt-3 grid gap-2 text-sm text-st-muted sm:grid-cols-2 lg:grid-cols-3">
                         <div>
                           <dt className="text-xs uppercase tracking-wide">Turn</dt>
                           <dd className="mt-0.5 text-st-fg">{game?.currentTurn ?? 0}</dd>
                         </div>
                         <div>
                           <dt className="text-xs uppercase tracking-wide">Started</dt>
-                          <dd className="mt-0.5 text-st-fg">{formatDateTime(game?.startedAt ?? null)}</dd>
-                        </div>
-                        <div>
-                          <dt className="text-xs uppercase tracking-wide">Game ID</dt>
-                          <dd className="mt-0.5 truncate font-mono text-xs text-st-fg">
-                            {game === null ? "Preparing..." : getGameRouteKey(game)}
-                          </dd>
+                          <dd className="mt-0.5 text-st-fg">{formatRelativeDateTime(game?.startedAt ?? null)}</dd>
                         </div>
                       </dl>
                       {game !== null ? (
