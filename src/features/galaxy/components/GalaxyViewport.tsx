@@ -10,6 +10,7 @@ import {
 } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { Expand, Info, Minus, Plus, Repeat2, Star, Volume2, VolumeX } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 import { api } from "../../../../convex/_generated/api";
 import type { Id } from "../../../../convex/_generated/dataModel";
 import { useGalaxySoundscape } from "@/features/audio/hooks/useGalaxySoundscape";
@@ -250,6 +251,7 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
   } = props;
   const { activeGame, systems, links, empires, empireColors } = useGalaxyData();
   const galaxyMapNav = useGalaxyMapNav();
+  const navigate = useNavigate();
   const activeGameId = activeGame?._id ?? null;
 
   const simAllowsPlayerOrders = gameAllowsOrders(activeGame?.status);
@@ -695,13 +697,14 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
     setMapResignError(null);
     try {
       await resignFromGame({ gameId: activeGame._id });
+      void navigate("/lobby", { replace: true });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       setMapResignError(message.replace(/^[\s\S]*?Error:\s*/g, "").trim());
     } finally {
       setMapResignBusy(false);
     }
-  }, [activeGame, resignFromGame]);
+  }, [activeGame, navigate, resignFromGame]);
 
   const handlePlayerStartGame = useCallback(async () => {
     if (activeGame === null) return;
