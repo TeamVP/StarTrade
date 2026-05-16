@@ -213,6 +213,17 @@ export async function wipeGamePhaseBatch(
       }
       return batch.length === n ? "more" : "done";
     }
+    case "sim_turn_preparation_ops": {
+      const batch = await ctx.db
+        .query("sim_turn_preparation_ops")
+        .withIndex("by_gameId_and_turnNumber", (q) => q.eq("gameId", gameId))
+        .take(n);
+      if (batch.length === 0) return "done";
+      for (const doc of batch) {
+        await ctx.db.delete("sim_turn_preparation_ops", doc._id);
+      }
+      return batch.length === n ? "more" : "done";
+    }
     case "sim_turn_preparations": {
       const batch = await ctx.db
         .query("sim_turn_preparations")

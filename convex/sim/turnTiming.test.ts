@@ -2,8 +2,10 @@ import { describe, expect, test } from "vitest";
 import {
   committedNextTurnStartedAt,
   msUntilTurnBoundary,
+  msUntilTurnPreparationStart,
   resumedTurnStartedAt,
   scheduledNextTurnStartedAt,
+  scheduledTurnPreparationAt,
   shiftPausedDeadline,
   turnDurationHasElapsed,
 } from "./turnTiming";
@@ -66,6 +68,25 @@ describe("turnDurationHasElapsed", () => {
         turnDurationMs: 10_000,
       }),
     ).toBe(2_750);
+  });
+
+  test("opens the preparation window before the boundary", () => {
+    expect(
+      scheduledTurnPreparationAt({
+        turnStartedAtMs: 5_000,
+        turnDurationMs: 10_000,
+      }),
+    ).toBe(13_000);
+  });
+
+  test("computes the remaining delay until the preparation window opens", () => {
+    expect(
+      msUntilTurnPreparationStart({
+        nowMs: 12_250,
+        turnStartedAtMs: 5_000,
+        turnDurationMs: 10_000,
+      }),
+    ).toBe(750);
   });
 
   test("keeps the exact boundary when preparation finished before commit time", () => {

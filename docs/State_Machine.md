@@ -45,7 +45,7 @@ The visible turn is what the player is watching now. The prepared next turn is t
 
 ### Future Prepared-Turn Fields
 
-These are not implemented in the first slice, but they are the target architecture.
+These are now partially implemented via the preparation envelope and durable op log.
 
 - `preparedTurnNumber`
 - `preparedAt`
@@ -59,7 +59,7 @@ The controller now also owns a per-turn preparation record separate from `sim_tu
 - `sim_turn_preparations(gameId, turnNumber)` stores the durable preparation lifecycle for that turn.
 - `targetBoundaryAt` records the boundary this turn is trying to hit.
 - `state` is `queued`, `preparing`, `prepared`, `committed`, or `stale`.
-- This row is the future home for staged next-turn patches or snapshot references.
+- `sim_turn_preparation_ops(preparationId, opOrder)` stores the durable staged diff that commit applies.
 
 ## State Diagram
 
@@ -84,10 +84,10 @@ The controller now also owns a per-turn preparation record separate from `sim_tu
 ### Running/Preparing
 
 - The current turn is no longer open for orders.
-- Preparation phases execute in order.
+- Preparation phases execute in order against an in-memory snapshot of the turn-scoped sim tables.
 - The current implementation now has an explicit `prepared` stop before commit.
-- Because the heavy simulation still mutates live tables in place, safe preparation still begins at or after the visible boundary today.
-- The target architecture is to move this work earlier against staged state and produce a prepared next turn before the boundary.
+- The staged run produces a durable diff log in `sim_turn_preparation_ops` instead of mutating live tables immediately.
+- Preparation can now begin before the visible boundary because the live state remains untouched until commit.
 
 ### Running/Prepared
 
@@ -128,7 +128,7 @@ The controller now also owns a per-turn preparation record separate from `sim_tu
 
 - Valid only when `status = running`.
 - Reject while `turnPausedUntilMs > now`.
-- Reject while the visible turn duration has not elapsed.
+- Reject until the configured preparation lead window opens.
 - Move the current turn row to `state = preparing`.
 
 ### `finalizeTurnPreparation`
@@ -138,12 +138,13 @@ The controller now also owns a per-turn preparation record separate from `sim_tu
 
 ### `commitPreparedTurn`
 
+- Apply the durable staged diff for the prepared turn.
 - Mark current turn as resolved.
 - Advance `currentTurn`.
 - Insert the next `sim_turns` row.
 - If preparation completed before the stored boundary, the next row keeps that exact boundary start time.
 - If preparation completed late, the next row starts at commit time so the UI never opens a turn already partway elapsed.
-- Target architecture should make this commit cheap by feeding it staged prepared state instead of live in-place mutations.
+- Commit is now a diff-apply step instead of rerunning heavy simulation work.
 
 ## Client Clock Rules
 
@@ -161,9 +162,9 @@ The cron driver must not wake only once per turn duration.
 
 - The turn boundary is determined by stored timestamps, not by cron cadence.
 - Cron should poll frequently enough that turn resolution begins close to the deadline.
-- The system should also schedule a direct wake-up attempt at each known turn boundary.
+- The system should also schedule direct wake-up attempts for both the preparation lead instant and the exact turn boundary.
 - A coarse 10 second poll against a 10 second turn duration can add almost a full extra turn of visible delay.
-- The current implementation now polls once per second, and it also schedules an exact per-turn wake-up attempt. Both paths still defer the actual go/no-go decision to `beginTurnResolution`.
+- The current implementation now polls once per second, and it also schedules exact per-turn wake-up attempts for both preparation and commit. Both paths still defer the actual go/no-go decision to `beginTurnResolution` / `commitPreparedTurn`.
 
 ## Implementation Plan
 
@@ -195,11 +196,12 @@ This document is being updated incrementally alongside the implementation.
 - The turn timeline now includes a server-time snapshot so clients can estimate server clock offset.
 - The player/admin turn panels and turn-driven map visuals now read an offset-aware shared turn clock that freezes while paused.
 - The cron driver now polls once per second instead of once per turn duration, which removes scheduler-phase drift as a major source of delayed turn starts.
-- Starting a game, resuming an open turn, and opening a newly resolved turn now schedule an exact wake-up attempt at that turn boundary, with cron kept as the recovery path.
+- Starting a game, resuming an open turn, and opening a newly resolved turn now schedule exact wake-up attempts for both the preparation lead instant and the final turn boundary, with cron kept as the recovery path.
 - The backend now has an explicit prepare/commit split for the current turn row: heavy work ends in `prepared`, and commit advances the visible turn separately.
 - If commit happens after the stored boundary because preparation finished late, the next turn now starts at commit time instead of opening already partway elapsed.
-- The controller now also creates a durable `sim_turn_preparations` row for each turn so preparation state and future staged payloads can live outside the visible turn row.
-- True pre-boundary preparation is not implemented yet because the simulation still mutates live tables in place and needs staged state first.
+- The controller now also creates a durable `sim_turn_preparations` row for each turn and a durable `sim_turn_preparation_ops` diff log for staged effects.
+- Turn preparation now runs against a staged snapshot instead of mutating live tables, so the heavy turn work can start before the visible boundary.
+- Commit now applies the staged diff log at the boundary instead of rerunning simulation logic.
 
 ## Built So Far
 
@@ -209,9 +211,12 @@ This document is being updated incrementally alongside the implementation.
 - Turn timeline query fields for status, pause time, and server time snapshots.
 - Turn-driven UI and map consumers moved onto the shared clock.
 - Faster resolution polling plus exact turn-boundary wake-up attempts.
+- Exact preparation wake-up attempts before the boundary.
 - Backend prepare/commit state split with `prepared` as an explicit boundary before visible-turn advancement.
 - Late-commit protection so the next turn is not backdated into a partially elapsed timer when preparation overruns.
 - Durable per-turn preparation envelopes keyed by `(gameId, turnNumber)` with a stored target boundary and lifecycle state.
+- In-memory staged turn simulation with durable per-turn diff logs in `sim_turn_preparation_ops`.
+- Diff-apply commit with virtual-id remapping for staged inserted rows.
 
 ## What Should Be Working Now
 
@@ -219,12 +224,12 @@ This document is being updated incrementally alongside the implementation.
 - Fleet travel and combat replay timing should stay aligned with the same pause-aware turn clock used by the UI.
 - Turn-driven visuals should be less sensitive to browser/server clock drift.
 - Turn resolution should start much closer to the intended boundary instead of waiting for a 10 second cron phase.
-- Starting a game, resuming an open turn, and opening the next turn after resolution should all schedule the next boundary wake-up automatically.
+- Starting a game, resuming an open turn, and opening the next turn after resolution should all schedule both the next preparation wake-up and the next boundary wake-up automatically.
+- Heavy turn work should be able to finish before the visible boundary without mutating the live turn while it is still open.
+- Commit should now apply the precomputed staged diff rather than recomputing the entire turn at the boundary.
 - If heavy turn work completes late, the UI should no longer open the next turn already partway through its countdown.
 
 ## Still To Build
 
-- Prepared-next-turn staging so heavy simulation work can finish before the visible turn boundary.
-- A truly cheap commit step that flips to a precomputed next turn instead of relying on live in-place mutations.
-- The staged payload format itself: patch logs, snapshot references, or another durable representation of next-turn effects.
-- Final cleanup of remaining secondary screens that still derive time independently outside the main turn-clock path.
+- The original Slice 1–3 goals are implemented.
+- Optional follow-up work is now mostly tuning and cleanup: preparation lead calibration from live metrics, removal of deprecated legacy phase mutations, and richer inspection/debug tooling for staged turn diffs.

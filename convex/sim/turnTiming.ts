@@ -21,6 +21,22 @@ export function scheduledNextTurnStartedAt(params: {
   return params.turnStartedAtMs + Math.max(1, params.turnDurationMs);
 }
 
+export function turnPreparationLeadMs(turnDurationMs: number): number {
+  const safeDurationMs = Math.max(1, turnDurationMs);
+  return Math.min(4_000, Math.max(1_000, Math.round(safeDurationMs * 0.2)));
+}
+
+export function scheduledTurnPreparationAt(params: {
+  turnStartedAtMs: number;
+  turnDurationMs: number;
+}): number {
+  const boundaryAtMs = scheduledNextTurnStartedAt(params);
+  return Math.max(
+    params.turnStartedAtMs,
+    boundaryAtMs - turnPreparationLeadMs(params.turnDurationMs),
+  );
+}
+
 export function committedNextTurnStartedAt(params: {
   turnStartedAtMs: number;
   turnDurationMs: number;
@@ -60,6 +76,20 @@ export function msUntilTurnBoundary(params: {
   return Math.max(
     0,
     scheduledNextTurnStartedAt({
+      turnStartedAtMs: params.turnStartedAtMs,
+      turnDurationMs: params.turnDurationMs,
+    }) - params.nowMs,
+  );
+}
+
+export function msUntilTurnPreparationStart(params: {
+  nowMs: number;
+  turnStartedAtMs: number;
+  turnDurationMs: number;
+}): number {
+  return Math.max(
+    0,
+    scheduledTurnPreparationAt({
       turnStartedAtMs: params.turnStartedAtMs,
       turnDurationMs: params.turnDurationMs,
     }) - params.nowMs,

@@ -4,6 +4,21 @@ import { authTables } from "@convex-dev/auth/server";
 
 export default defineSchema({
   ...authTables,
+  // Extend the auth users table with a custom admin flag.
+  // Spreading authTables first and then overriding `users` gives us the extra field
+  // while preserving all required auth indexes.
+  users: defineTable({
+    name: v.optional(v.string()),
+    email: v.optional(v.string()),
+    phone: v.optional(v.string()),
+    image: v.optional(v.string()),
+    emailVerificationTime: v.optional(v.number()),
+    phoneVerificationTime: v.optional(v.number()),
+    isAnonymous: v.optional(v.boolean()),
+    admin: v.optional(v.boolean()),
+  })
+    .index("email", ["email"])
+    .index("phone", ["phone"]),
   sim_games: defineTable({
     name: v.string(),
     urlCode: v.optional(v.string()),
@@ -263,6 +278,19 @@ export default defineSchema({
     .index("by_gameId", ["gameId"])
     .index("by_gameId_and_turnNumber", ["gameId", "turnNumber"])
     .index("by_gameId_and_state", ["gameId", "state"]),
+
+  sim_turn_preparation_ops: defineTable({
+    preparationId: v.id("sim_turn_preparations"),
+    gameId: v.id("sim_games"),
+    turnNumber: v.number(),
+    opOrder: v.number(),
+    tableName: v.string(),
+    opType: v.union(v.literal("insert"), v.literal("patch"), v.literal("delete")),
+    targetId: v.optional(v.string()),
+    payloadJson: v.optional(v.string()),
+  })
+    .index("by_preparationId_and_opOrder", ["preparationId", "opOrder"])
+    .index("by_gameId_and_turnNumber", ["gameId", "turnNumber"]),
 
   sim_events: defineTable({
     gameId: v.id("sim_games"),

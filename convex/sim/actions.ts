@@ -48,17 +48,11 @@ export const resolveTurnJob = internalAction({
     ctx,
     args,
   ): Promise<{ preparedTurn: number; committed: boolean; nextTurn: number }> => {
-    await ctx.runMutation(internal.sim.internal.resolveTurnMovementPhase, args);
-    await ctx.runMutation(internal.sim.internal.resolveTurnEconomyPhase, args);
-    await ctx.runMutation(internal.sim.internal.resolveTurnNpcPhase, args);
-    await ctx.runMutation(internal.sim.internal.resolveTurnTradePhase, args);
-    await ctx.runMutation(internal.sim.internal.resolveTurnTraderSetupPhase, args);
-    await ctx.runMutation(internal.sim.internal.resolveTurnTradeSpawnPhase, args);
-    await ctx.runMutation(internal.sim.internal.resolveTurnGarrisonsPhase, args);
     const prepared: {
       skipped: boolean;
       preparedTurn: number;
-    } = await ctx.runMutation(internal.sim.internal.finalizeTurnPreparation, args);
+      opCount: number;
+    } = await ctx.runMutation(internal.sim.internal.prepareTurnWithStaging, args);
     const committed: {
       skipped: boolean;
       committed: boolean;

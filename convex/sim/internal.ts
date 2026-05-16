@@ -7,6 +7,7 @@ import { PAUSE_BUDGET_CAP_SECONDS, PAUSE_BUDGET_REFRESH_MS } from "./economy/con
 import {
   applyBackgroundTrade,
   deliverBackgroundTrade,
+  spawnBackgroundTrade,
   setupBackgroundTradeNpcs,
 } from "./economy/applyBackgroundTrade";
 import { maybeAdjustAutomatedNpcTraderLimits } from "./economy/adjustAutomatedNpcTraderLimits";
@@ -32,9 +33,16 @@ import { travelTurnsFromLinkCost } from "./fleetDispatch";
 import { evaluateGameFinalization } from "./finalization";
 import { recordGameTurnResolved } from "./helpers";
 import {
+  applyPreparationOperations,
+  createStagedTurnContext,
+  replacePreparationOperations,
+} from "./stagedTurnStore";
+import {
   committedNextTurnStartedAt,
   msUntilTurnBoundary,
+  msUntilTurnPreparationStart,
   scheduledNextTurnStartedAt,
+  scheduledTurnPreparationAt,
   turnDurationHasElapsed,
 } from "./turnTiming";
 
@@ -1926,11 +1934,11 @@ export const beginTurnResolution = internalMutation({
 
     if (
       turn.state === "open" &&
-      !turnDurationHasElapsed({
-        nowMs: now,
-        turnStartedAtMs: turn.startedAt,
-        turnDurationMs: game.turnDurationMs,
-      })
+      now <
+        scheduledTurnPreparationAt({
+          turnStartedAtMs: turn.startedAt,
+          turnDurationMs: game.turnDurationMs,
+        })
     ) {
       return { started: false, turnNumber, alreadyResolving: false };
     }
@@ -1950,7 +1958,7 @@ export const beginTurnResolution = internalMutation({
     await ctx.db.patch("sim_turns", turn._id, {
       state: "preparing",
       resolvingStartedAt: now,
-      resolutionPhase: readTurnResolutionPhase(turn.resolutionPhase),
+      resolutionPhase: "movement",
       preparedAt: undefined,
     });
     await upsertTurnPreparationRow(ctx, {
@@ -1962,10 +1970,174 @@ export const beginTurnResolution = internalMutation({
       startedAt: now,
       preparedAt: undefined,
       committedAt: undefined,
-      resolutionPhase: readTurnResolutionPhase(turn.resolutionPhase),
+      resolutionPhase: "movement",
       summaryJson: undefined,
     });
     return { started: true, turnNumber, alreadyResolving: false };
+  },
+});
+
+export const prepareTurnWithStaging = internalMutation({
+  args: { gameId: v.id("sim_games"), turnNumber: v.number() },
+  handler: async (
+    ctx,
+    args,
+  ): Promise<{ skipped: boolean; preparedTurn: number; opCount: number }> => {
+    const phase = await loadResolutionPhase(ctx, { ...args, phase: "movement" });
+    if (phase === null) {
+      return {
+        skipped: true,
+        preparedTurn: args.turnNumber,
+        opCount: 0,
+      };
+    }
+
+    const t = args.turnNumber;
+    const stage = await createStagedTurnContext(ctx, {
+      gameId: args.gameId,
+      turnNumber: t,
+    });
+    const stagedCtx = stage.ctx;
+
+    const movementOrders = await stagedCtx.db
+      .query("flt_orders")
+      .withIndex("by_gameId_and_turnNumber", (q) =>
+        q.eq("gameId", args.gameId).eq("turnNumber", t),
+      )
+      .take(64);
+    const movementFleetIdsWithOrdersThisTurn = new Set(
+      movementOrders.map((order) => order.fleetId as string),
+    );
+    const settings = await loadGameSettings(stagedCtx, args.gameId);
+    const defenderAdvantageScale =
+      settings.combatDefenderAdvantage / DEFENDER_BASE_MULTIPLIER;
+    const combatMultipliers: CombatMultipliers = {
+      attackMult: settings.combatAttackMult,
+      defendMult: defenderAdvantageScale * settings.combatDefendMult,
+      collateralDamageMult: settings.collateralDamageMult,
+      foodDamageMult: settings.combatFoodDamageMult,
+    };
+
+    await decayRecentBattleDamage(stagedCtx, args.gameId);
+    await refreshEmpirePauseBudgets(stagedCtx, args.gameId);
+    await applyFleetMoveOrders(stagedCtx, {
+      gameId: args.gameId,
+      turnNumber: t,
+      orders: movementOrders,
+    });
+    await resolveFleetArrivals(stagedCtx, args.gameId, t);
+    await resolveColonyShipArrivals(stagedCtx, args.gameId, t);
+    await resolveActiveBattles(stagedCtx, {
+      gameId: args.gameId,
+      turnNumber: t,
+      seed: phase.game.seed,
+      orders: movementOrders,
+      combatMultipliers,
+    });
+    await startNewBattlesAndClaimUnopposedSystems(stagedCtx, {
+      gameId: args.gameId,
+      turnNumber: t,
+      combatMultipliers,
+    });
+    await mergeIdleFleetsAtSameBody(stagedCtx, args.gameId, movementFleetIdsWithOrdersThisTurn);
+
+    await advanceResolutionPhase(ctx, phase.turn, "economy");
+
+    const economyOrders = await stagedCtx.db
+      .query("flt_orders")
+      .withIndex("by_gameId_and_turnNumber", (q) =>
+        q.eq("gameId", args.gameId).eq("turnNumber", t),
+      )
+      .take(64);
+    const economyFleetIdsWithOrdersThisTurn = new Set(
+      economyOrders.map((order) => order.fleetId as string),
+    );
+    await applyTurnEconomy(stagedCtx, {
+      gameId: args.gameId,
+      turnNumber: t,
+      fleetIdsWithOrdersThisTurn: economyFleetIdsWithOrdersThisTurn,
+      settings,
+    });
+
+    await advanceResolutionPhase(ctx, phase.turn, "npc");
+    await applyNpcStrategy(stagedCtx, {
+      gameId: args.gameId,
+      turnNumber: t,
+    });
+
+    await advanceResolutionPhase(ctx, phase.turn, "trade");
+    await deliverBackgroundTrade(stagedCtx, {
+      gameId: args.gameId,
+      turnNumber: t,
+    });
+
+    await advanceResolutionPhase(ctx, phase.turn, "traderSetup");
+    await setupBackgroundTradeNpcs(stagedCtx, { gameId: args.gameId });
+
+    await advanceResolutionPhase(ctx, phase.turn, "tradeSpawn");
+    await spawnBackgroundTrade(stagedCtx, {
+      gameId: args.gameId,
+      turnNumber: t,
+      traderShipCostMult: settings.traderShipCostMult,
+    });
+    await maybeAdjustAutomatedNpcTraderLimits(stagedCtx, {
+      gameId: args.gameId,
+      completedTurn: t,
+    });
+
+    await advanceResolutionPhase(ctx, phase.turn, "garrisons");
+    await applyGarrisonRoutes(stagedCtx, {
+      gameId: args.gameId,
+      turnNumber: t,
+    });
+
+    await advanceResolutionPhase(ctx, phase.turn, "finalize");
+    await cleanupFleetOrdersForTurn(stagedCtx, {
+      gameId: args.gameId,
+      turnNumber: t,
+    });
+
+    const operations = stage.buildOperations();
+    const preparedAt = Date.now();
+    const preparation = await loadTurnPreparationRow(ctx, args.gameId, t);
+    const targetBoundaryAt =
+      preparation?.targetBoundaryAt ??
+      scheduledNextTurnStartedAt({
+        turnStartedAtMs: phase.turn.startedAt,
+        turnDurationMs: phase.game.turnDurationMs,
+      });
+
+    await ctx.db.patch("sim_turns", phase.turn._id, {
+      preparedAt,
+      state: "prepared",
+      resolutionPhase: undefined,
+    });
+
+    const preparationId = await upsertTurnPreparationRow(ctx, {
+      gameId: args.gameId,
+      turnNumber: t,
+      targetBoundaryAt,
+      state: "prepared",
+      requestedAt: preparation?.requestedAt ?? preparedAt,
+      startedAt: preparation?.startedAt,
+      preparedAt,
+      committedAt: undefined,
+      resolutionPhase: undefined,
+      summaryJson: JSON.stringify({
+        preparedAt,
+        targetBoundaryAt,
+        opCount: operations.length,
+      }),
+    });
+
+    await replacePreparationOperations(ctx, {
+      preparationId,
+      gameId: args.gameId,
+      turnNumber: t,
+      operations,
+    });
+
+    return { skipped: false, preparedTurn: t, opCount: operations.length };
   },
 });
 
@@ -2286,6 +2458,10 @@ export const commitPreparedTurn = internalMutation({
       committedAtMs: resolvedAt,
     });
 
+    if (preparation !== null) {
+      await applyPreparationOperations(ctx, preparation._id);
+    }
+
     await ctx.db.patch("sim_turns", turn._id, {
       resolvedAt,
       state: "resolved",
@@ -2373,6 +2549,16 @@ export const commitPreparedTurn = internalMutation({
       summary: `Turn ${t} resolved → turn ${nextTurn}`,
       payload: JSON.stringify({ resolvedTurn: t, nextTurn }),
     });
+
+    await ctx.scheduler.runAfter(
+      msUntilTurnPreparationStart({
+        nowMs: resolvedAt,
+        turnStartedAtMs: nextTurnStartedAt,
+        turnDurationMs: game.turnDurationMs,
+      }),
+      internal.sim.actions.attemptResolveTurnBoundary,
+      { gameId: args.gameId },
+    );
 
     await ctx.scheduler.runAfter(
       msUntilTurnBoundary({

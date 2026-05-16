@@ -18,6 +18,7 @@ import { getMissionByKey } from "../usr/missionCatalog";
 import {
   DEFAULT_TURN_DURATION_MS,
   msUntilTurnBoundary,
+  msUntilTurnPreparationStart,
   resumedTurnStartedAt,
   scheduledNextTurnStartedAt,
   shiftPausedDeadline,
@@ -456,6 +457,16 @@ export const startGame = mutation({
     });
 
     await ctx.scheduler.runAfter(
+      msUntilTurnPreparationStart({
+        nowMs: now,
+        turnStartedAtMs: now,
+        turnDurationMs: game.turnDurationMs,
+      }),
+      internal.sim.actions.attemptResolveTurnBoundary,
+      { gameId: args.gameId },
+    );
+
+    await ctx.scheduler.runAfter(
       msUntilTurnBoundary({
         nowMs: now,
         turnStartedAtMs: now,
@@ -852,6 +863,15 @@ export const resumeGame = mutation({
     });
 
     if (activeTurnStartedAt !== null) {
+      await ctx.scheduler.runAfter(
+        msUntilTurnPreparationStart({
+          nowMs: resumedAt,
+          turnStartedAtMs: activeTurnStartedAt,
+          turnDurationMs: game.turnDurationMs,
+        }),
+        internal.sim.actions.attemptResolveTurnBoundary,
+        { gameId: args.gameId },
+      );
       await ctx.scheduler.runAfter(
         msUntilTurnBoundary({
           nowMs: resumedAt,
