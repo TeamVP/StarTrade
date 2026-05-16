@@ -1,6 +1,9 @@
+import { useState } from "react";
 import { Link } from "react-router-dom";
+import { ChevronRight } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { useActiveGame } from "@/features/galaxy/hooks/useActiveGame";
+import { cn } from "@/lib/utils";
 
 const liveLinks = [
   { to: "/admin/map", label: "Map", description: "Galaxy view and live turn panels." },
@@ -58,6 +61,7 @@ function AdminLinkCard(props: { to: string; label: string; description: string }
 
 export function AdminHomePage() {
   const { activeGame } = useActiveGame();
+  const [liveOpen, setLiveOpen] = useState(false);
 
   return (
     <div className="mx-auto max-w-[86.4rem] space-y-6 px-4 py-6">
@@ -73,17 +77,27 @@ export function AdminHomePage() {
       </Card>
 
       <section className="space-y-3">
-        <div>
-          <h2 className="text-lg font-semibold text-st-fg">Live</h2>
-          <p className="text-sm text-st-muted">
-            Live-game views for admins to inspect and operate the currently selected game.
-          </p>
-        </div>
-        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-          {liveLinks.map((link) => (
-            <AdminLinkCard key={link.to} {...link} />
-          ))}
-        </div>
+        <button
+          type="button"
+          onClick={() => setLiveOpen((open) => !open)}
+          aria-expanded={liveOpen}
+          className="flex w-full items-center justify-between rounded-xl border border-st-border bg-st-panel px-4 py-3 text-left transition-colors hover:border-st-accent hover:bg-st-bg"
+        >
+          <div>
+            <h2 className="text-lg font-semibold text-st-fg">Live</h2>
+            <p className="mt-1 text-sm text-st-muted">
+              Live-game views for admins to inspect and operate the currently selected game.
+            </p>
+          </div>
+          <ChevronRight className={cn("h-4 w-4 text-st-muted transition-transform", liveOpen ? "rotate-90" : undefined)} />
+        </button>
+        {liveOpen ? (
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+            {liveLinks.map((link) => (
+              <AdminLinkCard key={link.to} {...link} />
+            ))}
+          </div>
+        ) : null}
       </section>
 
       <section className="space-y-3">
