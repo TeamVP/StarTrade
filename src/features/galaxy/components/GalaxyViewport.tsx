@@ -877,33 +877,6 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
     [activeGame, canMarkPriorityStars, priorityEmpireId, setPriorityStar],
   );
 
-  useEffect(() => {
-    if (selectedSystem === null || !canMarkPriorityStars) return;
-    const selectedSystemIdForShortcut = selectedSystem._id;
-
-    function onKeyDown(event: KeyboardEvent) {
-      if (
-        event.key.toLowerCase() !== "p" ||
-        event.repeat ||
-        event.altKey ||
-        event.ctrlKey ||
-        event.metaKey ||
-        isEditableKeyboardTarget(event.target)
-      ) {
-        return;
-      }
-
-      event.preventDefault();
-      void togglePriorityStar(
-        selectedSystemIdForShortcut,
-        !priorityStarIds.has(selectedSystemIdForShortcut),
-      );
-    }
-
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [selectedSystem, canMarkPriorityStars, priorityStarIds, togglePriorityStar]);
-
   const systemOwnerById = useMemo(
     () => Object.fromEntries(systems.map((s) => [s._id, s.ownerEmpireId])),
     [systems],
@@ -1337,6 +1310,93 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
     }
     setNextFitAxis((prev) => (prev === "h" ? "v" : "h"));
   }, [stageNodes, cancelCameraTween, nextFitAxis]);
+
+  const handleSoundscapeToggle = useCallback(() => {
+    if (activeGame === null) return;
+    if (soundscapeEnabled || soundscapeStatus === "starting") {
+      disableSoundscape();
+      return;
+    }
+    void enableSoundscape();
+  }, [
+    activeGame,
+    disableSoundscape,
+    enableSoundscape,
+    soundscapeEnabled,
+    soundscapeStatus,
+  ]);
+
+  const handleStrategyRefresh = useCallback(() => {
+    if (activeGame === null) return;
+    void queueMyEmpireStandingOrdersRefresh({ gameId: activeGame._id });
+  }, [activeGame, queueMyEmpireStandingOrdersRefresh]);
+
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      if (
+        event.repeat ||
+        event.altKey ||
+        event.ctrlKey ||
+        event.metaKey ||
+        isEditableKeyboardTarget(event.target)
+      ) {
+        return;
+      }
+
+      const key = event.key.toLowerCase();
+      if (!["s", "p", "f", "r", "v"].includes(key)) {
+        return;
+      }
+
+      if (key === "s") {
+        if (selectedSystem === null || !canMarkPriorityStars) return;
+        event.preventDefault();
+        void togglePriorityStar(selectedSystem._id, !priorityStarIds.has(selectedSystem._id));
+        return;
+      }
+
+      if (key === "p") {
+        if (!canMapPauseOrResume) return;
+        event.preventDefault();
+        void handleMapPauseToggle();
+        return;
+      }
+
+      if (key === "f") {
+        if (activeGame === null) return;
+        event.preventDefault();
+        resetMapView();
+        return;
+      }
+
+      if (key === "r") {
+        if (activeGame === null) return;
+        event.preventDefault();
+        handleStrategyRefresh();
+        return;
+      }
+
+      if (key === "v") {
+        if (activeGame === null) return;
+        event.preventDefault();
+        handleSoundscapeToggle();
+      }
+    }
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [
+    activeGame,
+    canMapPauseOrResume,
+    canMarkPriorityStars,
+    handleMapPauseToggle,
+    handleSoundscapeToggle,
+    handleStrategyRefresh,
+    priorityStarIds,
+    resetMapView,
+    selectedSystem,
+    togglePriorityStar,
+  ]);
 
   const fleetMarkers = useMemo<FleetMarkerModel[]>(() => {
     if (!simAllowsPlayerOrders) return [];
