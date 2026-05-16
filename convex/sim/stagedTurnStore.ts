@@ -516,6 +516,12 @@ export async function applyPreparationOperations(
     }
     const targetId = idMap.get(op.targetId) ?? op.targetId;
     if (op.opType === "patch") {
+      if (!isVirtualStageId(targetId)) {
+        const existing = await ctx.db.get(targetId as Id<any>);
+        if (existing === null) {
+          continue;
+        }
+      }
       const patchPayload = JSON.parse(op.payloadJson) as StagePatchPayload;
       const patch: Record<string, unknown> = translateVirtualIds(patchPayload.set, idMap) as Record<string, unknown>;
       for (const field of patchPayload.unset) {
@@ -525,6 +531,10 @@ export async function applyPreparationOperations(
       continue;
     }
     if (isVirtualStageId(targetId)) {
+      continue;
+    }
+    const existing = await ctx.db.get(targetId as Id<any>);
+    if (existing === null) {
       continue;
     }
     await (ctx.db as any).delete(op.tableName, targetId);

@@ -34,7 +34,7 @@ export async function invalidateOpenTurnPreparation(
       q.eq("gameId", gameId).eq("turnNumber", game.currentTurn),
     )
     .unique();
-  if (turn === null || turn.state !== "open") {
+  if (turn === null || (turn.state !== "open" && turn.state !== "prepared")) {
     return;
   }
 
@@ -49,6 +49,7 @@ export async function invalidateOpenTurnPreparation(
     preparedAt: undefined,
     resolvingStartedAt: undefined,
     resolutionPhase: undefined,
+    ...(turn.state === "prepared" ? { state: "open" as const } : {}),
   });
 
   if (preparation === null) {
