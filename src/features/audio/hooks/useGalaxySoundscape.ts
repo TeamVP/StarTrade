@@ -11,6 +11,10 @@ import {
   type SoundscapeOwnershipContext,
   type SoundscapeSystemPosition,
 } from "@/features/audio/utils/soundscapeMapping";
+import {
+  buildSoundscapePlaybackPlan,
+  type SoundscapeTimelineSnapshot,
+} from "@/features/audio/utils/soundscapeTimeline";
 
 export type SoundscapeStatus = "off" | "starting" | "ready" | "error";
 
@@ -48,16 +52,26 @@ export function useGalaxySoundscape(params: {
   systemsById: Readonly<Record<string, SoundscapeSystemPosition>>;
   ownership?: SoundscapeOwnershipContext;
   listenerEmpireId?: string | null;
+  timeline?: SoundscapeTimelineSnapshot | null;
 }) {
-  const { activeGameId, camera, recentEvents, systemsById, ownership, listenerEmpireId } = params;
+  const { activeGameId, camera, recentEvents, systemsById, ownership, listenerEmpireId, timeline } = params;
   const [enabled, setEnabled] = useState<boolean>(() => readStoredEnabled());
   const [status, setStatus] = useState<SoundscapeStatus>(enabled ? "starting" : "off");
   const [error, setError] = useState<string | null>(null);
   const engineRef = useRef<GalaxySoundscapeEngine | null>(null);
   const seenEventIdsRef = useRef<Set<string>>(new Set());
+  const pendingPlaybackTimersRef = useRef<Map<string, number>>(new Map());
   const activeGameIdRef = useRef<string | null>(activeGameId);
 
+  const clearPendingPlaybackTimers = useCallback(() => {
+    for (const timer of pendingPlaybackTimersRef.current.values()) {
+      window.clearTimeout(timer);
+    }
+    pendingPlaybackTimersRef.current.clear();
+  }, []);
+
   const disableSoundscape = useCallback(() => {
+    clearPendingPlaybackTimers();
     engineRef.current?.dispose();
     engineRef.current = null;
     seenEventIdsRef.current = new Set();
@@ -66,7 +80,7 @@ export function useGalaxySoundscape(params: {
     setStatus("off");
     setError(null);
     writeStoredEnabled(false);
-  }, [activeGameId]);
+  }, [activeGameId, clearPendingPlaybackTimers]);
 
   const enableSoundscape = useCallback(async () => {
     if (engineRef.current !== null) {
@@ -81,7 +95,9 @@ export function useGalaxySoundscape(params: {
     setError(null);
     try {
       await ensureToneReady();
-      const engine = await createGalaxySoundscapeEngine();
+      const engine = await createGalaxySoundscapeEngine({
+        turnDurationMs: timeline?.turnDurationMs ?? null,
+      });
       engineRef.current = engine;
       activeGameIdRef.current = activeGameId;
       seenEventIdsRef.current = new Set(recentEvents.map((event) => String(event._id)));
@@ -94,14 +110,15 @@ export function useGalaxySoundscape(params: {
       setError(errorMessage(soundError));
       writeStoredEnabled(false);
     }
-  }, [activeGameId, recentEvents]);
+  }, [activeGameId, recentEvents, timeline?.turnDurationMs]);
 
   useEffect(() => {
     return () => {
+      clearPendingPlaybackTimers();
       engineRef.current?.dispose();
       engineRef.current = null;
     };
-  }, []);
+  }, [clearPendingPlaybackTimers]);
 
   useEffect(() => {
     if (!enabled) {
@@ -122,8 +139,9 @@ export function useGalaxySoundscape(params: {
       return;
     }
     activeGameIdRef.current = activeGameId;
+    clearPendingPlaybackTimers();
     seenEventIdsRef.current = new Set(recentEvents.map((event) => String(event._id)));
-  }, [activeGameId, recentEvents]);
+  }, [activeGameId, recentEvents, clearPendingPlaybackTimers]);
 
   useEffect(() => {
     const engine = engineRef.current;
@@ -131,11 +149,16 @@ export function useGalaxySoundscape(params: {
       return;
     }
     const seen = seenEventIdsRef.current;
-    for (const event of [...recentEvents].reverse()) {
+    const unseenEvents = [...recentEvents].reverse().filter((event) => !seen.has(String(event._id)));
+    const playbackPlan = new Map(
+      buildSoundscapePlaybackPlan({
+        events: unseenEvents.map((event) => ({ _id: String(event._id), turnNumber: event.turnNumber })),
+        timeline: timeline ?? null,
+      }).map((row) => [row.eventId, row]),
+    );
+
+    for (const event of unseenEvents) {
       const eventId = String(event._id);
-      if (seen.has(eventId)) {
-        continue;
-      }
       seen.add(eventId);
       const intent = toSoundscapeBellIntent({
         event: {
@@ -153,10 +176,19 @@ export function useGalaxySoundscape(params: {
         listenerEmpireId,
       });
       if (intent !== null) {
-        engine.playBell(intent);
+        const delayMs = playbackPlan.get(eventId)?.delayMs ?? 0;
+        if (delayMs <= 16) {
+          engine.playBell(intent);
+          continue;
+        }
+        const timer = window.setTimeout(() => {
+          pendingPlaybackTimersRef.current.delete(eventId);
+          engineRef.current?.playBell(intent);
+        }, delayMs);
+        pendingPlaybackTimersRef.current.set(eventId, timer);
       }
     }
-  }, [enabled, camera, recentEvents, systemsById, ownership, listenerEmpireId]);
+  }, [enabled, camera, recentEvents, systemsById, ownership, listenerEmpireId, timeline]);
 
   return {
     soundscapeEnabled: enabled && status === "ready",

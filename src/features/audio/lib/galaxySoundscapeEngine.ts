@@ -4,6 +4,7 @@ import type {
   SoundscapeBellIntent,
   SoundscapeSampleKey,
 } from "@/features/audio/utils/soundscapeMapping";
+import { computeSoundscapeReverbTailSeconds } from "@/features/audio/utils/soundscapeTimeline";
 
 type ToneModule = typeof import("tone");
 type BellPlayer = Player;
@@ -53,14 +54,21 @@ export async function ensureToneReady(): Promise<void> {
   }
 }
 
-export async function createGalaxySoundscapeEngine(): Promise<GalaxySoundscapeEngine> {
+export async function createGalaxySoundscapeEngine(params?: {
+  turnDurationMs?: number | null;
+}): Promise<GalaxySoundscapeEngine> {
   const Tone = await import("tone");
   const sampleBuffers = new Tone.ToneAudioBuffers(SAMPLE_BANK_URLS);
   await Tone.loaded();
+  const reverbTailSeconds = computeSoundscapeReverbTailSeconds(params?.turnDurationMs);
 
   const limiter = new Tone.Limiter(-2).toDestination();
   const masterGain = new Tone.Gain(0.84).connect(limiter);
-  const reverb = new Tone.Reverb({ decay: 4.2, preDelay: 0.02, wet: 0.18 }).connect(masterGain);
+  const reverb = new Tone.Reverb({
+    decay: reverbTailSeconds,
+    preDelay: 0.04,
+    wet: 0.24,
+  }).connect(masterGain);
   await reverb.generate();
 
   const actionBuses: Record<SoundscapeActionType, InstanceType<ToneModule["Gain"]>> = {
@@ -76,7 +84,7 @@ export async function createGalaxySoundscapeEngine(): Promise<GalaxySoundscapeEn
       const eventGain = intent.gain * clamp(intent.velocity, 0.2, 1);
       const player: BellPlayer = new Tone.Player({
         url: sampleBuffers.get(intent.sampleKey),
-        fadeOut: Math.min(0.32, intent.releaseSeconds * 0.28),
+        fadeOut: Math.min(1.4, Math.max(0.4, intent.releaseSeconds * 0.35)),
       });
       const filter = new Tone.Filter(intent.cutoffHz, "lowpass");
       const panner = new Tone.Panner(intent.pan);
@@ -100,8 +108,9 @@ export async function createGalaxySoundscapeEngine(): Promise<GalaxySoundscapeEn
       wetGain.connect(reverb);
 
       player.start();
-      if (intent.releaseSeconds < 2.8) {
-        player.stop(Tone.now() + intent.releaseSeconds + 0.05);
+      const sustainSeconds = Math.max(intent.releaseSeconds, Math.min(4.5, reverbTailSeconds * 0.38));
+      if (sustainSeconds < reverbTailSeconds) {
+        player.stop(Tone.now() + sustainSeconds);
       }
 
       const disposeTimer = window.setTimeout(() => {
@@ -111,7 +120,7 @@ export async function createGalaxySoundscapeEngine(): Promise<GalaxySoundscapeEn
         panner.dispose();
         dryGain.dispose();
         wetGain.dispose();
-      }, Math.max(1800, Math.round((intent.releaseSeconds + 2.4) * 1000)));
+      }, Math.max(3200, Math.round((sustainSeconds + 3.6) * 1000)));
       disposalTimers.add(disposeTimer);
     },
     dispose() {

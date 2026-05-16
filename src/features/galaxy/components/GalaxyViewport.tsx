@@ -1123,6 +1123,15 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
       systemOwnerById: soundscapeSystemOwnerById,
     },
     listenerEmpireId: myEmpireId,
+    timeline:
+      turnTimeline === null
+        ? null
+        : {
+            currentTurn: turnTimeline.currentTurn,
+            turnStartedAt: turnTimeline.turnStartedAt,
+            turnDurationMs: turnTimeline.turnDurationMs,
+            effectiveNowMs: turnClock.effectiveNowMs,
+          },
   });
 
   const focusEmpireHomeworld = useCallback(
