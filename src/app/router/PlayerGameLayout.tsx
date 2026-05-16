@@ -5,6 +5,7 @@ import { PlayerTopNav } from "@/app/layout/PlayerTopNav";
 import { ActiveGameProvider } from "@/features/galaxy/context/ActiveGameContext";
 import { PlayerPreviewProvider } from "@/features/player/PlayerPreviewContext";
 import { UserHeaderActions } from "@/features/usr/components/UserHeaderActions";
+import { GameEndModal } from "@/features/game/components/GameEndModal";
 import type { PlayerPreviewRouteConfig } from "@/features/player/playerPreviewConfig";
 import type { Id } from "../../../convex/_generated/dataModel";
 
@@ -34,6 +35,7 @@ export function PlayerGameLayout({
               mainClassName="flex min-h-0 min-w-0 flex-1 flex-col overflow-x-hidden overflow-y-auto px-4 pt-4 pb-4 lg:px-0 lg:pt-0 lg:pb-0 w-full max-w-none"
             >
               <Outlet />
+              <GameEndModal />
             </AppShell>
           </PlayerPreviewProvider>
         </ActiveGameProvider>
