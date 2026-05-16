@@ -156,13 +156,14 @@ class UiAudioEngine {
         });
         return;
       case "select_fleet":
+        // Single bright sine ping — warm, simple, clearly positive
         this.playTonalGesture({
-          frequencies: [330, 495],
-          type: "triangle",
-          peakGain: 0.05,
-          attackSeconds: 0.006,
-          decaySeconds: 0.18,
-          filterHz: 1900,
+          frequencies: [880],
+          type: "sine",
+          peakGain: 0.052,
+          attackSeconds: 0.005,
+          decaySeconds: 0.22,
+          filterHz: 3200,
         });
         return;
       case "select_colony_ship":
@@ -186,14 +187,7 @@ class UiAudioEngine {
         });
         return;
       case "drag_commit_success":
-        this.playTonalGesture({
-          frequencies: [392, 523.25, 659.25],
-          type: "sine",
-          peakGain: 0.05,
-          attackSeconds: 0.008,
-          decaySeconds: 0.28,
-          filterHz: 2600,
-        });
+        this.playSuccessGesture();
         return;
       case "drag_commit_cancel":
         this.playTonalGesture({
@@ -217,6 +211,63 @@ class UiAudioEngine {
         });
         return;
     }
+  }
+
+  /** Bright high-register chord with long decay and rapid stereo pan shimmer. */
+  private playSuccessGesture() {
+    const context = this.ensureContext();
+    const output = this.masterGain;
+    if (context === null || output === null) return;
+
+    const now = context.currentTime;
+    const attackSeconds = 0.01;
+    const decaySeconds = 1.4;
+    const totalSeconds = attackSeconds + decaySeconds;
+
+    // Stereo panner driven by a rapid LFO for left-right-left-right shimmer
+    const panner = context.createStereoPanner();
+    panner.connect(output);
+
+    const panLfo = context.createOscillator();
+    panLfo.type = "sine";
+    panLfo.frequency.value = 12; // ~6 full left-right cycles over the note
+    const panDepth = context.createGain();
+    panDepth.gain.value = 0.45; // 45 % pan depth each side
+    panLfo.connect(panDepth);
+    panDepth.connect(panner.pan);
+    panLfo.start(now);
+    panLfo.stop(now + totalSeconds + 0.1);
+
+    // Volume envelope
+    const envelope = context.createGain();
+    envelope.gain.setValueAtTime(0.0001, now);
+    envelope.gain.linearRampToValueAtTime(0.06, now + attackSeconds);
+    envelope.gain.exponentialRampToValueAtTime(0.0001, now + totalSeconds);
+    envelope.connect(panner);
+
+    // Bright low-pass filter
+    const filter = context.createBiquadFilter();
+    filter.type = "lowpass";
+    filter.frequency.value = 4200;
+    filter.Q.value = 0.5;
+    filter.connect(envelope);
+
+    // G5 / C6 / E6 — high C-major, bright and unambiguously positive
+    for (const freq of [784, 1046.5, 1318.5]) {
+      const osc = context.createOscillator();
+      osc.type = "sine";
+      osc.frequency.value = freq;
+      osc.connect(filter);
+      osc.start(now);
+      osc.stop(now + totalSeconds + 0.1);
+    }
+
+    window.setTimeout(() => {
+      envelope.disconnect();
+      filter.disconnect();
+      panner.disconnect();
+      panDepth.disconnect();
+    }, Math.round((totalSeconds + 0.2) * 1000));
   }
 
   setFleetDragHoverActive(active: boolean) {
