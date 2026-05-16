@@ -22,6 +22,7 @@ type StageSnapshot = Record<StagedSimTableName, Map<string, AnyStageDoc>>;
 type StageIndexFilter = {
   field: string;
   value: unknown;
+  operator: "eq" | "gt" | "gte" | "lt" | "lte";
 };
 
 const STAGED_INSERT_ONLY_TABLES = new Set<StagedSimTableName>([
@@ -77,6 +78,46 @@ function valuesEqual(left: unknown, right: unknown): boolean {
   return JSON.stringify(left) === JSON.stringify(right);
 }
 
+function compareValues(left: unknown, right: unknown): number | null {
+  if (typeof left === "number" && typeof right === "number") {
+    return left - right;
+  }
+  if (typeof left === "string" && typeof right === "string") {
+    return left.localeCompare(right);
+  }
+  if (typeof left === "bigint" && typeof right === "bigint") {
+    if (left === right) {
+      return 0;
+    }
+    return left > right ? 1 : -1;
+  }
+  return null;
+}
+
+function matchesStageFilter(rowValue: unknown, filter: StageIndexFilter): boolean {
+  if (filter.operator === "eq") {
+    return valuesEqual(rowValue, filter.value);
+  }
+
+  const comparison = compareValues(rowValue, filter.value);
+  if (comparison === null) {
+    return false;
+  }
+
+  switch (filter.operator) {
+    case "gt":
+      return comparison > 0;
+    case "gte":
+      return comparison >= 0;
+    case "lt":
+      return comparison < 0;
+    case "lte":
+      return comparison <= 0;
+    default:
+      return false;
+  }
+}
+
 function applyPatchToDoc(
   current: AnyStageDoc,
   patch: Record<string, unknown>,
@@ -128,7 +169,27 @@ class StageIndexBuilder {
   readonly filters: StageIndexFilter[] = [];
 
   eq(field: string, value: unknown): StageIndexBuilder {
-    this.filters.push({ field, value });
+    this.filters.push({ field, value, operator: "eq" });
+    return this;
+  }
+
+  gt(field: string, value: unknown): StageIndexBuilder {
+    this.filters.push({ field, value, operator: "gt" });
+    return this;
+  }
+
+  gte(field: string, value: unknown): StageIndexBuilder {
+    this.filters.push({ field, value, operator: "gte" });
+    return this;
+  }
+
+  lt(field: string, value: unknown): StageIndexBuilder {
+    this.filters.push({ field, value, operator: "lt" });
+    return this;
+  }
+
+  lte(field: string, value: unknown): StageIndexBuilder {
+    this.filters.push({ field, value, operator: "lte" });
     return this;
   }
 }
@@ -173,7 +234,9 @@ class StageQuery {
   private async materialize(): Promise<AnyStageDoc[]> {
     let rows = sortStageDocs(this.readRows()).map((row) => cloneValue(row));
     for (const filter of this.filters) {
-      rows = rows.filter((row) => valuesEqual((row as Record<string, unknown>)[filter.field], filter.value));
+      rows = rows.filter((row) =>
+        matchesStageFilter((row as Record<string, unknown>)[filter.field], filter),
+      );
     }
     if (this.direction === "desc") {
       rows.reverse();
