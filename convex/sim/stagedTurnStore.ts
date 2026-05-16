@@ -193,6 +193,29 @@ async function loadTableRows(
   }
 
   switch (tableName) {
+    case "eco_bg_traders": {
+      const [enRoute, delivered, cancelled] = await Promise.all([
+        ctx.db
+          .query("eco_bg_traders")
+          .withIndex("by_gameId_and_status", (q) =>
+            q.eq("gameId", gameId).eq("status", "enRoute"),
+          )
+          .take(2048),
+        ctx.db
+          .query("eco_bg_traders")
+          .withIndex("by_gameId_and_status", (q) =>
+            q.eq("gameId", gameId).eq("status", "delivered"),
+          )
+          .take(2048),
+        ctx.db
+          .query("eco_bg_traders")
+          .withIndex("by_gameId_and_status", (q) =>
+            q.eq("gameId", gameId).eq("status", "cancelled"),
+          )
+          .take(2048),
+      ]);
+      return [...enRoute, ...delivered, ...cancelled] as AnyStageDoc[];
+    }
     case "flt_orders":
       return (await ctx.db
         .query("flt_orders")
