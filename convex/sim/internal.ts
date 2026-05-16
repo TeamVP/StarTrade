@@ -2006,6 +2006,21 @@ export const resetCurrentTurnPreparationForRecovery = internalMutation({
   },
 });
 
+export const postCommitMaintenance = internalMutation({
+  args: {
+    gameId: v.id("sim_games"),
+    nextTurn: v.number(),
+  },
+  handler: async (ctx, args): Promise<void> => {
+    await pruneHistoricalTurnPreparationData(
+      ctx,
+      args.gameId,
+      Math.max(1, args.nextTurn - PREPARATION_HISTORY_TURNS_TO_KEEP + 1),
+    );
+    await evaluateGameFinalization(ctx, { gameId: args.gameId });
+  },
+});
+
 export const beginTurnResolution = internalMutation({
   args: { gameId: v.id("sim_games") },
   handler: async (
@@ -2791,13 +2806,10 @@ export const commitPreparedTurn = internalMutation({
         { gameId: args.gameId },
       );
 
-      await pruneHistoricalTurnPreparationData(
-        ctx,
-        args.gameId,
-        Math.max(1, nextTurn - PREPARATION_HISTORY_TURNS_TO_KEEP + 1),
-      );
-
-      await evaluateGameFinalization(ctx, { gameId: args.gameId });
+      await ctx.scheduler.runAfter(0, internal.sim.internal.postCommitMaintenance, {
+        gameId: args.gameId,
+        nextTurn,
+      });
     } catch (error) {
       throw new Error(
         `commitPreparedTurn(next turn scheduling): ${error instanceof Error ? error.message : String(error)}`,
