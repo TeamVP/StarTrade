@@ -1,5 +1,6 @@
 import { Navigate, createBrowserRouter, RouterProvider } from "react-router-dom";
 import { lazy, Suspense, type ComponentType } from "react";
+import { AppRouteErrorPage } from "@/app/router/AppRouteErrorPage";
 
 function lazyNamedComponent<TProps>(
   loader: () => Promise<Record<string, ComponentType<TProps>>>,
@@ -182,46 +183,57 @@ const legacyAdminRedirects = [
   { path: "/balance", to: "/admin/balance" },
 ] as const;
 
+const routeErrorElement = <AppRouteErrorPage />;
+
 const router = createBrowserRouter([
   {
     path: "/",
     element: <LandingPage />,
+    errorElement: routeErrorElement,
   },
   {
     path: "/sign-in",
     element: <SignInPage />,
+    errorElement: routeErrorElement,
   },
   {
     path: "/lobby",
     element: <UserAreaLayout />,
+    errorElement: routeErrorElement,
     children: [{ index: true, element: <LobbyPage /> }],
   },
   {
     path: "/profile",
     element: <UserAreaLayout />,
+    errorElement: routeErrorElement,
     children: [{ index: true, element: <ProfilePage /> }],
   },
   {
     path: "/strat",
     element: <UserAreaLayout />,
+    errorElement: routeErrorElement,
     children: [{ index: true, element: <StratPage /> }],
   },
   {
     path: "/legals/privacy",
     element: <PrivacyPolicyPage />,
+    errorElement: routeErrorElement,
   },
   {
     path: "/legals/tos",
     element: <TermsOfServicePage />,
+    errorElement: routeErrorElement,
   },
   {
     path: "/game/:gameId",
     element: <GameRoutePage />,
+    errorElement: routeErrorElement,
     children: [...playerChildRoutes],
   },
   {
     path: "/admin",
     element: <AuthenticatedGameLayout />,
+    errorElement: routeErrorElement,
     children: [
       {
         element: <AdminGuard />,
@@ -231,6 +243,7 @@ const router = createBrowserRouter([
   },
   {
     path: "/",
+    errorElement: routeErrorElement,
     children: legacyAdminRedirects.map(({ path, to }) => ({
       path,
       element: <Navigate to={to} replace />,
