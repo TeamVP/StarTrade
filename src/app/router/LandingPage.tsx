@@ -1,5 +1,5 @@
 import { Link } from "react-router-dom";
-import { Authenticated, Unauthenticated } from "convex/react";
+import { useConvexAuth } from "convex/react";
 
 const publicLinks = [{ to: "/lobby", label: "Lobby" }] as const;
 
@@ -9,6 +9,9 @@ const authenticatedLinks = [
 ] as const;
 
 export function LandingPage() {
+  const { isAuthenticated, isLoading } = useConvexAuth();
+  const showAuthenticatedContent = !isLoading && isAuthenticated;
+
   return (
     <main
       className="min-h-dvh text-st-fg"
@@ -29,28 +32,27 @@ export function LandingPage() {
         <h1 className="text-4xl font-semibold tracking-[0.2em] text-white sm:text-6xl">
           Welcome to Starstrat
         </h1>
-        <Unauthenticated>
+        {!showAuthenticatedContent ? (
           <p className="mt-4 max-w-xl text-sm leading-6 text-st-muted sm:text-base">
             Join the game.
           </p>
-        </Unauthenticated>
-        <Authenticated>
+        ) : (
           <p className="mt-4 max-w-xl text-sm leading-6 text-st-muted sm:text-base">
             Jump back into your account area or review your player profile.
           </p>
-        </Authenticated>
+        )}
         <div className="mt-10 flex flex-wrap items-center justify-center gap-3">
-          <Authenticated>
-            {authenticatedLinks.map(({ to, label }) => (
-              <Link
-                key={to}
-                to={to}
-                className="rounded-full border border-st-border/80 bg-st-panel/70 px-5 py-2 text-sm font-medium text-st-fg transition-colors hover:border-st-accent hover:bg-st-accent hover:text-slate-950"
-              >
-                {label}
-              </Link>
-            ))}
-          </Authenticated>
+          {showAuthenticatedContent
+            ? authenticatedLinks.map(({ to, label }) => (
+                <Link
+                  key={to}
+                  to={to}
+                  className="rounded-full border border-st-border/80 bg-st-panel/70 px-5 py-2 text-sm font-medium text-st-fg transition-colors hover:border-st-accent hover:bg-st-accent hover:text-slate-950"
+                >
+                  {label}
+                </Link>
+              ))
+            : null}
           {publicLinks.map(({ to, label }) => (
             <Link
               key={to}
