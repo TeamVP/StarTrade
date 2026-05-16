@@ -516,28 +516,58 @@ export async function applyPreparationOperations(
     }
     const targetId = idMap.get(op.targetId) ?? op.targetId;
     if (op.opType === "patch") {
+      let patchTargetId = targetId;
       if (!isVirtualStageId(targetId)) {
-        const existing = await ctx.db.get(targetId as Id<any>);
-        if (existing === null) {
+        const normalizedTargetId = ctx.db.normalizeId(op.tableName, targetId);
+        if (normalizedTargetId === null) {
+          console.warn("applyPreparationOperations: skipping patch for invalid target", {
+            preparationId,
+            tableName: op.tableName,
+            targetId,
+          });
           continue;
         }
+        const existing = await ctx.db.get(normalizedTargetId);
+        if (existing === null) {
+          console.warn("applyPreparationOperations: skipping patch for missing target", {
+            preparationId,
+            tableName: op.tableName,
+            targetId,
+          });
+          continue;
+        }
+        patchTargetId = normalizedTargetId;
       }
       const patchPayload = JSON.parse(op.payloadJson) as StagePatchPayload;
       const patch: Record<string, unknown> = translateVirtualIds(patchPayload.set, idMap) as Record<string, unknown>;
       for (const field of patchPayload.unset) {
         patch[field] = undefined;
       }
-      await (ctx.db as any).patch(op.tableName, targetId, patch);
+      await (ctx.db as any).patch(op.tableName, patchTargetId, patch);
       continue;
     }
     if (isVirtualStageId(targetId)) {
       continue;
     }
-    const existing = await ctx.db.get(targetId as Id<any>);
-    if (existing === null) {
+    const normalizedTargetId = ctx.db.normalizeId(op.tableName, targetId);
+    if (normalizedTargetId === null) {
+      console.warn("applyPreparationOperations: skipping delete for invalid target", {
+        preparationId,
+        tableName: op.tableName,
+        targetId,
+      });
       continue;
     }
-    await (ctx.db as any).delete(op.tableName, targetId);
+    const existing = await ctx.db.get(normalizedTargetId);
+    if (existing === null) {
+      console.warn("applyPreparationOperations: skipping delete for missing target", {
+        preparationId,
+        tableName: op.tableName,
+        targetId,
+      });
+      continue;
+    }
+    await (ctx.db as any).delete(op.tableName, normalizedTargetId);
   }
 
   return { applied: operations.length };
