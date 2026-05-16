@@ -72,6 +72,12 @@ export const getMyAccount = query({
       .query("usr_profiles")
       .withIndex("by_userId", (q) => q.eq("userId", userId))
       .unique();
+    const passwordAccount = await ctx.db
+      .query("authAccounts")
+      .withIndex("providerAndAccountId", (q) =>
+        q.eq("provider", "password").eq("providerAccountId", (user.email ?? "").toLowerCase()),
+      )
+      .unique();
 
     return {
       user: {
@@ -82,6 +88,7 @@ export const getMyAccount = query({
         isAnonymous: user.isAnonymous ?? false,
       },
       profile,
+      hasPasswordAccount: passwordAccount?.userId === user._id,
     };
   },
 });

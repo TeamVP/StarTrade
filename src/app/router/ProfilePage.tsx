@@ -17,12 +17,17 @@ function initialsFromName(name: string | null | undefined, email: string | null 
 export function ProfilePage() {
   const account = useQuery(api.usr.queries.getMyAccount, {});
   const upsertMyProfile = useMutation(api.usr.mutations.upsertMyProfile);
+  const setMyPassword = useMutation(api.usr.mutations.setMyPassword);
   const [displayNameInput, setDisplayNameInput] = useState("");
   const [avatarUrlInput, setAvatarUrlInput] = useState("");
   const [timezoneInput, setTimezoneInput] = useState("");
   const [analyticsConsent, setAnalyticsConsent] = useState(false);
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved">("idle");
   const [error, setError] = useState<string | null>(null);
+  const [passwordInput, setPasswordInput] = useState("");
+  const [passwordConfirmInput, setPasswordConfirmInput] = useState("");
+  const [passwordState, setPasswordState] = useState<"idle" | "saving" | "saved">("idle");
+  const [passwordError, setPasswordError] = useState<string | null>(null);
 
   useEffect(() => {
     if (account === undefined || account === null) {
@@ -41,6 +46,14 @@ export function ProfilePage() {
     account?.profile?.displayName ?? account?.user.name,
     account?.user.email,
   );
+  const hasPasswordAccount = account?.hasPasswordAccount ?? false;
+
+  useEffect(() => {
+    setPasswordInput("");
+    setPasswordConfirmInput("");
+    setPasswordState("idle");
+    setPasswordError(null);
+  }, [account?.user._id]);
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -58,6 +71,30 @@ export function ProfilePage() {
       const message = mutationError instanceof Error ? mutationError.message : String(mutationError);
       setError(message.replace(/^[\s\S]*?Error:\s*/g, "").trim());
       setSaveState("idle");
+    }
+  }
+
+  async function handlePasswordSubmit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (passwordInput !== passwordConfirmInput) {
+      setPasswordError("Passwords do not match.");
+      setPasswordState("idle");
+      return;
+    }
+
+    setPasswordError(null);
+    setPasswordState("saving");
+    try {
+      await setMyPassword({
+        password: passwordInput,
+      });
+      setPasswordInput("");
+      setPasswordConfirmInput("");
+      setPasswordState("saved");
+    } catch (mutationError) {
+      const message = mutationError instanceof Error ? mutationError.message : String(mutationError);
+      setPasswordError(message.replace(/^[\s\S]*?Error:\s*/g, "").trim());
+      setPasswordState("idle");
     }
   }
 
@@ -181,6 +218,83 @@ export function ProfilePage() {
               <dd className="mt-1 font-medium text-st-fg">End the current session</dd>
             </div>
           </dl>
+        </Card>
+
+        <Card>
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <h2 className="text-sm font-semibold uppercase tracking-wide text-st-muted">Password</h2>
+              <p className="mt-2 text-sm text-st-muted">
+                {hasPasswordAccount
+                  ? "Change the password used for email sign-in on this account."
+                  : "Create a password so this account can also sign in with email and password."}
+              </p>
+            </div>
+            {passwordState === "saved" ? (
+              <span className="rounded border border-emerald-500/40 bg-emerald-950/30 px-2 py-1 text-xs font-medium text-emerald-200">
+                Saved
+              </span>
+            ) : null}
+          </div>
+          <form className="mt-4 grid gap-4" onSubmit={handlePasswordSubmit}>
+            <label className="grid gap-2 text-sm text-st-muted">
+              <span className="text-xs uppercase tracking-wide">New password</span>
+              <input
+                type="password"
+                value={passwordInput}
+                onChange={(event) => {
+                  setPasswordInput(event.target.value);
+                  setPasswordState("idle");
+                  setPasswordError(null);
+                }}
+                minLength={8}
+                autoComplete="new-password"
+                className="rounded-md border border-st-border bg-st-bg px-3 py-2 text-sm text-st-fg outline-none transition-colors focus:border-st-accent"
+                placeholder="Enter a new password"
+              />
+            </label>
+            <label className="grid gap-2 text-sm text-st-muted">
+              <span className="text-xs uppercase tracking-wide">Confirm password</span>
+              <input
+                type="password"
+                value={passwordConfirmInput}
+                onChange={(event) => {
+                  setPasswordConfirmInput(event.target.value);
+                  setPasswordState("idle");
+                  setPasswordError(null);
+                }}
+                minLength={8}
+                autoComplete="new-password"
+                className="rounded-md border border-st-border bg-st-bg px-3 py-2 text-sm text-st-fg outline-none transition-colors focus:border-st-accent"
+                placeholder="Re-enter the new password"
+              />
+            </label>
+            {passwordError ? <p className="text-sm text-red-300">{passwordError}</p> : null}
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-sm text-st-muted">
+                {account?.user.email !== null
+                  ? "This updates the password tied to your current email address."
+                  : "Password sign-in requires an email address on the account."}
+              </p>
+              <Button
+                type="submit"
+                disabled={
+                  passwordState === "saving" ||
+                  account === undefined ||
+                  account === null ||
+                  account.user.email === null ||
+                  passwordInput.length < 8 ||
+                  passwordInput !== passwordConfirmInput
+                }
+              >
+                {passwordState === "saving"
+                  ? "Saving..."
+                  : hasPasswordAccount
+                    ? "Reset password"
+                    : "Set password"}
+              </Button>
+            </div>
+          </form>
         </Card>
       </div>
     </div>
