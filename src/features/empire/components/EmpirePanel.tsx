@@ -460,19 +460,26 @@ export function EmpirePanel(props: { focusEmpireId?: Id<"emp_states"> | null }) 
 
   const turnStartedAt = turnTimeline?.turnStartedAt ?? null;
   const turnDurationMs = turnTimeline?.turnDurationMs ?? null;
-  const isRunning = activeGame?.status === "running";
+  const gameStatus = activeGame?.status ?? null;
 
+  // Snap barNow to now whenever a new turn opens so the bar always resets to full.
   useEffect(() => {
-    if (!isRunning || turnStartedAt === null) return;
+    if (turnStartedAt !== null) setBarNow(Date.now());
+  }, [turnStartedAt]);
+
+  // Advance the clock only while the game is running (stop ticking when paused).
+  useEffect(() => {
+    if (gameStatus !== "running" || turnStartedAt === null) return;
     const id = window.setInterval(() => setBarNow(Date.now()), 250);
     return () => window.clearInterval(id);
-  }, [isRunning, turnStartedAt]);
+  }, [gameStatus, turnStartedAt]);
 
-  // Fraction elapsed in the current turn window [0..1]; drives the countdown wipe.
+  // Fraction elapsed in the current turn window [0..1]; visible during running AND paused.
   const turnElapsedFrac = useMemo(() => {
-    if (!isRunning || turnStartedAt === null || turnDurationMs === null || turnDurationMs <= 0) return null;
+    if (gameStatus !== "running" && gameStatus !== "paused") return null;
+    if (turnStartedAt === null || turnDurationMs === null || turnDurationMs <= 0) return null;
     return Math.min(1, Math.max(0, (barNow - turnStartedAt) / turnDurationMs));
-  }, [isRunning, barNow, turnStartedAt, turnDurationMs]);
+  }, [gameStatus, barNow, turnStartedAt, turnDurationMs]);
 
   type EmpireRow = (typeof empires)[number];
 
@@ -584,15 +591,17 @@ export function EmpirePanel(props: { focusEmpireId?: Id<"emp_states"> | null }) 
               void onPauseToggle();
             }}
           >
-            {/* Countdown bar: fills from left, drains right-ward as the turn elapses */}
-            {turnElapsedFrac !== null && activeGame?.status === "running" ? (
+            {/* Countdown bar: full at turn start, left edge sweeps rightward as the turn elapses.
+                Anchored to the button's right edge; frozen (animation paused) when game is paused. */}
+            {turnElapsedFrac !== null ? (
               <span
                 aria-hidden
-                className="pointer-events-none absolute inset-y-0 left-0 st-turn-countdown-bg"
+                className="pointer-events-none absolute inset-y-0 right-0 st-turn-countdown-bg"
                 style={{
                   width: `${Math.round((1 - turnElapsedFrac) * 100)}%`,
                   transition: "width 0.25s linear",
                   opacity: 0.72,
+                  animationPlayState: gameStatus === "paused" ? "paused" : "running",
                 }}
               />
             ) : null}
