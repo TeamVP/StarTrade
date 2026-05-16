@@ -2655,43 +2655,62 @@ export const commitPreparedTurn = internalMutation({
       committedAtMs: resolvedAt,
     });
 
-    if (preparation !== null) {
-      await applyPreparationOperations(ctx, preparation._id);
+    try {
+      if (preparation !== null) {
+        await applyPreparationOperations(ctx, preparation._id);
+      }
+    } catch (error) {
+      throw new Error(
+        `commitPreparedTurn(applyPreparationOperations): ${error instanceof Error ? error.message : String(error)}`,
+      );
     }
 
-    await ctx.db.patch("sim_turns", turn._id, {
-      resolvedAt,
-      state: "resolved",
-      resolvingStartedAt: undefined,
-    });
+    let winner: Doc<"emp_states"> | null = null;
+    try {
+      await ctx.db.patch("sim_turns", turn._id, {
+        resolvedAt,
+        state: "resolved",
+        resolvingStartedAt: undefined,
+      });
 
-    await upsertTurnPreparationRow(ctx, {
-      gameId: args.gameId,
-      turnNumber: t,
-      targetBoundaryAt,
-      state: "committed",
-      requestedAt: preparation?.requestedAt ?? resolvedAt,
-      startedAt: preparation?.startedAt,
-      preparedAt: effectivePreparedAt ?? undefined,
-      committedAt: resolvedAt,
-      resolutionPhase: undefined,
-      summaryJson: JSON.stringify({
-        preparedAt: effectivePreparedAt,
+      await upsertTurnPreparationRow(ctx, {
+        gameId: args.gameId,
+        turnNumber: t,
+        targetBoundaryAt,
+        state: "committed",
+        requestedAt: preparation?.requestedAt ?? resolvedAt,
+        startedAt: preparation?.startedAt,
+        preparedAt: effectivePreparedAt ?? undefined,
         committedAt: resolvedAt,
-        // Negative means prepared ahead of boundary; positive means overrun.
-        commitLagMs: (effectivePreparedAt ?? resolvedAt) - targetBoundaryAt,
-      }),
-    });
+        resolutionPhase: undefined,
+        summaryJson: JSON.stringify({
+          preparedAt: effectivePreparedAt,
+          committedAt: resolvedAt,
+          // Negative means prepared ahead of boundary; positive means overrun.
+          commitLagMs: (effectivePreparedAt ?? resolvedAt) - targetBoundaryAt,
+        }),
+      });
 
-    if (preparation !== null) {
-      await deletePreparationOperations(ctx, preparation._id);
+      if (preparation !== null) {
+        await deletePreparationOperations(ctx, preparation._id);
+      }
+
+      await recordGameTurnResolved(ctx, args.gameId, resolvedAt);
+      winner = await finishGameIfSingleEmpireRemains(ctx, args.gameId, t);
+    } catch (error) {
+      throw new Error(
+        `commitPreparedTurn(commit bookkeeping): ${error instanceof Error ? error.message : String(error)}`,
+      );
     }
 
-    await recordGameTurnResolved(ctx, args.gameId, resolvedAt);
-
-    const winner = await finishGameIfSingleEmpireRemains(ctx, args.gameId, t);
     if (winner !== null) {
-      await evaluateGameFinalization(ctx, { gameId: args.gameId });
+      try {
+        await evaluateGameFinalization(ctx, { gameId: args.gameId });
+      } catch (error) {
+        throw new Error(
+          `commitPreparedTurn(winner finalization): ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
       return { skipped: false, committed: true, resolvedTurn: t, nextTurn: t };
     }
 
@@ -2711,73 +2730,79 @@ export const commitPreparedTurn = internalMutation({
         gamePatch.turnPausedUntilMs = undefined;
       }
     }
-    await ctx.db.patch("sim_games", args.gameId, gamePatch);
+    try {
+      await ctx.db.patch("sim_games", args.gameId, gamePatch);
 
-    const existingNextTurn = await loadTurnRow(ctx, args.gameId, nextTurn);
-    if (existingNextTurn === null) {
-      await ctx.db.insert("sim_turns", {
+      const existingNextTurn = await loadTurnRow(ctx, args.gameId, nextTurn);
+      if (existingNextTurn === null) {
+        await ctx.db.insert("sim_turns", {
+          gameId: args.gameId,
+          turnNumber: nextTurn,
+          startedAt: nextTurnStartedAt,
+          resolvedAt: null,
+          state: "open",
+        });
+      }
+      await upsertTurnPreparationRow(ctx, {
         gameId: args.gameId,
         turnNumber: nextTurn,
-        startedAt: nextTurnStartedAt,
-        resolvedAt: null,
-        state: "open",
+        targetBoundaryAt: scheduledNextTurnStartedAt({
+          turnStartedAtMs: nextTurnStartedAt,
+          turnDurationMs: game.turnDurationMs,
+        }),
+        state: "queued",
+        requestedAt: resolvedAt,
+        startedAt: undefined,
+        preparedAt: undefined,
+        committedAt: undefined,
+        resolutionPhase: undefined,
+        summaryJson: undefined,
       });
+
+      await ctx.db.insert("sim_events", {
+        gameId: args.gameId,
+        turnNumber: t,
+        eventType: "turn_resolved",
+        actorType: "sim",
+        actorId: args.gameId,
+        targetType: null,
+        targetId: null,
+        summary: `Turn ${t} resolved → turn ${nextTurn}`,
+        payload: JSON.stringify({ resolvedTurn: t, nextTurn }),
+      });
+
+      await ctx.scheduler.runAfter(
+        msUntilTurnPreparationStart({
+          nowMs: resolvedAt,
+          turnStartedAtMs: nextTurnStartedAt,
+          turnDurationMs: game.turnDurationMs,
+        }),
+        internal.sim.actions.attemptResolveTurnBoundary,
+        { gameId: args.gameId },
+      );
+
+      await ctx.scheduler.runAfter(
+        msUntilTurnBoundary({
+          nowMs: resolvedAt,
+          turnStartedAtMs: nextTurnStartedAt,
+          turnDurationMs: game.turnDurationMs,
+        }),
+        internal.sim.actions.attemptResolveTurnBoundary,
+        { gameId: args.gameId },
+      );
+
+      await pruneHistoricalTurnPreparationData(
+        ctx,
+        args.gameId,
+        Math.max(1, nextTurn - PREPARATION_HISTORY_TURNS_TO_KEEP + 1),
+      );
+
+      await evaluateGameFinalization(ctx, { gameId: args.gameId });
+    } catch (error) {
+      throw new Error(
+        `commitPreparedTurn(next turn scheduling): ${error instanceof Error ? error.message : String(error)}`,
+      );
     }
-    await upsertTurnPreparationRow(ctx, {
-      gameId: args.gameId,
-      turnNumber: nextTurn,
-      targetBoundaryAt: scheduledNextTurnStartedAt({
-        turnStartedAtMs: nextTurnStartedAt,
-        turnDurationMs: game.turnDurationMs,
-      }),
-      state: "queued",
-      requestedAt: resolvedAt,
-      startedAt: undefined,
-      preparedAt: undefined,
-      committedAt: undefined,
-      resolutionPhase: undefined,
-      summaryJson: undefined,
-    });
-
-    await ctx.db.insert("sim_events", {
-      gameId: args.gameId,
-      turnNumber: t,
-      eventType: "turn_resolved",
-      actorType: "sim",
-      actorId: args.gameId,
-      targetType: null,
-      targetId: null,
-      summary: `Turn ${t} resolved → turn ${nextTurn}`,
-      payload: JSON.stringify({ resolvedTurn: t, nextTurn }),
-    });
-
-    await ctx.scheduler.runAfter(
-      msUntilTurnPreparationStart({
-        nowMs: resolvedAt,
-        turnStartedAtMs: nextTurnStartedAt,
-        turnDurationMs: game.turnDurationMs,
-      }),
-      internal.sim.actions.attemptResolveTurnBoundary,
-      { gameId: args.gameId },
-    );
-
-    await ctx.scheduler.runAfter(
-      msUntilTurnBoundary({
-        nowMs: resolvedAt,
-        turnStartedAtMs: nextTurnStartedAt,
-        turnDurationMs: game.turnDurationMs,
-      }),
-      internal.sim.actions.attemptResolveTurnBoundary,
-      { gameId: args.gameId },
-    );
-
-    await pruneHistoricalTurnPreparationData(
-      ctx,
-      args.gameId,
-      Math.max(1, nextTurn - PREPARATION_HISTORY_TURNS_TO_KEEP + 1),
-    );
-
-    await evaluateGameFinalization(ctx, { gameId: args.gameId });
 
     return { skipped: false, committed: true, resolvedTurn: t, nextTurn };
   },
