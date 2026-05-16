@@ -793,6 +793,7 @@ function GalaxyStageInner({
           focusX: pinch.startFocusX,
           focusY: pinch.startFocusY,
           scale: pinch.startScale,
+          rotation: cameraRef.current.rotation,
         },
         pinch.startMidScreenX,
         pinch.startMidScreenY,
@@ -804,6 +805,7 @@ function GalaxyStageInner({
         focusX: anchorCamera.focusX - (midScreenX - pinch.startMidScreenX) / nextScale,
         focusY: anchorCamera.focusY - (midScreenY - pinch.startMidScreenY) / nextScale,
         scale: nextScale,
+        rotation: anchorCamera.rotation,
       });
       gestureSuppressTapUntilRef.current = performance.now() + 250;
     };
@@ -878,6 +880,7 @@ function GalaxyStageInner({
           focusX: panSession.startFocusX - dSx / cam.scale,
           focusY: panSession.startFocusY - dSy / cam.scale,
           scale: cam.scale,
+          rotation: cam.rotation,
         });
       };
 

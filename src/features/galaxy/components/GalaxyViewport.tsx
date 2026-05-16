@@ -455,6 +455,7 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
   );
   const fittedGameRef = useRef<string | null>(null);
   const focusedInitialFleetRef = useRef<string | null>(null);
+  const autoSelectedHomeworldGameRef = useRef<string | null>(null);
   const cameraRef = useRef(camera);
   const tweenRafRef = useRef<number | null>(null);
 
@@ -529,6 +530,8 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
           scale: clampMapScale(
             startSnapshot.scale + (target.scale - startSnapshot.scale) * k,
           ),
+          rotation:
+            startSnapshot.rotation + (target.rotation - startSnapshot.rotation) * k,
         };
         setCamera(next);
         if (t < 1) {
@@ -1219,6 +1222,7 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
         focusX: node.x,
         focusY: node.y,
         scale: nextScale,
+        rotation: cur.rotation,
       });
     },
     [empires, systems, nodeMap, startCameraTweenTo],
@@ -1286,10 +1290,47 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
         scale: clampMapScale(
           cur.scale + (MAX_MAP_SCALE - cur.scale) * STAR_CLICK_ZOOM_FRACTION,
         ),
+        rotation: cur.rotation,
       });
     },
     [nodeMap, startCameraTweenTo],
   );
+
+  useEffect(() => {
+    if (activeGameId === null) {
+      autoSelectedHomeworldGameRef.current = null;
+      return;
+    }
+    if (!playerHomeMapLayout || initialFocusFleetId !== null || myEmpireId === null) {
+      return;
+    }
+    if (activeGame?.status === "lobby") {
+      return;
+    }
+    if (autoSelectedHomeworldGameRef.current === activeGameId) {
+      return;
+    }
+
+    const homeworldSystem = systems.find(
+      (system) => system.ownerEmpireId === myEmpireId && system.isHomeworld,
+    );
+    const homeworldSystemId = homeworldSystem?._id ?? null;
+    if (homeworldSystemId === null || nodeMap[homeworldSystemId] === undefined) {
+      return;
+    }
+
+    autoSelectedHomeworldGameRef.current = activeGameId;
+    handleStarTap(homeworldSystemId);
+  }, [
+    activeGame?.status,
+    activeGameId,
+    handleStarTap,
+    initialFocusFleetId,
+    myEmpireId,
+    nodeMap,
+    playerHomeMapLayout,
+    systems,
+  ]);
 
   const zoomFromCenter = useCallback(
     (factor: number) => {
@@ -1581,6 +1622,7 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
           focusX: marker.x,
           focusY: marker.y,
           scale,
+          rotation: cameraRef.current.rotation,
         });
         return true;
       }
@@ -1611,6 +1653,7 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
           focusX: from.x + (to.x - from.x) * fraction,
           focusY: from.y + (to.y - from.y) * fraction,
           scale,
+          rotation: cameraRef.current.rotation,
         });
         return true;
       }
@@ -1623,6 +1666,7 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
         focusX: focus.x,
         focusY: focus.y,
         scale,
+        rotation: cameraRef.current.rotation,
       });
       return true;
     },

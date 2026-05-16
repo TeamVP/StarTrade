@@ -15,6 +15,7 @@ const camera: SoundscapeCameraSnapshot = {
   focusX: 100,
   focusY: 100,
   scale: 1,
+  rotation: 0,
   viewWidth: 800,
   viewHeight: 600,
 };
