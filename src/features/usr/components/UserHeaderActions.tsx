@@ -1,6 +1,5 @@
 import { NavLink } from "react-router-dom";
 import { Button } from "@/components/ui/button";
-import { SignOutButton } from "@/features/usr/components/SignOutButton";
 import { cn } from "@/lib/utils";
 
 const links = [
@@ -23,7 +22,6 @@ export function UserHeaderActions() {
           </NavLink>
         </Button>
       ))}
-      <SignOutButton />
     </>
   );
 }

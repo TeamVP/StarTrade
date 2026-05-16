@@ -8,8 +8,6 @@ import { cn } from "@/lib/utils";
 
 const links = [
   { to: "/lobby", label: "Lobby", end: true },
-  { to: "/profile", label: "Profile", end: true },
-  { to: "/strat", label: "Strategies", end: true },
 ] as const;
 
 export function UserAreaLayout() {
