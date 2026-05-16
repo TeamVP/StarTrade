@@ -8,12 +8,9 @@ import { usePlayerPreview } from "@/features/player/PlayerPreviewContext";
 import { SignOutButton } from "@/features/usr/components/SignOutButton";
 
 const subPaths = [
-  { segment: "", label: "Map" },
-  { segment: "economy", label: "Economy" },
-  { segment: "fleet", label: "Fleet" },
+  { segment: "", label: "Game map" },
   { segment: "combat", label: "Combat" },
   { segment: "history", label: "History" },
-  { segment: "results", label: "Results" },
 ] as const;
 
 export function PlayerTopNav() {
