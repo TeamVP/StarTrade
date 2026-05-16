@@ -29,6 +29,9 @@ import {
   GALAXY_STAGE_HEIGHT,
   GALAXY_STAGE_WIDTH,
   MAP_BUTTON_ZOOM_FACTOR,
+  MAP_BUTTON_ZOOM_EASE_IN_MS,
+  MAP_BUTTON_ZOOM_EASE_OUT_MS,
+  MAP_BUTTON_ZOOM_TWEEN_MS,
   MAP_CAMERA_TWEEN_MS,
   MAP_ROTATION_EASE_IN_MS,
   MAP_ROTATION_EASE_OUT_MS,
@@ -104,13 +107,27 @@ function finiteCombatCount(value: unknown, fallback: number): number {
 }
 
 function rotationSpinProgress(elapsedMs: number): number {
-  const totalMs = Math.max(1, MAP_ROTATION_SPIN_MS);
-  const easeInMs = Math.min(MAP_ROTATION_EASE_IN_MS, totalMs);
-  const easeOutMs = Math.min(MAP_ROTATION_EASE_OUT_MS, totalMs - easeInMs);
+  return phasedTweenProgress({
+    elapsedMs,
+    totalMs: MAP_ROTATION_SPIN_MS,
+    easeInMs: MAP_ROTATION_EASE_IN_MS,
+    easeOutMs: MAP_ROTATION_EASE_OUT_MS,
+  });
+}
+
+function phasedTweenProgress(params: {
+  elapsedMs: number;
+  totalMs: number;
+  easeInMs: number;
+  easeOutMs: number;
+}): number {
+  const totalMs = Math.max(1, params.totalMs);
+  const easeInMs = Math.min(params.easeInMs, totalMs);
+  const easeOutMs = Math.min(params.easeOutMs, totalMs - easeInMs);
   const steadyMs = Math.max(0, totalMs - easeInMs - easeOutMs);
   const totalDistanceFactor = 0.5 * easeInMs + steadyMs + 0.5 * easeOutMs;
   const peakVelocity = totalDistanceFactor > 0 ? 1 / totalDistanceFactor : 1 / totalMs;
-  const clamped = Math.max(0, Math.min(elapsedMs, totalMs));
+  const clamped = Math.max(0, Math.min(params.elapsedMs, totalMs));
 
   if (clamped <= easeInMs && easeInMs > 0) {
     return 0.5 * (peakVelocity / easeInMs) * clamped * clamped;
@@ -133,6 +150,15 @@ function rotationSpinProgress(elapsedMs: number): number {
     peakVelocity * decelElapsed -
     0.5 * (peakVelocity / easeOutMs) * decelElapsed * decelElapsed
   );
+}
+
+function buttonZoomProgress(elapsedMs: number): number {
+  return phasedTweenProgress({
+    elapsedMs,
+    totalMs: MAP_BUTTON_ZOOM_TWEEN_MS,
+    easeInMs: MAP_BUTTON_ZOOM_EASE_IN_MS,
+    easeOutMs: MAP_BUTTON_ZOOM_EASE_OUT_MS,
+  });
 }
 
 function isEditableKeyboardTarget(target: EventTarget | null): boolean {
@@ -1410,10 +1436,34 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
   const zoomFromCenter = useCallback(
     (factor: number) => {
       cancelCameraTween();
-      setCamera((c) => ({
-        ...c,
-        scale: clampMapScale(c.scale * factor),
-      }));
+      const startSnapshot = cameraRef.current;
+      const targetScale = clampMapScale(startSnapshot.scale * factor * factor);
+      if (targetScale === startSnapshot.scale) {
+        return;
+      }
+      const t0 = performance.now();
+
+      const step = (now: number) => {
+        const elapsed = now - t0;
+        const progress = buttonZoomProgress(elapsed);
+        setCamera({
+          ...startSnapshot,
+          scale: clampMapScale(
+            startSnapshot.scale + (targetScale - startSnapshot.scale) * progress,
+          ),
+        });
+        if (elapsed < MAP_BUTTON_ZOOM_TWEEN_MS) {
+          tweenRafRef.current = requestAnimationFrame(step);
+        } else {
+          tweenRafRef.current = null;
+          setCamera({
+            ...startSnapshot,
+            scale: targetScale,
+          });
+        }
+      };
+
+      tweenRafRef.current = requestAnimationFrame(step);
     },
     [cancelCameraTween],
   );
@@ -2937,7 +2987,10 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
                 {mobileAsideOpen && (
                   <div
                     className="fixed inset-0 z-40 bg-black/60 lg:hidden"
-                    onClick={() => setMobileAsideOpen(false)}
+                    onClick={() => {
+                      setMobileAsideOpen(false);
+                      handleStageBackgroundTap();
+                    }}
                     aria-hidden="true"
                   />
                 )}

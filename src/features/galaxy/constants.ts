@@ -33,9 +33,15 @@ export const MAP_ZOOM_MARGIN_PX = 48;
 
 /** Background drag distance before counting as pan (tap below this dismisses panels). */
 export const MAP_PAN_DRAG_THRESHOLD_PX = 6;
+/** More forgiving tap-vs-pan threshold for touch so finger jitter still counts as a tap. */
+export const MAP_TOUCH_PAN_DRAG_THRESHOLD_PX = 18;
 
 /** Buttons / keyboard-free zoom steps (+/- controls). */
 export const MAP_BUTTON_ZOOM_FACTOR = 1.2;
+/** Zoom buttons animate a doubled click step for more decisive movement. */
+export const MAP_BUTTON_ZOOM_TWEEN_MS = 2000;
+export const MAP_BUTTON_ZOOM_EASE_IN_MS = 200;
+export const MAP_BUTTON_ZOOM_EASE_OUT_MS = 400;
 
 /** Duration for ease-out camera glide when double-clicking a star (ms). */
 export const MAP_CAMERA_TWEEN_MS = 480;

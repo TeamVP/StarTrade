@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   FLEET_ORBIT_RADIUS,
   MAP_PAN_DRAG_THRESHOLD_PX,
+  MAP_TOUCH_PAN_DRAG_THRESHOLD_PX,
   MAP_TOUCH_ROTATE_THRESHOLD_RAD,
   MAP_WHEEL_ZOOM_SENSITIVITY,
   STAR_HIT_RADIUS,
@@ -486,6 +487,7 @@ function GalaxyStageInner({
     startClientY: number;
     startFocusX: number;
     startFocusY: number;
+    dragThresholdPx: number;
     dragging: boolean;
   };
   const panSessionRef = useRef<PanSession | null>(null);
@@ -885,6 +887,10 @@ function GalaxyStageInner({
         startClientY: event.clientY,
         startFocusX: cameraRef.current.focusX,
         startFocusY: cameraRef.current.focusY,
+        dragThresholdPx:
+          event.pointerType === "touch"
+            ? MAP_TOUCH_PAN_DRAG_THRESHOLD_PX
+            : MAP_PAN_DRAG_THRESHOLD_PX,
         dragging: false,
       };
       panSessionRef.current = panSession;
@@ -902,7 +908,7 @@ function GalaxyStageInner({
           ev.clientX - panSession.startClientX,
           ev.clientY - panSession.startClientY,
         );
-        if (!panSession.dragging && dragDist >= MAP_PAN_DRAG_THRESHOLD_PX) {
+        if (!panSession.dragging && dragDist >= panSession.dragThresholdPx) {
           panSession.dragging = true;
         }
         if (!panSession.dragging) return;
@@ -928,7 +934,7 @@ function GalaxyStageInner({
         );
         if (
           !panSession.dragging &&
-          dist < MAP_PAN_DRAG_THRESHOLD_PX &&
+          dist < panSession.dragThresholdPx &&
           performance.now() >= gestureSuppressTapUntilRef.current
         ) {
           onStageBackgroundTapRef.current?.();
