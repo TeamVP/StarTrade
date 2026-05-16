@@ -108,6 +108,49 @@ async function listActiveGameRoles(
   return grouped.flat().filter((role) => role.isActive);
 }
 
+async function releaseUserFromGameForNewAttempt(
+  ctx: MutationCtx,
+  params: { game: Doc<"sim_games">; userId: Id<"users"> },
+): Promise<void> {
+  const { game, userId } = params;
+  const role = await ctx.db
+    .query("usr_game_roles")
+    .withIndex("by_gameId_and_userId", (q) =>
+      q.eq("gameId", game._id).eq("userId", userId),
+    )
+    .unique();
+
+  if (role === null || !role.isActive) {
+    return;
+  }
+
+  await ctx.db.patch("usr_game_roles", role._id, {
+    isActive: false,
+  });
+
+  if (role.role === "empire" && role.empireId !== null) {
+    const empire = await ctx.db.get("emp_states", role.empireId);
+    if (empire !== null && empire.gameId === game._id) {
+      await ctx.db.patch("emp_states", empire._id, {
+        controller: "npc",
+        strategyJson: empire.strategyJson ?? "{}",
+        playerName: empire.playerName ?? `${empire.name} AI`,
+      });
+    }
+  }
+
+  const humansRemaining = (await listActiveGameRoles(ctx, game._id)).length > 0;
+  if (!humansRemaining) {
+    await evaluateGameFinalization(ctx, {
+      gameId: game._id,
+      forceFinishReason: "abandoned_scored",
+    });
+    return;
+  }
+
+  await touchGameMeaningfulActivity(ctx, game._id, { humanAction: true });
+}
+
 function shouldRefreshMissionGame(
   game: Doc<"sim_games">,
   mission: Awaited<ReturnType<typeof listMissions>>[number],
@@ -734,16 +777,11 @@ export const resetMyStarterGame = mutation({
         games.find((game) => (game.missionKey ?? game.lobbyScenarioKey) === scenario.key) ?? null,
       );
 
-    if (current !== null && current.status === "running") {
-      const existingRole = await ctx.db
-        .query("usr_game_roles")
-        .withIndex("by_gameId_and_userId", (q) =>
-          q.eq("gameId", current._id).eq("userId", userId),
-        )
-        .unique();
-      if (existingRole?.isActive) {
-        throw new Error("Pause or finish the current run before starting a new attempt.");
-      }
+    if (
+      current !== null &&
+      (current.status === "lobby" || current.status === "running" || current.status === "paused")
+    ) {
+      await releaseUserFromGameForNewAttempt(ctx, { game: current, userId });
     }
 
     if (current !== null) {

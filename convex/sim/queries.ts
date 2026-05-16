@@ -31,7 +31,14 @@ export const resolveGameRoute = query({
       .withIndex("by_urlCode", (q) => q.eq("urlCode", routeKey))
       .unique();
     if (byUrlCode !== null) {
-      return { gameId: byUrlCode._id, urlCode: byUrlCode.urlCode ?? null };
+      return {
+        gameId: byUrlCode._id,
+        urlCode: byUrlCode.urlCode ?? null,
+        name: byUrlCode.name,
+        status: byUrlCode.status,
+        finalizationState: byUrlCode.finalizationState ?? null,
+        endedAt: byUrlCode.endedAt,
+      };
     }
 
     const normalizedId = ctx.db.normalizeId("sim_games", routeKey);
@@ -44,7 +51,14 @@ export const resolveGameRoute = query({
       return null;
     }
 
-    return { gameId: game._id, urlCode: game.urlCode ?? null };
+    return {
+      gameId: game._id,
+      urlCode: game.urlCode ?? null,
+      name: game.name,
+      status: game.status,
+      finalizationState: game.finalizationState ?? null,
+      endedAt: game.endedAt,
+    };
   },
 });
 
