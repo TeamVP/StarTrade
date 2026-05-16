@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { Link, useNavigate } from "react-router-dom";
+import { Lock } from "lucide-react";
 import { api } from "../../../convex/_generated/api";
 import { Card } from "@/components/ui/card";
 import { getGamePath, getGameRouteKey } from "@/features/games/gameRoutes";
@@ -47,6 +48,20 @@ function statusClassName(status: string): string {
 
 function formatStatus(status: string): string {
   return status.charAt(0).toUpperCase() + status.slice(1);
+}
+
+function cardAccentClass(
+  status: string | undefined,
+  isFinishedWin: boolean,
+  isFinishedLoss: boolean,
+  unlocked: boolean,
+): string {
+  if (!unlocked) return "bg-slate-700/60";
+  if (status === "running") return "bg-emerald-500";
+  if (status === "paused") return "bg-amber-400";
+  if (isFinishedWin) return "bg-cyan-400";
+  if (isFinishedLoss) return "bg-red-500/70";
+  return "bg-cyan-600/40";
 }
 
 export function LobbyPage() {
@@ -146,31 +161,51 @@ export function LobbyPage() {
   return (
     <div className="w-full px-4 py-4 sm:px-6">
       <div className="mx-auto flex w-full max-w-6xl flex-col gap-4">
-        <Card>
-          <div className="flex flex-wrap items-center justify-between gap-3">
+
+        {/* ── Progress banner ───────────────────────────────────────────────── */}
+        <div className="relative overflow-hidden rounded-xl border border-cyan-500/20 bg-linear-to-br from-st-panel via-slate-900/80 to-cyan-950/30 px-6 py-5">
+          <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_70%_80%_at_100%_50%,rgba(34,211,238,0.07),transparent)]" />
+          <div className="relative flex flex-wrap items-center justify-between gap-5">
             <div>
-              <h2 className="text-sm font-semibold uppercase tracking-wide text-st-muted">
-                Progression
-              </h2>
-              <p className="mt-2 text-sm text-st-muted">
-                Complete missions to raise your level and unlock later missions in sequence.
-              </p>
-            </div>
-            <div className="grid gap-2 text-sm text-st-muted sm:grid-cols-2">
-              <div className="rounded border border-st-border bg-st-bg px-3 py-2">
-                You have reached Level: <span className="font-medium text-st-fg">{lobbyState?.progression.currentLevel ?? 1}</span>
+              <p className="text-xs font-semibold uppercase tracking-widest text-st-muted">Progress</p>
+              <div className="mt-2 flex items-baseline gap-2">
+                <span className="text-5xl font-bold tabular-nums text-st-fg">
+                  {lobbyState?.progression.currentLevel ?? 1}
+                </span>
+                <span className="text-base font-medium text-st-muted">/ Level</span>
               </div>
-              <div className="rounded border border-st-border bg-st-bg px-3 py-2">
-                Completed: <span className="font-medium text-st-fg">{lobbyState?.progression.completedMissionCount ?? 0}</span>/{lobbyState?.progression.totalMissionCount ?? 0}
+            </div>
+            <div className="flex min-w-55 flex-1 flex-col gap-2 sm:max-w-xs">
+              <div className="flex justify-between text-xs text-st-muted">
+                <span>Missions complete</span>
+                <span className="font-semibold text-st-fg">
+                  {lobbyState?.progression.completedMissionCount ?? 0}
+                  <span className="font-normal text-st-muted">
+                    &thinsp;/&thinsp;{lobbyState?.progression.totalMissionCount ?? 0}
+                  </span>
+                </span>
+              </div>
+              <div className="h-2 overflow-hidden rounded-full bg-st-border">
+                <div
+                  className="h-full rounded-full bg-linear-to-r from-cyan-600 to-cyan-300 transition-all duration-500"
+                  style={{
+                    width: `${
+                      ((lobbyState?.progression.completedMissionCount ?? 0) /
+                        Math.max(lobbyState?.progression.totalMissionCount ?? 1, 1)) *
+                      100
+                    }%`,
+                  }}
+                />
               </div>
             </div>
           </div>
-        </Card>
+        </div>
 
         {error ? (
           <Card className="border-red-900/50 bg-red-950/30 text-sm text-red-200">{error}</Card>
         ) : null}
 
+        {/* ── Mission cards ──────────────────────────────────────────────────── */}
         {gamesLoading ? (
           <Card className="text-sm text-st-muted">Loading games...</Card>
         ) : games.length === 0 ? (
@@ -183,167 +218,223 @@ export function LobbyPage() {
                 const game = entry.game;
                 const result = entry.result;
                 const isSelected = game !== null && selectedGameId === game._id;
-                const isFinishedWin = game?.status === "finished" && result?.auroraWasWinner === true;
+                const isFinishedWin =
+                  game?.status === "finished" && result?.auroraWasWinner === true;
                 const isFinishedLoss =
                   game?.status === "finished" &&
                   result !== null &&
                   result !== undefined &&
                   result.auroraPlacement !== null &&
                   !result.auroraWasWinner;
+
                 return (
-                  <Card
+                  <div
                     key={entry.key}
                     className={cn(
-                      "flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between",
-                      isSelected ? "border-st-accent" : undefined,
-                      !entry.unlocked ? "opacity-70" : undefined,
+                      "relative overflow-hidden rounded-xl border bg-st-panel transition-colors",
+                      isSelected
+                        ? "border-st-accent"
+                        : "border-st-border hover:border-cyan-500/30",
+                      !entry.unlocked && "opacity-60",
                     )}
                   >
-                    <div className="min-w-0">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <h2 className="text-base font-semibold text-st-fg">{entry.name}</h2>
+                    {/* Left status stripe */}
+                    <div
+                      className={cn(
+                        "absolute left-0 top-0 h-full w-0.75",
+                        cardAccentClass(game?.status, isFinishedWin, isFinishedLoss, entry.unlocked),
+                      )}
+                    />
+
+                    <div className="flex flex-col gap-4 py-4 pl-6 pr-5 sm:flex-row sm:items-start sm:justify-between">
+                      {/* ─ Info column ─ */}
+                      <div className="min-w-0 flex-1">
+                        {/* Title row */}
+                        <div className="flex flex-wrap items-center gap-2">
+                          {!entry.unlocked ? (
+                            <Lock size={13} className="shrink-0 text-amber-400" />
+                          ) : null}
+                          <h2 className="text-base font-semibold text-st-fg">{entry.name}</h2>
+                          {game !== null ? (
+                            <span
+                              className={cn(
+                                "rounded-full border px-2 py-0.5 text-xs font-medium",
+                                statusClassName(game.status),
+                              )}
+                            >
+                              {formatStatus(game.status)}
+                            </span>
+                          ) : null}
+                          {isFinishedWin ? (
+                            <span className="rounded-full border border-emerald-500/40 bg-emerald-950/30 px-2 py-0.5 text-xs font-medium text-emerald-200">
+                              Victory
+                            </span>
+                          ) : null}
+                          {isFinishedLoss ? (
+                            <span className="rounded-full border border-red-500/40 bg-red-950/30 px-2 py-0.5 text-xs font-medium text-red-200">
+                              Defeat
+                            </span>
+                          ) : null}
+                          {isSelected ? (
+                            <span className="rounded-full border border-st-accent/40 bg-st-accent/10 px-2 py-0.5 text-xs font-medium text-st-accent">
+                              Active
+                            </span>
+                          ) : null}
+                        </div>
+
+                        {/* Chips row */}
+                        <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                          <span className="rounded border border-st-border bg-st-bg/60 px-2 py-0.5 text-xs text-st-muted">
+                            Level {entry.level}
+                          </span>
+                          <span className="rounded border border-st-border bg-st-bg/60 px-2 py-0.5 text-xs text-st-muted">
+                            {entry.mapTier} map
+                          </span>
+                          <span className="rounded border border-st-border bg-st-bg/60 px-2 py-0.5 text-xs text-st-muted">
+                            {entry.npcCount} NPC{entry.npcCount === 1 ? "" : "s"}
+                          </span>
+                          {entry.unlocked ? (
+                            <span
+                              className={cn(
+                                "rounded border px-2 py-0.5 text-xs",
+                                entry.winCount >= entry.requiredWins
+                                  ? "border-emerald-500/30 bg-emerald-950/20 text-emerald-300"
+                                  : "border-st-border bg-st-bg/60 text-st-muted",
+                              )}
+                            >
+                              {entry.winCount}/{entry.requiredWins} wins required
+                            </span>
+                          ) : null}
+                          {!entry.unlocked ? (
+                            <span className="rounded border border-amber-500/30 bg-amber-950/20 px-2 py-0.5 text-xs text-amber-300">
+                              Locked
+                            </span>
+                          ) : null}
+                        </div>
+
+                        <p className="mt-2.5 text-sm text-st-muted">{entry.description}</p>
+
+                        {/* Inline stats */}
+                        <div className="mt-3 flex flex-wrap gap-x-5 gap-y-1 text-xs text-st-muted">
+                          <span>
+                            Turn{" "}
+                            <span className="font-semibold text-st-fg">
+                              {game?.currentTurn ?? 0}
+                            </span>
+                          </span>
+                          <span>
+                            Started{" "}
+                            <span className="font-semibold text-st-fg">
+                              {formatRelativeDateTime(game?.startedAt ?? null)}
+                            </span>
+                          </span>
+                        </div>
+
                         {game !== null ? (
-                          <span
-                            className={cn(
-                              "rounded-full border px-2 py-0.5 text-xs font-medium",
-                              statusClassName(game.status),
-                            )}
+                          <Link
+                            to={getGamePath(game)}
+                            className="mt-1.5 inline-block text-xs text-cyan-400/60 hover:text-cyan-300"
                           >
-                            {formatStatus(game.status)}
-                          </span>
+                            /game/{getGameRouteKey(game)}
+                          </Link>
                         ) : null}
-                        <span className="rounded-full border border-st-border px-2 py-0.5 text-xs font-medium text-st-muted">
-                          {entry.mapTier} map
-                        </span>
-                        <span className="rounded-full border border-st-border px-2 py-0.5 text-xs font-medium text-st-muted">
-                          Level {entry.level}
-                        </span>
-                        <span className="rounded-full border border-st-border px-2 py-0.5 text-xs font-medium text-st-muted">
-                          {entry.npcCount} NPC{entry.npcCount === 1 ? "" : "s"}
-                        </span>
-                        {isSelected ? (
-                          <span className="rounded-full border border-st-accent/40 bg-st-accent/10 px-2 py-0.5 text-xs font-medium text-st-accent">
-                            Currently viewed
-                          </span>
+
+                        {/* Result inset */}
+                        {game?.status === "finished" && result !== null ? (
+                          <div className="mt-3 flex flex-wrap gap-x-5 gap-y-1 rounded-lg border border-st-border bg-st-bg/60 px-3 py-2 text-xs text-st-muted">
+                            <span>
+                              Place{" "}
+                              <span className="font-semibold text-st-fg">
+                                {result.auroraPlacement === null
+                                  ? "—"
+                                  : `#${result.auroraPlacement}`}
+                              </span>
+                            </span>
+                            <span>
+                              Winner{" "}
+                              <span className="font-semibold text-st-fg">
+                                {result.winnerEmpireName ?? "—"}
+                              </span>
+                            </span>
+                            <span>
+                              Finished{" "}
+                              <span className="font-semibold text-st-fg">
+                                {formatDateTime(result.endedAt)}
+                              </span>
+                            </span>
+                            <span>
+                              Reason{" "}
+                              <span className="font-semibold text-st-fg">
+                                {result.finishReason ?? "—"}
+                              </span>
+                            </span>
+                          </div>
                         ) : null}
-                        {isFinishedWin ? (
-                          <span className="rounded-full border border-emerald-500/40 bg-emerald-950/30 px-2 py-0.5 text-xs font-medium text-emerald-200">
-                            Victory
-                          </span>
+
+                        {game?.status === "finished" &&
+                        result !== null &&
+                        result.auroraPlacement !== null ? (
+                          <p className="mt-2 text-xs text-st-muted">
+                            {result.auroraStarsControlledFinal ?? 0} stars ·{" "}
+                            {result.auroraFleetStrengthFinal ?? 0} fleet · score{" "}
+                            {result.auroraScoreFinal ?? 0}
+                          </p>
                         ) : null}
-                        {isFinishedLoss ? (
-                          <span className="rounded-full border border-red-500/40 bg-red-950/30 px-2 py-0.5 text-xs font-medium text-red-200">
-                            Defeat
-                          </span>
-                        ) : null}
+
                         {!entry.unlocked ? (
-                          <span className="rounded-full border border-amber-500/40 bg-amber-950/30 px-2 py-0.5 text-xs font-medium text-amber-200">
-                            Locked by prerequisite missions
-                          </span>
-                        ) : null}
-                        {entry.unlocked ? (
-                          <span className="rounded-full border border-st-border px-2 py-0.5 text-xs font-medium text-st-muted">
-                            {entry.winCount}/{entry.requiredWins} required wins
-                          </span>
+                          <p className="mt-2 text-xs text-amber-300/70">
+                            Complete prerequisite missions to unlock.
+                          </p>
                         ) : null}
                       </div>
-                      <p className="mt-2 text-sm text-st-muted">{entry.description}</p>
-                      <dl className="mt-3 grid gap-2 text-sm text-st-muted sm:grid-cols-2 lg:grid-cols-3">
-                        <div>
-                          <dt className="text-xs uppercase tracking-wide">Turn</dt>
-                          <dd className="mt-0.5 text-st-fg">{game?.currentTurn ?? 0}</dd>
-                        </div>
-                        <div>
-                          <dt className="text-xs uppercase tracking-wide">Started</dt>
-                          <dd className="mt-0.5 text-st-fg">{formatRelativeDateTime(game?.startedAt ?? null)}</dd>
-                        </div>
-                      </dl>
-                      {game !== null ? (
-                        <Link
-                          to={getGamePath(game)}
-                          className="mt-2 inline-block text-xs text-cyan-300 hover:text-cyan-200"
-                        >
-                          Open /game/{getGameRouteKey(game)}
-                        </Link>
-                      ) : null}
-                      {game?.status === "finished" && result !== null ? (
-                        <div className="mt-3 grid gap-2 text-sm text-st-muted sm:grid-cols-4">
-                          <div>
-                            <dt className="text-xs uppercase tracking-wide">Outcome</dt>
-                            <dd className="mt-0.5 text-st-fg">
-                              {result.auroraPlacement === null
-                                ? "No player result"
-                                : `Placed #${result.auroraPlacement}`}
-                            </dd>
-                          </div>
-                          <div>
-                            <dt className="text-xs uppercase tracking-wide">Winner</dt>
-                            <dd className="mt-0.5 text-st-fg">
-                              {result.winnerEmpireName ?? "No winner"}
-                            </dd>
-                          </div>
-                          <div>
-                            <dt className="text-xs uppercase tracking-wide">Finished</dt>
-                            <dd className="mt-0.5 text-st-fg">{formatDateTime(result.endedAt)}</dd>
-                          </div>
-                          <div>
-                            <dt className="text-xs uppercase tracking-wide">Status</dt>
-                            <dd className="mt-0.5 text-st-fg">{result.finishReason ?? "Pending"}</dd>
-                          </div>
-                        </div>
-                      ) : null}
-                      {game?.status === "finished" && result !== null && result.auroraPlacement !== null ? (
-                        <p className="mt-3 text-xs text-st-muted">
-                          Your empire finished with {result.auroraStarsControlledFinal ?? 0} stars, {result.auroraFleetStrengthFinal ?? 0} fleet strength, and score {result.auroraScoreFinal ?? 0}.
-                        </p>
-                      ) : null}
-                      {!entry.unlocked ? (
-                        <p className="mt-3 text-xs text-st-muted">
-                          Complete the prerequisite missions before attempting this mission.
-                        </p>
-                      ) : null}
-                    </div>
 
-                    <div className="flex shrink-0 items-center gap-2">
-                      {game !== null && entry.isActiveMember && game.status === "running" ? (
+                      {/* ─ Action column ─ */}
+                      <div className="flex shrink-0 items-center gap-2 sm:flex-col sm:items-end">
+                        {game !== null &&
+                        entry.isActiveMember &&
+                        game.status === "running" ? (
+                          <button
+                            type="button"
+                            className={cn(
+                              "rounded-lg border px-3 py-2 text-sm font-medium transition-colors",
+                              resignBusyScenarioKey === entry.key
+                                ? "border-st-border bg-st-bg text-st-muted"
+                                : "border-orange-500/40 bg-orange-500/10 text-orange-300 hover:bg-orange-500/20",
+                            )}
+                            disabled={
+                              busyScenarioKey === entry.key ||
+                              resignBusyScenarioKey === entry.key
+                            }
+                            onClick={() => {
+                              void onScenarioResign(entry);
+                            }}
+                          >
+                            {resignBusyScenarioKey === entry.key ? "Resigning..." : "Resign"}
+                          </button>
+                        ) : null}
                         <button
                           type="button"
                           className={cn(
-                            "rounded-md border px-3 py-2 text-sm font-medium transition-colors",
-                            resignBusyScenarioKey === entry.key
-                              ? "border-st-border bg-st-bg text-st-muted"
-                              : "border-orange-500/40 bg-orange-500/10 text-orange-700 hover:bg-orange-500/20 dark:text-orange-300",
+                            "min-w-20 rounded-lg border px-5 py-2.5 text-sm font-semibold transition-colors",
+                            entry.unlocked && entry.game !== null
+                              ? "border-cyan-500/40 bg-cyan-500/10 text-cyan-300 hover:border-cyan-400/60 hover:bg-cyan-500/20"
+                              : "border-st-border bg-st-bg text-st-muted",
                           )}
-                          disabled={busyScenarioKey === entry.key || resignBusyScenarioKey === entry.key}
+                          disabled={
+                            !entry.unlocked ||
+                            entry.game === null ||
+                            busyScenarioKey === entry.key ||
+                            resignBusyScenarioKey === entry.key
+                          }
                           onClick={() => {
-                            void onScenarioResign(entry);
+                            void onScenarioAction(entry);
                           }}
                         >
-                          {resignBusyScenarioKey === entry.key ? "Resigning..." : "Resign"}
+                          {busyScenarioKey === entry.key ? "Working..." : actionLabel(entry)}
                         </button>
-                      ) : null}
-                      <button
-                        type="button"
-                        className={cn(
-                          "rounded-md border px-3 py-2 text-sm font-medium transition-colors",
-                          entry.unlocked && entry.game !== null
-                            ? "border-st-accent bg-st-accent/10 text-st-accent hover:bg-st-accent/20"
-                            : "border-st-border bg-st-bg text-st-muted",
-                        )}
-                        disabled={
-                          !entry.unlocked ||
-                          entry.game === null ||
-                          busyScenarioKey === entry.key ||
-                          resignBusyScenarioKey === entry.key
-                        }
-                        onClick={() => {
-                          void onScenarioAction(entry);
-                        }}
-                      >
-                        {busyScenarioKey === entry.key ? "Working..." : actionLabel(entry)}
-                      </button>
+                      </div>
                     </div>
-                  </Card>
+                  </div>
                 );
               })}
           </div>
