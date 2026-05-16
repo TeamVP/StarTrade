@@ -37,7 +37,10 @@ import {
   createStagedTurnContext,
   replacePreparationOperations,
 } from "./stagedTurnStore";
-import { deletePreparationOperations } from "./turnPreparationInvalidation";
+import {
+  deletePreparationOperations,
+  invalidateOpenTurnPreparation,
+} from "./turnPreparationInvalidation";
 import {
   committedNextTurnStartedAt,
   msUntilTurnBoundary,
@@ -1984,6 +1987,22 @@ export const prepareTurnResolutionRetry = internalMutation({
     if (preparation !== null) {
       await ctx.db.patch("sim_turn_preparations", preparation._id, { state: "stale" });
     }
+  },
+});
+
+export const resetCurrentTurnPreparationForRecovery = internalMutation({
+  args: { gameId: v.id("sim_games") },
+  handler: async (ctx, args): Promise<{ reset: boolean; turnNumber: number | null }> => {
+    const game = await ctx.db.get("sim_games", args.gameId);
+    if (game === null) {
+      return { reset: false, turnNumber: null };
+    }
+    const turn = await loadTurnRow(ctx, args.gameId, game.currentTurn);
+    if (turn === null || (turn.state !== "open" && turn.state !== "prepared")) {
+      return { reset: false, turnNumber: game.currentTurn };
+    }
+    await invalidateOpenTurnPreparation(ctx, args.gameId);
+    return { reset: true, turnNumber: game.currentTurn };
   },
 });
 

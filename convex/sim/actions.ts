@@ -66,3 +66,77 @@ export const resolveTurnJob = internalAction({
     };
   },
 });
+
+export const recoverPreparedTurnJob = internalAction({
+  args: {
+    gameId: v.id("sim_games"),
+  },
+  handler: async (
+    ctx,
+    args,
+  ): Promise<{ started: boolean; committed: boolean; nextTurn: number | null }> => {
+    await ctx.runMutation(internal.sim.internal.resetCurrentTurnPreparationForRecovery, {
+      gameId: args.gameId,
+    });
+
+    const begin: {
+      started: boolean;
+      turnNumber: number;
+      alreadyResolving: boolean;
+    } = await ctx.runMutation(internal.sim.internal.beginTurnResolution, {
+      gameId: args.gameId,
+    });
+    if (!begin.started) {
+      return { started: false, committed: false, nextTurn: begin.turnNumber };
+    }
+
+    await ctx.runMutation(internal.sim.internal.resolveTurnMovementPhase, {
+      gameId: args.gameId,
+      turnNumber: begin.turnNumber,
+    });
+    await ctx.runMutation(internal.sim.internal.resolveTurnEconomyPhase, {
+      gameId: args.gameId,
+      turnNumber: begin.turnNumber,
+    });
+    await ctx.runMutation(internal.sim.internal.resolveTurnNpcPhase, {
+      gameId: args.gameId,
+      turnNumber: begin.turnNumber,
+    });
+    await ctx.runMutation(internal.sim.internal.resolveTurnTradePhase, {
+      gameId: args.gameId,
+      turnNumber: begin.turnNumber,
+    });
+    await ctx.runMutation(internal.sim.internal.resolveTurnTraderSetupPhase, {
+      gameId: args.gameId,
+      turnNumber: begin.turnNumber,
+    });
+    await ctx.runMutation(internal.sim.internal.resolveTurnTradeSpawnPhase, {
+      gameId: args.gameId,
+      turnNumber: begin.turnNumber,
+    });
+    await ctx.runMutation(internal.sim.internal.resolveTurnGarrisonsPhase, {
+      gameId: args.gameId,
+      turnNumber: begin.turnNumber,
+    });
+    await ctx.runMutation(internal.sim.internal.finalizeTurnPreparation, {
+      gameId: args.gameId,
+      turnNumber: begin.turnNumber,
+    });
+
+    const committed: {
+      skipped: boolean;
+      committed: boolean;
+      resolvedTurn: number;
+      nextTurn: number;
+    } = await ctx.runMutation(internal.sim.internal.commitPreparedTurn, {
+      gameId: args.gameId,
+      turnNumber: begin.turnNumber,
+    });
+
+    return {
+      started: true,
+      committed: committed.committed,
+      nextTurn: committed.nextTurn,
+    };
+  },
+});
