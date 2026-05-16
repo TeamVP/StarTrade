@@ -27,6 +27,15 @@ const SAMPLE_VOLUME_OFFSETS: Record<SoundscapeSampleKey, number> = {
   enemy_exploration: -14,
 };
 
+const SAMPLE_FALLBACK_KEYS: Record<SoundscapeSampleKey, SoundscapeSampleKey> = {
+  player_attack: "player_exploration",
+  player_defense: "player_attack",
+  player_exploration: "player_attack",
+  enemy_attack: "enemy_exploration",
+  enemy_defense: "enemy_attack",
+  enemy_exploration: "enemy_attack",
+};
+
 export type GalaxySoundscapeEngine = {
   playBell: (intent: SoundscapeBellIntent) => void;
   dispose: () => void;
@@ -88,12 +97,41 @@ export async function createGalaxySoundscapeEngine(params?: {
   };
 
   const disposalTimers = new Set<number>();
+  const warnedMissingSamples = new Set<SoundscapeSampleKey>();
+
+  function resolveLoadedSampleBuffer(sampleKey: SoundscapeSampleKey) {
+    const primaryBuffer = sampleBuffers.get(sampleKey);
+    if (primaryBuffer.loaded) {
+      return primaryBuffer;
+    }
+
+    const fallbackKey = SAMPLE_FALLBACK_KEYS[sampleKey];
+    const fallbackBuffer = sampleBuffers.get(fallbackKey);
+    if (fallbackBuffer.loaded) {
+      if (!warnedMissingSamples.has(sampleKey)) {
+        warnedMissingSamples.add(sampleKey);
+        console.warn(`Soundscape sample ${sampleKey} is not loaded; falling back to ${fallbackKey}.`);
+      }
+      return fallbackBuffer;
+    }
+
+    if (!warnedMissingSamples.has(sampleKey)) {
+      warnedMissingSamples.add(sampleKey);
+      console.warn(`Soundscape sample ${sampleKey} and fallback ${fallbackKey} are not loaded yet.`);
+    }
+    return null;
+  }
 
   return {
     playBell(intent) {
       const eventGain = clamp(intent.gain * clamp(intent.velocity, 0.2, 1), 0.08, MAX_EVENT_GAIN);
       const reverbSendGain = eventGain * clamp(intent.reverbSend * 0.72, 0.06, 0.22);
-      const player: BellPlayer = new Tone.Player(sampleBuffers.get(intent.sampleKey)).set({
+      const sampleBuffer = resolveLoadedSampleBuffer(intent.sampleKey);
+      if (sampleBuffer === null) {
+        return;
+      }
+
+      const player: BellPlayer = new Tone.Player(sampleBuffer).set({
         fadeOut: Math.min(1.4, Math.max(0.4, intent.releaseSeconds * 0.35)),
       });
       const filter = new Tone.Filter(intent.cutoffHz, "lowpass");
