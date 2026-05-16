@@ -56,6 +56,8 @@ export function DatabaseScreen() {
       : [
           { label: "sim_events", stat: selected.simEvents },
           { label: "sim_turns", stat: selected.simTurns },
+          { label: "sim_turn_preparations", stat: selected.simTurnPreparations },
+          { label: "sim_turn_preparation_ops", stat: selected.simTurnPreparationOps },
           { label: "gal_systems", stat: selected.galSystems },
           { label: "gal_links", stat: selected.galLinks },
           { label: "emp_states", stat: selected.empStates },

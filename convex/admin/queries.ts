@@ -169,6 +169,18 @@ export const getDatabaseHealth = query({
                 .withIndex("by_gameId", (q) => q.eq("gameId", selectedGame._id))
                 .take(TABLE_SAMPLE_LIMIT + 1),
             ),
+            simTurnPreparations: boundedCountFromRows(
+              await ctx.db
+                .query("sim_turn_preparations")
+                .withIndex("by_gameId", (q) => q.eq("gameId", selectedGame._id))
+                .take(TABLE_SAMPLE_LIMIT + 1),
+            ),
+            simTurnPreparationOps: boundedCountFromRows(
+              await ctx.db
+                .query("sim_turn_preparation_ops")
+                .withIndex("by_gameId_and_turnNumber", (q) => q.eq("gameId", selectedGame._id))
+                .take(TABLE_SAMPLE_LIMIT + 1),
+            ),
             galSystems: boundedCountFromRows(
               await ctx.db
                 .query("gal_systems")

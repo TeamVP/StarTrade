@@ -37,6 +37,7 @@ import {
   createStagedTurnContext,
   replacePreparationOperations,
 } from "./stagedTurnStore";
+import { deletePreparationOperations } from "./turnPreparationInvalidation";
 import {
   committedNextTurnStartedAt,
   msUntilTurnBoundary,
@@ -50,6 +51,8 @@ import {
 const MAX_ENROUTE_FLEETS_SCAN = 768;
 /** Max idle fleet rows scanned for combat/merge passes (indexed). */
 const MAX_IDLE_FLEETS_SCAN = 1024;
+/** Keep only a small rolling window of turn-preparation metadata per running game. */
+const PREPARATION_HISTORY_TURNS_TO_KEEP = 4;
 
 async function loadEnRouteFleetsForArrivals(
   ctx: MutationCtx,
@@ -1731,6 +1734,43 @@ async function loadTurnPreparationRow(
     .unique();
 }
 
+async function pruneHistoricalTurnPreparationData(
+  ctx: MutationCtx,
+  gameId: Id<"sim_games">,
+  firstRetainedTurn: number,
+): Promise<void> {
+  while (true) {
+    const stalePreparations = await ctx.db
+      .query("sim_turn_preparations")
+      .withIndex("by_gameId_and_turnNumber", (q) =>
+        q.eq("gameId", gameId).lt("turnNumber", firstRetainedTurn),
+      )
+      .take(64);
+    if (stalePreparations.length === 0) {
+      break;
+    }
+    for (const preparation of stalePreparations) {
+      await deletePreparationOperations(ctx, preparation._id);
+      await ctx.db.delete("sim_turn_preparations", preparation._id);
+    }
+  }
+
+  while (true) {
+    const strayOps = await ctx.db
+      .query("sim_turn_preparation_ops")
+      .withIndex("by_gameId_and_turnNumber", (q) =>
+        q.eq("gameId", gameId).lt("turnNumber", firstRetainedTurn),
+      )
+      .take(256);
+    if (strayOps.length === 0) {
+      break;
+    }
+    for (const row of strayOps) {
+      await ctx.db.delete("sim_turn_preparation_ops", row._id);
+    }
+  }
+}
+
 async function upsertTurnPreparationRow(
   ctx: MutationCtx,
   params: {
@@ -2603,6 +2643,10 @@ export const commitPreparedTurn = internalMutation({
       }),
     });
 
+    if (preparation !== null) {
+      await deletePreparationOperations(ctx, preparation._id);
+    }
+
     await recordGameTurnResolved(ctx, args.gameId, resolvedAt);
 
     const winner = await finishGameIfSingleEmpireRemains(ctx, args.gameId, t);
@@ -2685,6 +2729,12 @@ export const commitPreparedTurn = internalMutation({
       }),
       internal.sim.actions.attemptResolveTurnBoundary,
       { gameId: args.gameId },
+    );
+
+    await pruneHistoricalTurnPreparationData(
+      ctx,
+      args.gameId,
+      Math.max(1, nextTurn - PREPARATION_HISTORY_TURNS_TO_KEEP + 1),
     );
 
     await evaluateGameFinalization(ctx, { gameId: args.gameId });

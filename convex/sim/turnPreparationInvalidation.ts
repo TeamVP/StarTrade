@@ -1,7 +1,7 @@
 import type { Id } from "../_generated/dataModel";
 import type { MutationCtx } from "../_generated/server";
 
-async function deletePreparationOperations(
+export async function deletePreparationOperations(
   ctx: MutationCtx,
   preparationId: Id<"sim_turn_preparations">,
 ): Promise<void> {
