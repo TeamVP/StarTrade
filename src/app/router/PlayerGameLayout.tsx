@@ -27,7 +27,7 @@ export function PlayerGameLayout({
           <PlayerPreviewProvider value={config}>
             <AppShell
               nav={<PlayerTopNav />}
-              headerTrailing={<UserHeaderActions />}
+              headerTrailing={<span className="hidden sm:flex items-center gap-2"><UserHeaderActions /></span>}
               showProductTitle={false}
               rootClassName="flex h-dvh min-h-0 flex-col bg-st-bg text-st-fg"
               headerClassName="shrink-0 border-b border-st-border px-4 py-px sm:px-6"

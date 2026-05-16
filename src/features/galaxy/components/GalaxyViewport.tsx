@@ -9,7 +9,8 @@ import {
   type ReactNode,
 } from "react";
 import { useMutation, useQuery } from "convex/react";
-import { Expand, Info, Minus, Plus, Repeat2, Star, Volume2, VolumeX } from "lucide-react";
+import { ChevronLeft, ChevronRight, Expand, Info, Minus, Plus, Repeat2, Star, Volume2, VolumeX } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { useNavigate } from "react-router-dom";
 import { api } from "../../../../convex/_generated/api";
 import type { Id } from "../../../../convex/_generated/dataModel";
@@ -399,6 +400,7 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
   /** Step 1 = strategy picker, step 2 = start game button. */
   const [startModalStep, setStartModalStep] = useState<1 | 2>(1);
   const [startStrategyValue, setStartStrategyValue] = useState<string>("manual");
+  const [mobileAsideOpen, setMobileAsideOpen] = useState(false);
 
   // Derive the default strategy from saved profile whenever profiles or account changes.
   useEffect(() => {
@@ -2296,26 +2298,59 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
                 <div className="absolute bottom-3 right-3 rounded-md bg-st-bg/90 px-2.5 py-1 text-xs text-st-muted shadow-md ring-1 ring-st-border/70 backdrop-blur-sm">
                   {activeGame ? `${stageNodes.length} stars` : "Create + seed a game"}
                 </div>
+                {starPanelAside != null && (
+                  <button
+                    type="button"
+                    onClick={() => setMobileAsideOpen(true)}
+                    className="absolute right-2 top-2 z-7 flex items-center gap-1 rounded-md bg-st-panel/90 px-3 py-1.5 text-sm text-st-fg shadow-md backdrop-blur-sm lg:hidden"
+                    aria-label="Show empire panel"
+                  >
+                    Info <ChevronRight size={14} />
+                  </button>
+                )}
               </div>
             </div>
             {starPanelAside != null ? (
-              <aside className="flex w-[360px] shrink-0 flex-col border-l border-st-border bg-st-panel">
-                <div className="flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain p-2">
-                  {fleetPanelInner !== null ? (
-                    <div className="pointer-events-auto rounded-lg border border-st-border bg-st-bg/95 p-3 text-sm shadow-sm">
-                      {fleetPanelInner}
-                    </div>
-                  ) : (
-                    (() => {
-                      const starOnly = renderSelectedStarSystemPanelOnly();
-                      if (starOnly !== null) {
-                        return <div className="min-w-0">{starOnly}</div>;
-                      }
-                      return starPanelAside;
-                    })()
+              <>
+                {mobileAsideOpen && (
+                  <div
+                    className="fixed inset-0 z-40 bg-black/60 lg:hidden"
+                    onClick={() => setMobileAsideOpen(false)}
+                    aria-hidden="true"
+                  />
+                )}
+                <aside
+                  className={cn(
+                    "fixed inset-y-0 right-0 z-50 w-full max-w-sm border-l border-st-border bg-st-bg shadow-2xl transition-transform duration-300 ease-in-out",
+                    "lg:static lg:inset-auto lg:z-auto lg:flex lg:w-90 lg:max-w-none lg:shrink-0 lg:flex-col lg:bg-st-panel lg:shadow-none lg:translate-x-0",
+                    mobileAsideOpen ? "translate-x-0" : "translate-x-full lg:translate-x-0",
                   )}
-                </div>
-              </aside>
+                >
+                  <button
+                    type="button"
+                    onClick={() => setMobileAsideOpen(false)}
+                    className="flex items-center gap-1 px-3 py-2 text-sm text-st-muted hover:text-st-fg lg:hidden"
+                    aria-label="Back to map"
+                  >
+                    <ChevronLeft size={14} /> Back to map
+                  </button>
+                  <div className="flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain p-2">
+                    {fleetPanelInner !== null ? (
+                      <div className="pointer-events-auto rounded-lg border border-st-border bg-st-bg/95 p-3 text-sm shadow-sm">
+                        {fleetPanelInner}
+                      </div>
+                    ) : (
+                      (() => {
+                        const starOnly = renderSelectedStarSystemPanelOnly();
+                        if (starOnly !== null) {
+                          return <div className="min-w-0">{starOnly}</div>;
+                        }
+                        return starPanelAside;
+                      })()
+                    )}
+                  </div>
+                </aside>
+              </>
             ) : null}
           </div>
         </div>

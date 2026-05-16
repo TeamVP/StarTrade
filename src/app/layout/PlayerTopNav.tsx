@@ -3,6 +3,7 @@ import { Link, NavLink } from "react-router-dom";
 import { Menu, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { usePlayerPreview } from "@/features/player/PlayerPreviewContext";
+import { SignOutButton } from "@/features/usr/components/SignOutButton";
 
 const subPaths = [
   { segment: "lobby", label: "Lobby" },
@@ -131,6 +132,40 @@ export function PlayerTopNav() {
                 {label}
               </NavLink>
             ))}
+
+            <div className="mt-2 border-t border-st-border pt-3 flex flex-col gap-1">
+              <NavLink
+                to="/profile"
+                onClick={() => setDrawerOpen(false)}
+                className={({ isActive }) =>
+                  cn(
+                    "rounded-md px-3 py-2 transition-colors",
+                    isActive
+                      ? "bg-st-accent text-slate-950"
+                      : "text-st-muted hover:bg-st-panel hover:text-st-fg",
+                  )
+                }
+              >
+                Profile
+              </NavLink>
+              <NavLink
+                to="/strat"
+                onClick={() => setDrawerOpen(false)}
+                className={({ isActive }) =>
+                  cn(
+                    "rounded-md px-3 py-2 transition-colors",
+                    isActive
+                      ? "bg-st-accent text-slate-950"
+                      : "text-st-muted hover:bg-st-panel hover:text-st-fg",
+                  )
+                }
+              >
+                Strat
+              </NavLink>
+              <div className="px-1 pt-1">
+                <SignOutButton />
+              </div>
+            </div>
           </nav>
         </div>
       )}
