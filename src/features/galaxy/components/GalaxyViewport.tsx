@@ -1140,6 +1140,7 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
     () => Object.fromEntries(systems.map((system) => [system._id, system.ownerEmpireId])),
     [systems],
   );
+  const soundscapeCanAutoStart = (turnTimeline?.gameStatus ?? activeGame?.status ?? null) === "running";
   const {
     soundscapeEnabled,
     soundscapeStatus,
@@ -1149,6 +1150,7 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
     disableSoundscape,
   } = useGalaxySoundscape({
     activeGameId,
+    canAutoStart: soundscapeCanAutoStart,
     camera: {
       ...camera,
       viewWidth: viewSize.width,

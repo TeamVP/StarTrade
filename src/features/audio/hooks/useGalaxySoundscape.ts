@@ -52,6 +52,7 @@ function clamp(value: number, min: number, max: number): number {
 
 export function useGalaxySoundscape(params: {
   activeGameId: string | null;
+  canAutoStart: boolean;
   camera: SoundscapeCameraSnapshot;
   recentEvents: SoundscapeEventRow[];
   systemsById: Readonly<Record<string, SoundscapeSystemPosition>>;
@@ -59,9 +60,18 @@ export function useGalaxySoundscape(params: {
   listenerEmpireId?: string | null;
   timeline?: SoundscapeTimelineSnapshot | null;
 }) {
-  const { activeGameId, camera, recentEvents, systemsById, ownership, listenerEmpireId, timeline } = params;
+  const {
+    activeGameId,
+    canAutoStart,
+    camera,
+    recentEvents,
+    systemsById,
+    ownership,
+    listenerEmpireId,
+    timeline,
+  } = params;
   const [enabled, setEnabled] = useState<boolean>(() => readStoredEnabled());
-  const [status, setStatus] = useState<SoundscapeStatus>(enabled ? "starting" : "off");
+  const [status, setStatus] = useState<SoundscapeStatus>("off");
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const engineRef = useRef<GalaxySoundscapeEngine | null>(null);
@@ -235,11 +245,20 @@ export function useGalaxySoundscape(params: {
     if (!enabled) {
       return;
     }
+    if (!canAutoStart) {
+      startupTokenRef.current += 1;
+      startupPromiseRef.current = null;
+      clearPendingPlaybackTimers();
+      engineRef.current?.dispose();
+      engineRef.current = null;
+      setStatus("off");
+      return;
+    }
     if (engineRef.current !== null) {
       return;
     }
     void enableSoundscape();
-  }, [enabled, enableSoundscape]);
+  }, [canAutoStart, clearPendingPlaybackTimers, enabled, enableSoundscape]);
 
   useEffect(() => {
     if (engineRef.current === null) {
@@ -296,7 +315,7 @@ export function useGalaxySoundscape(params: {
   }, [enabled, recentEvents, showNotice, timeline, toBellIntent]);
 
   return {
-    soundscapeEnabled: enabled && status === "ready",
+    soundscapeEnabled: enabled,
     soundscapeStatus: status,
     soundscapeError: error,
     soundscapeNotice: notice,
