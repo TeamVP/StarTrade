@@ -31,6 +31,9 @@ const STAR_VISUAL_DRAG_MAX_DISTANCE = STAR_HIT_RADIUS * 2;
 const STAR_VISUAL_RETURN_MS = 2500;
 const SHIP_ARRIVAL_FADE_MS = 300;
 const SHIP_DEPARTURE_CATCHUP_MS = 700;
+const RECENT_GHOST_VISIBILITY_MS = 1000;
+const recentFleetGhostIds = new Set<string>();
+const recentFleetGhostTimeoutIds = new Map<string, number>();
 
 type DepartureCatchupState = {
   firstSeenAtMs: number;
@@ -64,6 +67,19 @@ function smoothFirstLegDepartureProgress(params: {
     return params.progress;
   }
   return params.progress * easeOutCubic(catchup);
+}
+
+function rememberRecentFleetGhost(fleetId: string) {
+  recentFleetGhostIds.add(fleetId);
+  const existing = recentFleetGhostTimeoutIds.get(fleetId);
+  if (existing !== undefined) {
+    window.clearTimeout(existing);
+  }
+  const timeoutId = window.setTimeout(() => {
+    recentFleetGhostIds.delete(fleetId);
+    recentFleetGhostTimeoutIds.delete(fleetId);
+  }, RECENT_GHOST_VISIBILITY_MS);
+  recentFleetGhostTimeoutIds.set(fleetId, timeoutId);
 }
 
 export type GalaxyNode = {
@@ -889,6 +905,19 @@ function GalaxyStageInner({
       })),
     [fleetMarkers, starVisualOffset],
   );
+  const visibleFleetMarkerIds = useMemo(
+    () => new Set(fleetMarkers.map((fleet) => fleet.fleetId)),
+    [fleetMarkers],
+  );
+  const visibleFleetGhostIds = useMemo(
+    () =>
+      new Set(
+        enRouteGhosts
+          .filter((ghost) => ghost.variant !== "colony")
+          .map((ghost) => ghost.fleetId),
+      ),
+    [enRouteGhosts],
+  );
   const visualColonyShipMarkers = useMemo(
     () =>
       colonyShipMarkers.map((ship) => ({
@@ -902,6 +931,7 @@ function GalaxyStageInner({
       })),
     [colonyShipMarkers, starVisualOffset],
   );
+
   const dragPreviewFleet =
     dragFleetId === null ? null : visualFleetMarkers.find((m) => m.fleetId === dragFleetId);
   const dragPreviewColony =
@@ -979,6 +1009,7 @@ function GalaxyStageInner({
           nodes={visualNodes}
           turnTimeline={turnTimeline}
           selectedFleetId={selectedFleetId}
+          visibleFleetMarkerIds={visibleFleetMarkerIds}
         />
         {traderShips.map((trader) => (
           <TraderShipMarker
@@ -993,8 +1024,11 @@ function GalaxyStageInner({
           />
         ))}
         {visualFleetMarkers.map((fleet) => (
-          <pixiGraphics
+          <FleetMarkerGraphic
             key={`${fleet.fleetId}:${fleet.colorHex}`}
+            fleet={fleet}
+            homeNode={visualNodes.find((node) => node.id === fleet.originSystemId)}
+            selected={selectedFleetId === fleet.fleetId}
             eventMode={canIssueOrders ? "static" : "auto"}
             cursor={
               !fleetSelectable(fleet)
@@ -1005,16 +1039,11 @@ function GalaxyStageInner({
                     ? "pointer"
                     : "default"
             }
+            ghostRecentlyVisible={
+              visibleFleetGhostIds.has(fleet.fleetId) || recentFleetGhostIds.has(fleet.fleetId)
+            }
             onPointerDown={(event: FederatedPointerEvent) =>
               handleFleetPointerDown(fleet, event)
-            }
-            draw={(graphics) =>
-              drawFleetShip(
-                graphics,
-                fleet,
-                visualNodes.find((node) => node.id === fleet.originSystemId),
-                selectedFleetId === fleet.fleetId,
-              )
             }
           />
         ))}
@@ -1808,11 +1837,13 @@ function EnRouteGhostGraphics({
   nodes,
   turnTimeline,
   selectedFleetId,
+  visibleFleetMarkerIds,
 }: {
   ghosts: EnRouteGhostModel[];
   nodes: GalaxyNode[];
   turnTimeline: TurnTimelineModel | null;
   selectedFleetId: string | null;
+  visibleFleetMarkerIds: ReadonlySet<string>;
 }) {
   const [frame, setFrame] = useState(0);
   const departureCatchupRef = useRef(new Map<string, DepartureCatchupState>());
@@ -1855,19 +1886,22 @@ function EnRouteGhostGraphics({
           states: departureCatchupRef.current,
         });
 
-        const gx = from.x + (to.x - from.x) * fraction;
-        const gy = from.y + (to.y - from.y) * fraction;
+        const isFleetGhost = ghost.variant !== "colony";
+        if (isFleetGhost) {
+          rememberRecentFleetGhost(ghost.fleetId);
+        }
+        const markerVisible = visibleFleetMarkerIds.has(ghost.fleetId);
+        const holdAtDestination = isFleetGhost && fraction >= 1 && !markerVisible;
+        if (isFleetGhost && fraction >= 1 && markerVisible) {
+          continue;
+        }
+
+        const renderFraction = holdAtDestination ? 1 : fraction;
+        const gx = from.x + (to.x - from.x) * renderFraction;
+        const gy = from.y + (to.y - from.y) * renderFraction;
         const ox = to.x - from.x;
         const oy = to.y - from.y;
         const len = Math.hypot(ox, oy) || 1;
-        const arrivalAlpha = turnTravelArrivalAlpha({
-          progress: fraction,
-          dispatchedTurn: ghost.dispatchedTurn,
-          etaTurn: ghost.etaTurn,
-          travelTurnsTotal: t,
-          turnDurationMs: travelAnimMs,
-          fadeMs: SHIP_ARRIVAL_FADE_MS,
-        });
         if (ghost.variant === "colony") {
           drawColonyShipGhost(graphics, gx, gy, ox / len, oy / len, ghost.colorHex);
         } else {
@@ -1879,7 +1913,7 @@ function EnRouteGhostGraphics({
             oy / len,
             ghost.colorHex,
             ghost.strength,
-            arrivalAlpha,
+            1,
             selectedFleetId === ghost.fleetId,
           );
         }
@@ -1888,7 +1922,7 @@ function EnRouteGhostGraphics({
         if (!seenGhostIds.has(ghostId)) departureCatchupRef.current.delete(ghostId);
       }
     },
-    [ghosts, nodes, turnTimeline, selectedFleetId, frame],
+    [ghosts, nodes, turnTimeline, selectedFleetId, visibleFleetMarkerIds, frame],
   );
 
   return <pixiGraphics eventMode="none" draw={draw} />;
@@ -1975,6 +2009,60 @@ function TraderShipMarker({
         event.stopPropagation();
         onTap();
       }}
+      draw={draw}
+    />
+  );
+}
+
+function FleetMarkerGraphic({
+  fleet,
+  homeNode,
+  selected,
+  eventMode,
+  cursor,
+  ghostRecentlyVisible,
+  onPointerDown,
+}: {
+  fleet: FleetMarkerModel;
+  homeNode: GalaxyNode | undefined;
+  selected: boolean;
+  eventMode: "none" | "passive" | "auto" | "static" | "dynamic";
+  cursor: string;
+  ghostRecentlyVisible: boolean;
+  onPointerDown: (event: FederatedPointerEvent) => void;
+}) {
+  const [frame, setFrame] = useState(0);
+  const firstSeenAtRef = useRef<number | null>(null);
+  const shouldFadeRef = useRef(!ghostRecentlyVisible);
+
+  useTick(() => {
+    if (!shouldFadeRef.current) return;
+    setFrame((x) => x + 1);
+  });
+
+  const draw = useCallback(
+    (graphics: Graphics) => {
+      void frame;
+      if (firstSeenAtRef.current === null) {
+        firstSeenAtRef.current = Date.now();
+      }
+      const elapsedMs = Date.now() - firstSeenAtRef.current;
+      const alpha = shouldFadeRef.current
+        ? Math.max(0, Math.min(1, elapsedMs / SHIP_ARRIVAL_FADE_MS))
+        : 1;
+      if (alpha >= 1) {
+        shouldFadeRef.current = false;
+      }
+      drawFleetShip(graphics, fleet, homeNode, selected, alpha);
+    },
+    [fleet, homeNode, selected, frame],
+  );
+
+  return (
+    <pixiGraphics
+      eventMode={eventMode}
+      cursor={cursor}
+      onPointerDown={onPointerDown}
       draw={draw}
     />
   );
@@ -2222,6 +2310,7 @@ function drawFleetShip(
   fleet: FleetMarkerModel,
   homeNode: GalaxyNode | undefined,
   selected: boolean,
+  alpha = 1,
 ) {
   graphics.clear();
   const fx = fleet.x;
@@ -2244,12 +2333,16 @@ function drawFleetShip(
   const xRight = fx - px * wing - ox * wing * 0.35;
   const yRight = fy - py * wing - oy * wing * 0.35;
   const fillColor = Number.parseInt(fleet.colorHex.replace("#", ""), 16);
-  graphics.poly([xTip, yTip, xLeft, yLeft, xRight, yRight]).fill(fillColor);
+  graphics.poly([xTip, yTip, xLeft, yLeft, xRight, yRight]).fill({
+    color: fillColor,
+    alpha,
+  });
   if (selected) {
     graphics
       .poly([xTip, yTip, xLeft, yLeft, xRight, yRight])
-      .stroke({ width: 2.5, color: 0xffffff, alpha: 1, join: "round" });
+      .stroke({ width: 2.5, color: 0xffffff, alpha, join: "round" });
   }
+  graphics.hitArea = new Circle(fx, fy, 18);
 }
 
 /** Compact hauler icon for NPC/player traders (distinct from military fleet chevrons). */
