@@ -567,6 +567,8 @@ export default defineSchema({
     npcPlayerKey: v.optional(v.string()),
     /** Display name for the player or NPC persona controlling this empire. */
     playerName: v.optional(v.string()),
+    /** Timestamp when this empire formally resigned and exited the match. */
+    resignedAt: v.optional(v.number()),
     /** Editable automation brain for NPCs or humans that opt into scripted empire management. */
     strategyJson: v.optional(v.string()),
     /** How an NPC empire's automation becomes active. Human automation ignores this and runs immediately. */

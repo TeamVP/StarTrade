@@ -715,7 +715,6 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
     setMapResignError(null);
     try {
       await resignFromGame({ gameId: activeGame._id });
-      void navigate("/lobby", { replace: true });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       setMapResignError(message.replace(/^[\s\S]*?Error:\s*/g, "").trim());

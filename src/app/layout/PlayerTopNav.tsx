@@ -1,14 +1,14 @@
 import { useState } from "react";
 import { Link, NavLink } from "react-router-dom";
 import { Menu, X } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { usePlayerTopNavControls } from "@/app/layout/PlayerTopNavControls";
 import { usePlayerPreview } from "@/features/player/PlayerPreviewContext";
 import { SignOutButton } from "@/features/usr/components/SignOutButton";
 
 const subPaths = [
-  { segment: "lobby", label: "Lobby" },
-  { segment: "empire", label: "Empire" },
+  { segment: "", label: "Map" },
   { segment: "economy", label: "Economy" },
   { segment: "fleet", label: "Fleet" },
   { segment: "combat", label: "Combat" },
@@ -34,27 +34,21 @@ export function PlayerTopNav() {
         >
           StarStrat
         </Link>
-        <Link
-          to="/"
-          className="rounded-md px-3 py-px text-st-muted transition-colors hover:bg-st-panel hover:text-st-fg"
-        >
-          &lt; Back
-        </Link>
+        <Button type="button" variant="secondary" className="px-3 py-px text-xs" asChild>
+          <Link to="/lobby">Back to Lobby</Link>
+        </Button>
         {subPaths.map(({ segment, label }) => (
-          <NavLink
-            key={segment}
-            to={`${basePath}/${segment}`}
-            className={({ isActive }) =>
-              cn(
-                "rounded-md px-3 py-px transition-colors",
-                isActive
-                  ? "bg-st-accent text-slate-950"
-                  : "text-st-muted hover:bg-st-panel hover:text-st-fg",
-              )
-            }
-          >
-            {label}
-          </NavLink>
+          <Button key={segment || "map"} type="button" variant="secondary" className="px-3 py-px text-xs" asChild>
+            <NavLink
+              to={segment === "" ? basePath : `${basePath}/${segment}`}
+              end={segment === ""}
+              className={({ isActive }) =>
+                cn(isActive ? "border-st-accent bg-st-accent/10 text-st-fg" : undefined)
+              }
+            >
+              {label}
+            </NavLink>
+          </Button>
         ))}
       </nav>
 
@@ -116,17 +110,18 @@ export function PlayerTopNav() {
             </div>
 
             <Link
-              to="/"
+              to="/lobby"
               onClick={() => setDrawerOpen(false)}
               className="rounded-md px-3 py-2 text-st-muted transition-colors hover:bg-st-panel hover:text-st-fg"
             >
-              ← Back to Games
+              Back to Lobby
             </Link>
 
             {subPaths.map(({ segment, label }) => (
               <NavLink
-                key={segment}
-                to={`${basePath}/${segment}`}
+                key={segment || "map"}
+                to={segment === "" ? basePath : `${basePath}/${segment}`}
+                end={segment === ""}
                 onClick={() => setDrawerOpen(false)}
                 className={({ isActive }) =>
                   cn(

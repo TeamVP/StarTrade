@@ -659,6 +659,8 @@ export const resignFromGame = mutation({
       throw new Error("This game is already being cleaned up.");
     }
 
+    const resignedAt = Date.now();
+
     await ctx.db.patch("usr_game_roles", role._id, {
       isActive: false,
     });
@@ -668,6 +670,7 @@ export const resignFromGame = mutation({
       if (empire !== null && empire.gameId === args.gameId) {
         await ctx.db.patch("emp_states", empire._id, {
           controller: "npc",
+          resignedAt,
           strategyJson: empire.strategyJson ?? "{}",
           playerName: empire.playerName ?? `${empire.name} AI`,
         });
@@ -676,6 +679,18 @@ export const resignFromGame = mutation({
 
     const activeRoles = await listActiveGameRoles(ctx, args.gameId);
     const humansRemaining = activeRoles.length > 0;
+
+    const lastEmpireStandingResult = await evaluateGameFinalization(ctx, {
+      gameId: args.gameId,
+    });
+
+    if (lastEmpireStandingResult.finalized) {
+      return {
+        resigned: true,
+        finalized: true,
+        finishReason: lastEmpireStandingResult.finishReason,
+      };
+    }
 
     if (!humansRemaining) {
       const result = await evaluateGameFinalization(ctx, {

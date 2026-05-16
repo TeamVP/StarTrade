@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { useMutation } from "convex/react";
+import { useMutation, useQuery } from "convex/react";
 import { useNavigate } from "react-router-dom";
 import { Link } from "react-router-dom";
 import { Button } from "@/components/ui/button";
@@ -213,6 +213,10 @@ export function GameEndModal() {
   const membership = usePlayerGameMembership();
   const { activeGame, empires } = useGalaxyData();
   const activeMissionKey = activeGame?.missionKey ?? activeGame?.lobbyScenarioKey ?? null;
+  const durableResult = useQuery(
+    api.sim.queries.getDurableGameResult,
+    activeGame !== null && activeGame.status === "finished" ? { gameId: activeGame._id } : "skip",
+  );
 
   // Latched end-condition (set once, never reset)
   const [pendingKind, setPendingKind] = useState<"victory" | "defeat" | null>(null);
@@ -220,16 +224,43 @@ export function GameEndModal() {
   const [modalKind, setModalKind] = useState<"victory" | "defeat" | null>(null);
   // True once the player has dismissed the modal (prevents re-showing)
   const [dismissed, setDismissed] = useState(false);
+  const [lastKnownEmpireId, setLastKnownEmpireId] = useState<typeof empireId>(empireId);
+  const [lastKnownEmpireKey, setLastKnownEmpireKey] = useState<string | null>(null);
+  const [lastKnownEmpireName, setLastKnownEmpireName] = useState<string | null>(membership.empireName);
 
-  const playerEmpire = empires?.find((e) => e._id === empireId) ?? null;
+  useEffect(() => {
+    if (empireId !== null) {
+      setLastKnownEmpireId(empireId);
+    }
+  }, [empireId]);
+
+  const resolvedEmpireId = empireId ?? lastKnownEmpireId;
+  const playerEmpire = empires?.find((e) => e._id === resolvedEmpireId) ?? null;
+
+  useEffect(() => {
+    if (playerEmpire?.empireKey !== undefined) {
+      setLastKnownEmpireKey(playerEmpire.empireKey);
+    }
+    if ((membership.empireName ?? playerEmpire?.name) !== undefined) {
+      setLastKnownEmpireName(membership.empireName ?? playerEmpire?.name ?? null);
+    }
+  }, [membership.empireName, playerEmpire]);
+
+  const playerEmpireKey = playerEmpire?.empireKey ?? lastKnownEmpireKey;
+  const playerPlacement =
+    playerEmpireKey === null
+      ? null
+      : durableResult?.placements.find((row) => row.empireKey === playerEmpireKey) ?? null;
 
   const isVictory =
     activeGame?.status === "finished" &&
-    activeGame.winnerEmpireKey !== null &&
-    playerEmpire !== null &&
-    playerEmpire.empireKey === activeGame.winnerEmpireKey;
+    ((playerPlacement?.isWinner ?? false) ||
+      (activeGame.winnerEmpireKey !== null && playerEmpireKey !== null && playerEmpireKey === activeGame.winnerEmpireKey));
 
-  const isDefeated = playerEmpire?.isCollapsed === true;
+  const isDefeated =
+    playerEmpire?.resignedAt !== undefined ||
+    playerEmpire?.isCollapsed === true ||
+    (activeGame?.status === "finished" && playerPlacement !== null && !playerPlacement.isWinner);
 
   // Effect 1 — latch the end condition the first time it becomes true
   useEffect(() => {
@@ -250,7 +281,7 @@ export function GameEndModal() {
     setDismissed(true);
   }
 
-  const empireName = membership.empireName ?? playerEmpire?.name ?? null;
+  const empireName = membership.empireName ?? playerEmpire?.name ?? lastKnownEmpireName;
 
   if (modalKind === "victory")
     return <VictoryModal empireName={empireName} missionKey={activeMissionKey} onDismiss={handleDismiss} />;

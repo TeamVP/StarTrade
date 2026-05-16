@@ -123,7 +123,11 @@ async function loadEmpireStandings(
 
   const humanUserByEmpire = new Map<string, Id<"users">>();
   for (const role of roles) {
-    if (role.isActive && role.empireId !== null) {
+    if (role.empireId === null) {
+      continue;
+    }
+    const existingUserId = humanUserByEmpire.get(role.empireId);
+    if (existingUserId === undefined || role.isActive) {
       humanUserByEmpire.set(role.empireId, role.userId);
     }
   }
@@ -165,7 +169,7 @@ async function loadEmpireStandings(
           : controllerKind === "npc"
             ? "npc_default"
             : "custom",
-      isAlive: starsControlled > 0 || fleetStats.strength > 0,
+      isAlive: empire.resignedAt === undefined && (starsControlled > 0 || fleetStats.strength > 0),
     } satisfies EmpireStanding;
   });
 }
@@ -237,7 +241,11 @@ async function upsertResultsForGame(
     const eliminated = !row.isAlive;
     const eliminationReason: "destroyed" | "collapsed" | "abandoned" | "survived_to_score" | null =
       eliminated
-        ? (row.empire.isCollapsed ? "collapsed" : "destroyed")
+        ? row.empire.resignedAt !== undefined
+          ? "abandoned"
+          : row.empire.isCollapsed
+            ? "collapsed"
+            : "destroyed"
         : finishReason === "last_empire_standing"
           ? null
           : "survived_to_score";

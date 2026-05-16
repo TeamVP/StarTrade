@@ -41,7 +41,6 @@ export function PlayerLobbyPage() {
   const ensureMyStarterGames = useMutation(api.usr.mutations.ensureMyStarterGames);
   const resetMyStarterGame = useMutation(api.usr.mutations.resetMyStarterGame);
   const resignFromGame = useMutation(api.usr.mutations.resignFromGame);
-  const startGame = useMutation(api.sim.mutations.startGame);
   const [busyScenarioKey, setBusyScenarioKey] = useState<string | null>(null);
   const [resignBusyScenarioKey, setResignBusyScenarioKey] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -73,7 +72,6 @@ export function PlayerLobbyPage() {
       }
 
       if (entry.game.status === "lobby") {
-        await startGame({ gameId: entry.game._id });
         selectGame(entry.game._id);
         return;
       }
