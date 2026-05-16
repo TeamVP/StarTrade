@@ -36,7 +36,19 @@ export function GameRoutePage() {
   }, [resolvedGame]);
 
   if (resolvedGame === undefined) {
-    return null;
+    return (
+      <div className="flex min-h-dvh items-center justify-center bg-st-bg px-4 py-8 text-st-fg">
+        <Card className="w-full max-w-lg p-6">
+          <p className="text-xs font-semibold uppercase tracking-[0.24em] text-st-muted">
+            Opening game
+          </p>
+          <h1 className="mt-3 text-xl font-semibold text-st-fg">Loading mission state</h1>
+          <p className="mt-3 text-sm text-st-muted">
+            Resolving the selected game and preparing the player view.
+          </p>
+        </Card>
+      </div>
+    );
   }
 
   if (resolvedGame === null) {

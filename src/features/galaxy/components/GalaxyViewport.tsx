@@ -9,7 +9,7 @@ import {
   type ReactNode,
 } from "react";
 import { useMutation, useQuery } from "convex/react";
-import { ChevronLeft, ChevronRight, Expand, Info, Minus, Plus, Repeat2, Star, Volume2, VolumeX } from "lucide-react";
+import { ChevronLeft, ChevronRight, Expand, Info, Minus, Pause, Play, Plus, Repeat2, Star, Volume2, VolumeX } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useNavigate } from "react-router-dom";
 import { api } from "../../../../convex/_generated/api";
@@ -17,7 +17,7 @@ import type { Id } from "../../../../convex/_generated/dataModel";
 import { useOptionalPlayerTopNavControlSetter } from "@/app/layout/PlayerTopNavControls";
 import { useGalaxySoundscape } from "@/features/audio/hooks/useGalaxySoundscape";
 import { playUiSound } from "@/lib/audio/uiSounds";
-import { getTurnEffectiveNowMs } from "@/lib/time/turnClock";
+import { getTurnEffectiveNowMs, getTurnElapsedFraction } from "@/lib/time/turnClock";
 import { useTurnClock } from "@/lib/time/useTurnClock";
 import { formatPopulationPeople } from "@/lib/populationFormat";
 import { normalizeFleetDetachmentDisplayName } from "@/lib/fleetDisplayName";
@@ -365,6 +365,8 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
   const setEmphasis = useMutation(api.gal.mutations.setEmphasis);
   const adjustFoodImportSubsidy = useMutation(api.gal.mutations.adjustFoodImportSubsidy);
   const setPriorityStar = useMutation(api.gal.mutations.setPriorityStar);
+  const pauseGame = useMutation(api.sim.mutations.pauseGame);
+  const resumeGame = useMutation(api.sim.mutations.resumeGame);
   const startColonyShipBuild = useMutation(api.col.mutations.startColonyShipBuild);
   const cancelColonyShipBuild = useMutation(api.col.mutations.cancelColonyShipBuild);
   const dispatchColonyShip = useMutation(api.col.mutations.dispatchColonyShip);
@@ -411,6 +413,8 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
   const [colonyMutationError, setColonyMutationError] = useState<string | null>(null);
   const [mapResignBusy, setMapResignBusy] = useState(false);
   const [mapResignError, setMapResignError] = useState<string | null>(null);
+  const [mapPauseBusy, setMapPauseBusy] = useState(false);
+  const [mapPauseError, setMapPauseError] = useState<string | null>(null);
   const [startBusy, setStartBusy] = useState(false);
   const [startError, setStartError] = useState<string | null>(null);
   /** Step 1 = strategy picker, step 2 = start game button. */
@@ -679,6 +683,36 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
   const canUseColonyShips =
     simAllowsPlayerOrders && (isAdmin || myEmpireId !== null);
   const canMarkPriorityStars = simAllowsPlayerOrders && priorityEmpireId !== null;
+  const canPauseOrResumeClock = useMemo(
+    () => myRoles.some((role) => role.role === "admin" || role.role === "empire"),
+    [myRoles],
+  );
+  const turnBusy =
+    turnTimelineQuery?.turnState !== undefined &&
+    turnTimelineQuery?.turnState !== null &&
+    turnTimelineQuery.turnState !== "open";
+  const canMapPauseOrResume =
+    activeGame !== null &&
+    ((activeGame.status === "running" && !turnBusy) || activeGame.status === "paused") &&
+    canPauseOrResumeClock;
+  const mapTurnElapsedFrac = useMemo(() => {
+    const gameStatus = turnTimelineQuery?.gameStatus ?? activeGame?.status ?? null;
+    if (gameStatus !== "running" && gameStatus !== "paused") return null;
+    return getTurnElapsedFraction({
+      turnStartedAtMs: turnTimelineQuery?.turnStartedAt ?? null,
+      turnDurationMs: turnTimelineQuery?.turnDurationMs ?? null,
+      nowMs: turnClock.alignedNowMs,
+      gameStatus,
+      turnPausedAtMs: turnTimelineQuery?.turnPausedAtMs ?? null,
+    });
+  }, [
+    activeGame?.status,
+    turnClock.alignedNowMs,
+    turnTimelineQuery?.gameStatus,
+    turnTimelineQuery?.turnDurationMs,
+    turnTimelineQuery?.turnPausedAtMs,
+    turnTimelineQuery?.turnStartedAt,
+  ]);
   const myOwnedSystemsCount = useMemo(
     () =>
       myEmpireId === null
@@ -779,6 +813,24 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
     () => (selectedSystem === null ? false : priorityStarIds.has(selectedSystem._id)),
     [priorityStarIds, selectedSystem],
   );
+
+  const handleMapPauseToggle = useCallback(async () => {
+    if (activeGame === null || !canMapPauseOrResume) return;
+    setMapPauseBusy(true);
+    setMapPauseError(null);
+    try {
+      if (activeGame.status === "running") {
+        await pauseGame({ gameId: activeGame._id });
+      } else if (activeGame.status === "paused") {
+        await resumeGame({ gameId: activeGame._id });
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setMapPauseError(message.replace(/^[\s\S]*?Error:\s*/g, "").trim());
+    } finally {
+      setMapPauseBusy(false);
+    }
+  }, [activeGame, canMapPauseOrResume, pauseGame, resumeGame]);
 
   const togglePriorityStar = useCallback(
     async (systemId: Id<"gal_systems">, enabled: boolean) => {
@@ -2101,6 +2153,9 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
   const mapControlBtnClass = playerHomeMapLayout
     ? "size-8 shrink-0 border-st-border/80 bg-st-bg/95 p-0 shadow-md ring-1 ring-st-border/50 backdrop-blur-sm"
     : "size-8 shrink-0 p-0";
+  const mapCompactControlBtnClass = playerHomeMapLayout
+    ? "size-7 shrink-0 border-st-border/80 bg-st-bg/95 p-0 shadow-md ring-1 ring-st-border/50 backdrop-blur-sm sm:size-8"
+    : "size-7 shrink-0 p-0 sm:size-8";
 
   const mapZoomControlButtons =
     activeGame !== null ? (
@@ -2138,8 +2193,8 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
               className={cn(
                 mapControlBtnClass,
                 selectedSystemIsPriorityStar
-                  ? "border-cyan-400/70 bg-cyan-950/50 text-cyan-100 hover:border-cyan-300"
-                  : "",
+                  ? "border-amber-400/80 bg-amber-500/20 text-amber-100 hover:border-amber-300"
+                  : "text-amber-300 hover:text-amber-200",
               )}
               title={
                 canMarkPriorityStars
@@ -2179,6 +2234,45 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
           >
             <Plus className="size-4" aria-hidden />
           </Button>
+          {canMapPauseOrResume ? (
+            <Button
+              variant="secondary"
+              className={cn(mapCompactControlBtnClass, "relative overflow-hidden")}
+              title={
+                mapPauseBusy
+                  ? "Updating game pause state"
+                  : activeGame?.status === "paused"
+                    ? "Play game"
+                    : "Pause game"
+              }
+              aria-label={activeGame?.status === "paused" ? "Play game" : "Pause game"}
+              type="button"
+              disabled={mapPauseBusy}
+              onClick={() => {
+                void handleMapPauseToggle();
+              }}
+            >
+              {mapTurnElapsedFrac !== null ? (
+                <span
+                  aria-hidden
+                  className="pointer-events-none absolute inset-y-0 right-0 st-turn-countdown-bg"
+                  style={{
+                    width: `${Math.round((1 - mapTurnElapsedFrac) * 100)}%`,
+                    transition: "width 0.25s linear",
+                    opacity: 0.72,
+                    animationPlayState: activeGame?.status === "paused" ? "paused" : "running",
+                  }}
+                />
+              ) : null}
+              <span className="relative z-10 inline-flex items-center justify-center">
+                {activeGame?.status === "paused" ? (
+                  <Play className="size-3.5 sm:size-4" aria-hidden />
+                ) : (
+                  <Pause className="size-3.5 sm:size-4" aria-hidden />
+                )}
+              </span>
+            </Button>
+          ) : null}
           <Button
             variant="secondary"
             className={mapControlBtnClass}
@@ -2202,7 +2296,11 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
             <Repeat2 className="size-4" aria-hidden />
           </Button>
         </div>
-        {soundscapeError !== null ? (
+        {mapPauseError !== null ? (
+          <div className="pointer-events-auto max-w-44 rounded-md border border-red-500/40 bg-st-panel/95 px-2 py-1 text-[11px] text-red-200 shadow-lg">
+            {mapPauseError}
+          </div>
+        ) : soundscapeError !== null ? (
           <div className="pointer-events-auto max-w-44 rounded-md border border-red-500/40 bg-st-panel/95 px-2 py-1 text-[11px] text-red-200 shadow-lg">
             {soundscapeError}
           </div>
