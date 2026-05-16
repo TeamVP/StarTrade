@@ -32,6 +32,8 @@ export type GalaxySoundscapeEngine = {
   dispose: () => void;
 };
 
+const MAX_EVENT_GAIN = 0.72;
+
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
@@ -63,32 +65,41 @@ export async function createGalaxySoundscapeEngine(params?: {
   const reverbTailSeconds = computeSoundscapeReverbTailSeconds(params?.turnDurationMs);
 
   const limiter = new Tone.Limiter(-2).toDestination();
-  const masterGain = new Tone.Gain(0.84).connect(limiter);
+  const compressor = new Tone.Compressor({
+    threshold: -18,
+    ratio: 3,
+    attack: 0.01,
+    release: 0.24,
+    knee: 12,
+  }).connect(limiter);
+  const masterGain = new Tone.Gain(0.72).connect(compressor);
   const reverb = new Tone.Reverb({
     decay: reverbTailSeconds,
     preDelay: 0.04,
-    wet: 0.24,
+    // This node sits on a dedicated send path, so it must stay fully wet.
+    wet: 1,
   }).connect(masterGain);
   await reverb.generate();
 
   const actionBuses: Record<SoundscapeActionType, InstanceType<ToneModule["Gain"]>> = {
-    attack: new Tone.Gain(1.08).connect(masterGain),
-    defense: new Tone.Gain(0.96).connect(masterGain),
-    exploration: new Tone.Gain(0.88).connect(masterGain),
+    attack: new Tone.Gain(0.92).connect(masterGain),
+    defense: new Tone.Gain(0.84).connect(masterGain),
+    exploration: new Tone.Gain(0.78).connect(masterGain),
   };
 
   const disposalTimers = new Set<number>();
 
   return {
     playBell(intent) {
-      const eventGain = intent.gain * clamp(intent.velocity, 0.2, 1);
+      const eventGain = clamp(intent.gain * clamp(intent.velocity, 0.2, 1), 0.08, MAX_EVENT_GAIN);
+      const reverbSendGain = eventGain * clamp(intent.reverbSend * 0.72, 0.06, 0.22);
       const player: BellPlayer = new Tone.Player(sampleBuffers.get(intent.sampleKey)).set({
         fadeOut: Math.min(1.4, Math.max(0.4, intent.releaseSeconds * 0.35)),
       });
       const filter = new Tone.Filter(intent.cutoffHz, "lowpass");
       const panner = new Tone.Panner(intent.pan);
       const dryGain = new Tone.Gain(eventGain);
-      const wetGain = new Tone.Gain(eventGain * intent.reverbSend);
+      const wetGain = new Tone.Gain(reverbSendGain);
 
       player.volume.value =
         (SAMPLE_VOLUME_OFFSETS[intent.sampleKey] ?? -12) +
@@ -129,6 +140,7 @@ export async function createGalaxySoundscapeEngine(params?: {
       disposalTimers.clear();
       reverb.dispose();
       masterGain.dispose();
+      compressor.dispose();
       limiter.dispose();
       actionBuses.attack.dispose();
       actionBuses.defense.dispose();
