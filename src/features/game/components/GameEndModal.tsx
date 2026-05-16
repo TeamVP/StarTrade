@@ -123,14 +123,16 @@ function VictoryModal({
 
 function DefeatModal({
   empireName,
+  isResigned,
   onDismiss,
 }: {
   empireName: string | null;
+  isResigned: boolean;
   onDismiss: () => void;
 }) {
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/88 p-4"
       role="presentation"
       onClick={onDismiss}
     >
@@ -138,59 +140,56 @@ function DefeatModal({
         role="dialog"
         aria-modal="true"
         aria-labelledby="defeat-title"
-        className="pointer-events-auto w-full max-w-md rounded-xl border border-red-900/50 bg-st-bg p-8 shadow-2xl shadow-red-900/10"
+        className="pointer-events-auto w-full max-w-md rounded-xl border border-slate-700/40 bg-st-bg p-8 shadow-2xl shadow-black/80"
         onClick={(e) => e.stopPropagation()}
       >
-        {/* Fallen star decoration */}
-        <div className="mb-5 flex items-center justify-center gap-3 text-red-900/70">
-          <span className="text-lg">—</span>
-          <span className="text-2xl text-red-700/80">✦</span>
-          <span className="text-lg">—</span>
+        {/* Cold silence decoration */}
+        <div className="mb-7 flex items-center justify-center tracking-[0.6em] text-slate-700">
+          <span className="text-xs">· · ·</span>
         </div>
 
-        <div className="mb-6 text-center">
+        <div className="mb-7 text-center">
           <h2
             id="defeat-title"
-            className="text-2xl font-bold uppercase tracking-widest text-red-400"
+            className="text-2xl font-bold uppercase tracking-widest text-slate-300"
           >
-            Your Empire Has Fallen
+            {isResigned ? "Throne Abandoned" : "Dominion Lost"}
           </h2>
           {empireName ? (
-            <p className="mt-1 text-xs uppercase tracking-[0.35em] text-red-500/60">
-              The {empireName} — Extinguished
+            <p className="mt-2 text-xs uppercase tracking-[0.32em] text-slate-600">
+              {empireName} — Erased
             </p>
           ) : (
-            <p className="mt-1 text-xs uppercase tracking-[0.35em] text-red-500/60">
-              A Would-Be Emperor, Defeated
+            <p className="mt-2 text-xs uppercase tracking-[0.32em] text-slate-600">
+              A Would-Be Emperor — Forgotten
             </p>
           )}
         </div>
 
-        <div className="space-y-3 text-center leading-relaxed text-st-muted">
-          <p>
-            Your last system has gone dark. The fleets you forged are scattered
-            across the void. Another empire's banner flies where yours once stood.
-          </p>
-          <p className="italic text-st-fg/80">
-            Even the greatest campaigns end in silence. Perhaps next time,
-            the galaxy will be yours.
-          </p>
+        <div className="space-y-2 text-center text-sm leading-relaxed text-slate-500">
+          {isResigned ? (
+            <p>You chose to walk away.</p>
+          ) : (
+            <p>The stars you held are gone.</p>
+          )}
+          <p>What you built was erased.</p>
+          <p className="text-xs italic text-slate-600">The galaxy does not mourn.</p>
         </div>
 
-        <div className="mt-8 flex flex-col items-center gap-4">
+        <div className="mt-9 flex flex-col items-center gap-3">
           <Button
             asChild
             variant="secondary"
-            className="w-full max-w-xs font-semibold tracking-wide"
+            className="w-full max-w-xs border-slate-700/50 bg-slate-900/50 font-medium tracking-wide text-slate-400 hover:border-slate-600/50 hover:bg-slate-800/50 hover:text-slate-300"
           >
-            <Link to="/lobby">Back to Lobby</Link>
+            <Link to="/lobby">Return to Lobby</Link>
           </Button>
           <button
             type="button"
-            className="text-xs text-st-muted transition-colors hover:text-st-fg"
+            className="text-xs text-slate-700 transition-colors hover:text-slate-500"
             onClick={onDismiss}
           >
-            Continue watching anyway
+            Remain
           </button>
         </div>
       </div>
@@ -227,6 +226,8 @@ export function GameEndModal() {
   const [lastKnownEmpireId, setLastKnownEmpireId] = useState<typeof empireId>(empireId);
   const [lastKnownEmpireKey, setLastKnownEmpireKey] = useState<string | null>(null);
   const [lastKnownEmpireName, setLastKnownEmpireName] = useState<string | null>(membership.empireName);
+  // Latched once resigned; persists even if the empire record disappears after cleanup
+  const [lastKnownResigned, setLastKnownResigned] = useState(false);
 
   useEffect(() => {
     if (empireId !== null) {
@@ -244,6 +245,9 @@ export function GameEndModal() {
     if ((membership.empireName ?? playerEmpire?.name) !== undefined) {
       setLastKnownEmpireName(membership.empireName ?? playerEmpire?.name ?? null);
     }
+    if (playerEmpire?.resignedAt !== undefined) {
+      setLastKnownResigned(true);
+    }
   }, [membership.empireName, playerEmpire]);
 
   const playerEmpireKey = playerEmpire?.empireKey ?? lastKnownEmpireKey;
@@ -252,13 +256,19 @@ export function GameEndModal() {
       ? null
       : durableResult?.placements.find((row) => row.empireKey === playerEmpireKey) ?? null;
 
+  // A resigned player can never receive the victory modal, even if the score-based
+  // finalization recorded their empire as the winner (e.g. they had the most stars
+  // at the moment they resigned a solo game).
+  const playerResigned = playerEmpire?.resignedAt !== undefined || lastKnownResigned;
+
   const isVictory =
+    !playerResigned &&
     activeGame?.status === "finished" &&
     ((playerPlacement?.isWinner ?? false) ||
       (activeGame.winnerEmpireKey !== null && playerEmpireKey !== null && playerEmpireKey === activeGame.winnerEmpireKey));
 
   const isDefeated =
-    playerEmpire?.resignedAt !== undefined ||
+    playerResigned ||
     playerEmpire?.isCollapsed === true ||
     (activeGame?.status === "finished" && playerPlacement !== null && !playerPlacement.isWinner);
 
@@ -286,6 +296,6 @@ export function GameEndModal() {
   if (modalKind === "victory")
     return <VictoryModal empireName={empireName} missionKey={activeMissionKey} onDismiss={handleDismiss} />;
   if (modalKind === "defeat")
-    return <DefeatModal empireName={empireName} onDismiss={handleDismiss} />;
+    return <DefeatModal empireName={empireName} isResigned={playerResigned} onDismiss={handleDismiss} />;
   return null;
 }
