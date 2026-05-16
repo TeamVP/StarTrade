@@ -2219,48 +2219,48 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
 
   const mapZoomControlButtons =
     activeGame !== null ? (
-      <div className="flex flex-col items-end gap-1">
-        <div className="flex items-center gap-1 sm:hidden">
-          {canMapPauseOrResume ? (
-            <Button
-              variant="secondary"
-              className={cn(mapCompactControlBtnClass, "relative overflow-hidden")}
-              title={
-                mapPauseBusy
-                  ? "Updating game pause state"
-                  : activeGame?.status === "paused"
-                    ? "Play game"
-                    : "Pause game"
-              }
-              aria-label={activeGame?.status === "paused" ? "Play game" : "Pause game"}
-              type="button"
-              disabled={mapPauseBusy}
-              onClick={() => {
-                void handleMapPauseToggle();
-              }}
-            >
-              {mapTurnElapsedFrac !== null ? (
-                <span
-                  aria-hidden
-                  className="pointer-events-none absolute inset-y-0 right-0 st-turn-countdown-bg"
-                  style={{
-                    width: `${Math.round((1 - mapTurnElapsedFrac) * 100)}%`,
-                    transition: "width 0.25s linear",
-                    opacity: 0.72,
-                    animationPlayState: activeGame?.status === "paused" ? "paused" : "running",
-                  }}
-                />
-              ) : null}
-              <span className="relative z-10 inline-flex items-center justify-center">
-                {activeGame?.status === "paused" ? (
-                  <Play className="size-3.5 sm:size-4" aria-hidden />
-                ) : (
-                  <Pause className="size-3.5 sm:size-4" aria-hidden />
-                )}
-              </span>
-            </Button>
-          ) : null}
-          {selectedSystem !== null ? (
+      <div className="flex w-full flex-col gap-1 sm:w-auto sm:items-end">
+        <div className="flex w-full items-center justify-between gap-3 sm:hidden">
+          <div className="flex flex-1 items-center justify-center gap-3 pr-2">
+            {canMapPauseOrResume ? (
+              <Button
+                variant="secondary"
+                className={cn(mapCompactControlBtnClass, "relative overflow-hidden")}
+                title={
+                  mapPauseBusy
+                    ? "Updating game pause state"
+                    : activeGame?.status === "paused"
+                      ? "Play game"
+                      : "Pause game"
+                }
+                aria-label={activeGame?.status === "paused" ? "Play game" : "Pause game"}
+                type="button"
+                disabled={mapPauseBusy}
+                onClick={() => {
+                  void handleMapPauseToggle();
+                }}
+              >
+                {mapTurnElapsedFrac !== null ? (
+                  <span
+                    aria-hidden
+                    className="pointer-events-none absolute inset-y-0 right-0 st-turn-countdown-bg"
+                    style={{
+                      width: `${Math.round((1 - mapTurnElapsedFrac) * 100)}%`,
+                      transition: "width 0.25s linear",
+                      opacity: 0.72,
+                      animationPlayState: activeGame?.status === "paused" ? "paused" : "running",
+                    }}
+                  />
+                ) : null}
+                <span className="relative z-10 inline-flex items-center justify-center">
+                  {activeGame?.status === "paused" ? (
+                    <Play className="size-3.5 sm:size-4" aria-hidden />
+                  ) : (
+                    <Pause className="size-3.5 sm:size-4" aria-hidden />
+                  )}
+                </span>
+              </Button>
+            ) : null}
             <Button
               variant="secondary"
               className={cn(
@@ -2268,13 +2268,16 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
                 selectedSystemIsPriorityStar
                   ? "border-amber-400/80 bg-amber-500/20 text-amber-100 hover:border-amber-300"
                   : "text-amber-300 hover:text-amber-200",
+                selectedSystem === null ? "opacity-45" : "",
               )}
               title={
-                canMarkPriorityStars
-                  ? selectedSystemIsPriorityStar
-                    ? "Unmark selected star as a Priority star"
-                    : "Mark selected star as a Priority star"
-                  : (priorityStarDisabledReason ?? "Priority stars are unavailable right now")
+                selectedSystem === null
+                  ? "Select a star to toggle Priority"
+                  : canMarkPriorityStars
+                    ? selectedSystemIsPriorityStar
+                      ? "Unmark selected star as a Priority star"
+                      : "Mark selected star as a Priority star"
+                    : (priorityStarDisabledReason ?? "Priority stars are unavailable right now")
               }
               aria-label={
                 selectedSystemIsPriorityStar
@@ -2283,8 +2286,9 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
               }
               aria-pressed={selectedSystemIsPriorityStar}
               type="button"
-              disabled={!canMarkPriorityStars}
+              disabled={selectedSystem === null || !canMarkPriorityStars}
               onClick={() => {
+                if (selectedSystem === null) return;
                 void togglePriorityStar(
                   selectedSystem._id,
                   !selectedSystemIsPriorityStar,
@@ -2296,19 +2300,51 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
                 aria-hidden
               />
             </Button>
-          ) : null}
-          <Button
-            variant="secondary"
-            className={mapControlBtnClass}
-            title="Clear standing orders and rebuild from the selected strategy on the next planning pass"
-            aria-label="Rerun standing orders from selected strategy"
-            type="button"
-            onClick={() => {
-              void queueMyEmpireStandingOrdersRefresh({ gameId: activeGame._id });
-            }}
-          >
-            <Repeat2 className="size-4" aria-hidden />
-          </Button>
+            <Button
+              variant="secondary"
+              className={mapControlBtnClass}
+              title="Clear standing orders and rebuild from the selected strategy on the next planning pass"
+              aria-label="Rerun standing orders from selected strategy"
+              type="button"
+              onClick={() => {
+                void queueMyEmpireStandingOrdersRefresh({ gameId: activeGame._id });
+              }}
+            >
+              <Repeat2 className="size-4" aria-hidden />
+            </Button>
+          </div>
+          <div className="flex items-center justify-end gap-2">
+            <Button
+              variant="secondary"
+              className={mapControlBtnClass}
+              title="Zoom out"
+              aria-label="Zoom out"
+              type="button"
+              onClick={() => zoomFromCenter(1 / MAP_BUTTON_ZOOM_FACTOR)}
+            >
+              <Minus className="size-4" aria-hidden />
+            </Button>
+            <Button
+              variant="secondary"
+              className={mapControlBtnClass}
+              title="Zoom in"
+              aria-label="Zoom in"
+              type="button"
+              onClick={() => zoomFromCenter(MAP_BUTTON_ZOOM_FACTOR)}
+            >
+              <Plus className="size-4" aria-hidden />
+            </Button>
+            <Button
+              variant="secondary"
+              className={mapControlBtnClass}
+              title={nextFitAxis === "h" ? "Fit galaxy width" : "Fit galaxy height"}
+              aria-label={nextFitAxis === "h" ? "Fit galaxy width" : "Fit galaxy height"}
+              type="button"
+              onClick={resetMapView}
+            >
+              <Expand className="size-4" aria-hidden />
+            </Button>
+          </div>
         </div>
         <div className="flex items-center gap-1">
           <Button
@@ -2377,7 +2413,7 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
           ) : null}
           <Button
             variant="secondary"
-            className={mapControlBtnClass}
+            className={cn(mapControlBtnClass, "hidden sm:inline-flex")}
             title="Zoom in"
             aria-label="Zoom in"
             type="button"
@@ -2426,7 +2462,7 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
           ) : null}
           <Button
             variant="secondary"
-            className={mapControlBtnClass}
+            className={cn(mapControlBtnClass, "hidden sm:inline-flex")}
             title={nextFitAxis === "h" ? "Fit galaxy width" : "Fit galaxy height"}
             aria-label={nextFitAxis === "h" ? "Fit galaxy width" : "Fit galaxy height"}
             type="button"
@@ -2689,7 +2725,7 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
                   </div>
                 ) : null}
                 {mapZoomControlButtons !== null ? (
-                  <div className="pointer-events-auto absolute right-3 top-3">
+                  <div className="pointer-events-auto absolute inset-x-3 top-3 sm:inset-x-auto sm:right-3">
                     {mapZoomControlButtons}
                   </div>
                 ) : null}
