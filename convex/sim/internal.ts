@@ -1888,9 +1888,7 @@ async function loadResolutionPhase(
     return null;
   }
   if (game.currentTurn !== params.turnNumber) {
-    throw new Error(
-      `Turn resolution expected turn ${params.turnNumber}, but game is on turn ${game.currentTurn}.`,
-    );
+    return null;
   }
 
   const turn = await loadTurnRow(ctx, params.gameId, params.turnNumber);
@@ -1901,7 +1899,7 @@ async function loadResolutionPhase(
     return null;
   }
   if (!isTurnPreparingState(turn.state)) {
-    throw new Error("Turn is not locked for preparation.");
+    return null;
   }
 
   const currentPhase = readTurnResolutionPhase(turn.resolutionPhase);
