@@ -538,6 +538,82 @@ export const setGameRetentionClass = mutation({
   },
 });
 
+export const retireGameForCleanup = mutation({
+  args: { gameId: v.id("sim_games") },
+  handler: async (
+    ctx,
+    args,
+  ): Promise<{
+    finalized: boolean;
+    finishReason: "last_empire_standing" | "abandoned_scored" | "admin_terminated_discarded" | "admin_terminated_scored" | null;
+    requeuedCleanup: boolean;
+  }> => {
+    const userId = await getAuthUserId(ctx);
+    if (userId === null) {
+      throw new Error("Authentication required.");
+    }
+    await assertGameAdmin(ctx, args.gameId, userId);
+
+    const game = await ctx.db.get("sim_games", args.gameId);
+    if (game === null) {
+      throw new Error("Game not found.");
+    }
+
+    // Strong admin path: preserve a durable summary, then remove the live simulation payload.
+    if (game.retentionClass !== "official") {
+      await ctx.db.patch("sim_games", args.gameId, {
+        retentionClass: "official",
+      });
+    }
+
+    const finalization = await evaluateGameFinalization(ctx, {
+      gameId: args.gameId,
+      forceFinishReason: "admin_terminated_scored",
+    });
+
+    const refreshedGame = await ctx.db.get("sim_games", args.gameId);
+    if (refreshedGame === null) {
+      return {
+        finalized: finalization.finalized,
+        finishReason: finalization.finishReason,
+        requeuedCleanup: false,
+      };
+    }
+
+    const shouldQueueCleanup =
+      refreshedGame.retentionClass === "official" &&
+      (
+        refreshedGame.finalizationState === "results_written" ||
+        refreshedGame.finalizationState === "pending_cleanup" ||
+        refreshedGame.finalizationState === "cleaned"
+      );
+
+    if (!shouldQueueCleanup) {
+      return {
+        finalized: finalization.finalized,
+        finishReason: finalization.finishReason,
+        requeuedCleanup: false,
+      };
+    }
+
+    const now = Date.now();
+    await ctx.db.patch("sim_games", args.gameId, {
+      cleanupQueuedAt: now,
+      finalizationState: "pending_cleanup",
+    });
+    await ctx.scheduler.runAfter(0, internal.admin.internal.continueWipeGame, {
+      gameId: args.gameId,
+      phaseIndex: 0,
+    });
+
+    return {
+      finalized: finalization.finalized,
+      finishReason: finalization.finishReason,
+      requeuedCleanup: true,
+    };
+  },
+});
+
 export const createUser = mutation({
   args: {
     name: v.optional(v.union(v.string(), v.null())),

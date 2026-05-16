@@ -17,9 +17,12 @@ export function DatabaseScreen() {
     gameId: activeGame?._id,
   });
   const runLegacyGameCleanupBatch = useMutation(api.admin.mutations.runLegacyGameCleanupBatch);
+  const retireGameForCleanup = useMutation(api.admin.mutations.retireGameForCleanup);
 
   const [cleanupBusy, setCleanupBusy] = useState<"official" | "discarded" | null>(null);
   const [cleanupResult, setCleanupResult] = useState<string | null>(null);
+  const [retireBusyGameId, setRetireBusyGameId] = useState<string | null>(null);
+  const [retireResult, setRetireResult] = useState<string | null>(null);
 
   async function runCleanup(defaultRetentionClass: "official" | "discarded") {
     setCleanupBusy(defaultRetentionClass);
@@ -37,6 +40,26 @@ export function DatabaseScreen() {
       setCleanupResult(message.replace(/^[\s\S]*?Error:\s*/g, "").trim());
     } finally {
       setCleanupBusy(null);
+    }
+  }
+
+  async function onRetireGame(gameId: string) {
+    setRetireBusyGameId(gameId);
+    setRetireResult(null);
+    try {
+      const result = await retireGameForCleanup({ gameId: gameId as (typeof games)[number]["_id"] });
+      setRetireResult(
+        result.requeuedCleanup
+          ? "Game queued for durable finalization and cleanup."
+          : result.finalized
+            ? "Game finalized. Cleanup will follow if needed."
+            : "Game was checked but did not require immediate finalization.",
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setRetireResult(message.replace(/^[\s\S]*?Error:\s*/g, "").trim());
+    } finally {
+      setRetireBusyGameId(null);
     }
   }
 
@@ -168,6 +191,9 @@ export function DatabaseScreen() {
         {cleanupResult !== null ? (
           <p className="mt-3 text-sm text-st-muted">{cleanupResult}</p>
         ) : null}
+        {retireResult !== null ? (
+          <p className="mt-2 text-sm text-st-muted">{retireResult}</p>
+        ) : null}
       </Card>
 
       <Card>
@@ -178,6 +204,7 @@ export function DatabaseScreen() {
             </h2>
             <p className="mt-1 text-sm text-st-muted">
               Recent finished or inactive games that still look eligible for result writing or cleanup.
+              Retire & compact preserves a durable final summary, then queues the live game state for removal.
             </p>
           </div>
           <div className="rounded-md border border-st-border bg-st-bg px-3 py-2 text-xs text-st-muted">
@@ -211,14 +238,22 @@ export function DatabaseScreen() {
                     /game/{getGameRouteKey(game)}
                   </a>
                 </div>
-                <Button
-                  type="button"
-                  variant="secondary"
-                  className="shrink-0"
-                  onClick={() => setSelectedGameId(game.gameId)}
-                >
-                  Focus game
-                </Button>
+                <div className="flex shrink-0 flex-wrap gap-2">
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    onClick={() => setSelectedGameId(game.gameId)}
+                  >
+                    Focus game
+                  </Button>
+                  <Button
+                    type="button"
+                    disabled={retireBusyGameId !== null}
+                    onClick={() => void onRetireGame(game.gameId)}
+                  >
+                    {retireBusyGameId === game.gameId ? "Retiring…" : "Retire & compact"}
+                  </Button>
+                </div>
               </div>
             ))
           )}
