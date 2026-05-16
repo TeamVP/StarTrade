@@ -56,6 +56,8 @@ const MAX_ENROUTE_FLEETS_SCAN = 768;
 const MAX_IDLE_FLEETS_SCAN = 1024;
 /** Keep only a small rolling window of turn-preparation metadata per running game. */
 const PREPARATION_HISTORY_TURNS_TO_KEEP = 4;
+const PREPARATION_OP_PRUNE_BATCH_SIZE = 256;
+const PREPARATION_ROW_PRUNE_BATCH_SIZE = 64;
 
 async function loadEnRouteFleetsForArrivals(
   ctx: MutationCtx,
@@ -1741,37 +1743,30 @@ async function pruneHistoricalTurnPreparationData(
   ctx: MutationCtx,
   gameId: Id<"sim_games">,
   firstRetainedTurn: number,
-): Promise<void> {
-  while (true) {
-    const stalePreparations = await ctx.db
-      .query("sim_turn_preparations")
-      .withIndex("by_gameId_and_turnNumber", (q) =>
-        q.eq("gameId", gameId).lt("turnNumber", firstRetainedTurn),
-      )
-      .take(64);
-    if (stalePreparations.length === 0) {
-      break;
-    }
-    for (const preparation of stalePreparations) {
-      await deletePreparationOperations(ctx, preparation._id);
-      await ctx.db.delete("sim_turn_preparations", preparation._id);
-    }
+): Promise<boolean> {
+  const staleOps = await ctx.db
+    .query("sim_turn_preparation_ops")
+    .withIndex("by_gameId_and_turnNumber", (q) =>
+      q.eq("gameId", gameId).lt("turnNumber", firstRetainedTurn),
+    )
+    .take(PREPARATION_OP_PRUNE_BATCH_SIZE);
+  for (const row of staleOps) {
+    await ctx.db.delete("sim_turn_preparation_ops", row._id);
+  }
+  if (staleOps.length === PREPARATION_OP_PRUNE_BATCH_SIZE) {
+    return true;
   }
 
-  while (true) {
-    const strayOps = await ctx.db
-      .query("sim_turn_preparation_ops")
-      .withIndex("by_gameId_and_turnNumber", (q) =>
-        q.eq("gameId", gameId).lt("turnNumber", firstRetainedTurn),
-      )
-      .take(256);
-    if (strayOps.length === 0) {
-      break;
-    }
-    for (const row of strayOps) {
-      await ctx.db.delete("sim_turn_preparation_ops", row._id);
-    }
+  const stalePreparations = await ctx.db
+    .query("sim_turn_preparations")
+    .withIndex("by_gameId_and_turnNumber", (q) =>
+      q.eq("gameId", gameId).lt("turnNumber", firstRetainedTurn),
+    )
+    .take(PREPARATION_ROW_PRUNE_BATCH_SIZE);
+  for (const preparation of stalePreparations) {
+    await ctx.db.delete("sim_turn_preparations", preparation._id);
   }
+  return stalePreparations.length === PREPARATION_ROW_PRUNE_BATCH_SIZE;
 }
 
 async function upsertTurnPreparationRow(
@@ -2012,11 +2007,28 @@ export const postCommitMaintenance = internalMutation({
     nextTurn: v.number(),
   },
   handler: async (ctx, args): Promise<void> => {
-    await pruneHistoricalTurnPreparationData(
+    const hasMoreHistoricalPreparationData = await pruneHistoricalTurnPreparationData(
       ctx,
       args.gameId,
       Math.max(1, args.nextTurn - PREPARATION_HISTORY_TURNS_TO_KEEP + 1),
     );
+    if (hasMoreHistoricalPreparationData) {
+      await ctx.scheduler.runAfter(0, internal.sim.internal.postCommitMaintenance, {
+        gameId: args.gameId,
+        nextTurn: args.nextTurn,
+      });
+    }
+    await ctx.scheduler.runAfter(0, internal.sim.internal.postCommitFinalizationCheck, {
+      gameId: args.gameId,
+    });
+  },
+});
+
+export const postCommitFinalizationCheck = internalMutation({
+  args: {
+    gameId: v.id("sim_games"),
+  },
+  handler: async (ctx, args): Promise<void> => {
     await evaluateGameFinalization(ctx, { gameId: args.gameId });
   },
 });
