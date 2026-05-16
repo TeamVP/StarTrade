@@ -2370,142 +2370,150 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
             </div>
           </div>
         ) : null}
-        <div className="flex items-center gap-1">
-          <Button
-            variant="secondary"
-            className={cn(mapControlBtnClass, "hidden sm:inline-flex")}
-            title={soundscapeEnabled ? "Disable event bell soundscape" : "Enable event bell soundscape"}
-            aria-label={soundscapeEnabled ? "Disable event bell soundscape" : "Enable event bell soundscape"}
-            type="button"
-            onClick={() => {
-              if (soundscapeEnabled || soundscapeStatus === "starting") {
-                disableSoundscape();
-                return;
-              }
-              void enableSoundscape();
-            }}
-          >
-            {soundscapeEnabled ? <Volume2 className="size-4" aria-hidden /> : <VolumeX className="size-4" aria-hidden />}
-          </Button>
-          <Button
-            variant="secondary"
-            className={cn(mapControlBtnClass, "hidden sm:inline-flex")}
-            title="Zoom out"
-            aria-label="Zoom out"
-            type="button"
-            onClick={() => zoomFromCenter(1 / MAP_BUTTON_ZOOM_FACTOR)}
-          >
-            <Minus className="size-4" aria-hidden />
-          </Button>
-          {selectedSystem !== null ? (
-            <Button
-              variant="secondary"
-              className={cn(
-                mapControlBtnClass,
-                "hidden sm:inline-flex",
-                selectedSystemIsPriorityStar
-                  ? "border-amber-400/80 bg-amber-500/20 text-amber-100 hover:border-amber-300"
-                  : "text-amber-300 hover:text-amber-200",
-              )}
-              title={
-                canMarkPriorityStars
-                  ? selectedSystemIsPriorityStar
-                    ? "Unmark selected star as a Priority star"
-                    : "Mark selected star as a Priority star"
-                  : (priorityStarDisabledReason ?? "Priority stars are unavailable right now")
-              }
-              aria-label={
-                selectedSystemIsPriorityStar
-                  ? "Unmark selected star as a Priority star"
-                  : "Mark selected star as a Priority star"
-              }
-              aria-pressed={selectedSystemIsPriorityStar}
-              type="button"
-              disabled={!canMarkPriorityStars}
-              onClick={() => {
-                void togglePriorityStar(
-                  selectedSystem._id,
-                  !selectedSystemIsPriorityStar,
-                );
-              }}
-            >
-              <Star
-                className={selectedSystemIsPriorityStar ? "size-4 fill-current" : "size-4"}
-                aria-hidden
-              />
-            </Button>
-          ) : null}
-          <Button
-            variant="secondary"
-            className={cn(mapControlBtnClass, "hidden sm:inline-flex")}
-            title="Zoom in"
-            aria-label="Zoom in"
-            type="button"
-            onClick={() => zoomFromCenter(MAP_BUTTON_ZOOM_FACTOR)}
-          >
-            <Plus className="size-4" aria-hidden />
-          </Button>
-          {canMapPauseOrResume ? (
-            <Button
-              variant="secondary"
-              className={cn(mapCompactControlBtnClass, "relative hidden overflow-hidden sm:inline-flex")}
-              title={
-                mapPauseBusy
-                  ? "Updating game pause state"
-                  : activeGame?.status === "paused"
-                    ? "Play game"
-                    : "Pause game"
-              }
-              aria-label={activeGame?.status === "paused" ? "Play game" : "Pause game"}
-              type="button"
-              disabled={mapPauseBusy}
-              onClick={() => {
-                void handleMapPauseToggle();
-              }}
-            >
-              {mapTurnElapsedFrac !== null ? (
-                <span
-                  aria-hidden
-                  className="pointer-events-none absolute inset-y-0 right-0 st-turn-countdown-bg"
-                  style={{
-                    width: `${Math.round((1 - mapTurnElapsedFrac) * 100)}%`,
-                    transition: "width 0.25s linear",
-                    opacity: 0.72,
-                    animationPlayState: activeGame?.status === "paused" ? "paused" : "running",
+        <div className="hidden w-full items-center justify-between gap-4 sm:flex">
+          <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2">
+              {canMapPauseOrResume ? (
+                <Button
+                  variant="secondary"
+                  className={cn(mapCompactControlBtnClass, "relative hidden overflow-hidden sm:inline-flex")}
+                  title={
+                    mapPauseBusy
+                      ? "Updating game pause state"
+                      : activeGame?.status === "paused"
+                        ? "Play game"
+                        : "Pause game"
+                  }
+                  aria-label={activeGame?.status === "paused" ? "Play game" : "Pause game"}
+                  type="button"
+                  disabled={mapPauseBusy}
+                  onClick={() => {
+                    void handleMapPauseToggle();
                   }}
-                />
+                >
+                  {mapTurnElapsedFrac !== null ? (
+                    <span
+                      aria-hidden
+                      className="pointer-events-none absolute inset-y-0 right-0 st-turn-countdown-bg"
+                      style={{
+                        width: `${Math.round((1 - mapTurnElapsedFrac) * 100)}%`,
+                        transition: "width 0.25s linear",
+                        opacity: 0.72,
+                        animationPlayState: activeGame?.status === "paused" ? "paused" : "running",
+                      }}
+                    />
+                  ) : null}
+                  <span className="relative z-10 inline-flex items-center justify-center">
+                    {activeGame?.status === "paused" ? (
+                      <Play className="size-3.5 sm:size-4" aria-hidden />
+                    ) : (
+                      <Pause className="size-3.5 sm:size-4" aria-hidden />
+                    )}
+                  </span>
+                </Button>
               ) : null}
-              <span className="relative z-10 inline-flex items-center justify-center">
-                {activeGame?.status === "paused" ? (
-                  <Play className="size-3.5 sm:size-4" aria-hidden />
-                ) : (
-                  <Pause className="size-3.5 sm:size-4" aria-hidden />
-                )}
-              </span>
+              {selectedSystem !== null ? (
+                <Button
+                  variant="secondary"
+                  className={cn(
+                    mapControlBtnClass,
+                    "hidden sm:inline-flex",
+                    selectedSystemIsPriorityStar
+                      ? "border-amber-400/80 bg-amber-500/20 text-amber-100 hover:border-amber-300"
+                      : "text-amber-300 hover:text-amber-200",
+                  )}
+                  title={
+                    canMarkPriorityStars
+                      ? selectedSystemIsPriorityStar
+                        ? "Unmark selected star as a Priority star"
+                        : "Mark selected star as a Priority star"
+                      : (priorityStarDisabledReason ?? "Priority stars are unavailable right now")
+                  }
+                  aria-label={
+                    selectedSystemIsPriorityStar
+                      ? "Unmark selected star as a Priority star"
+                      : "Mark selected star as a Priority star"
+                  }
+                  aria-pressed={selectedSystemIsPriorityStar}
+                  type="button"
+                  disabled={!canMarkPriorityStars}
+                  onClick={() => {
+                    void togglePriorityStar(
+                      selectedSystem._id,
+                      !selectedSystemIsPriorityStar,
+                    );
+                  }}
+                >
+                  <Star
+                    className={selectedSystemIsPriorityStar ? "size-4 fill-current" : "size-4"}
+                    aria-hidden
+                  />
+                </Button>
+              ) : null}
+              <Button
+                variant="secondary"
+                className={cn(mapControlBtnClass, "hidden sm:inline-flex")}
+                title="Clear standing orders and rebuild from the selected strategy on the next planning pass"
+                aria-label="Rerun standing orders from selected strategy"
+                type="button"
+                onClick={() => {
+                  void queueMyEmpireStandingOrdersRefresh({ gameId: activeGame._id });
+                }}
+              >
+                <Repeat2 className="size-4" aria-hidden />
+              </Button>
+            </div>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="secondary"
+                className={cn(mapControlBtnClass, "hidden sm:inline-flex")}
+                title={soundscapeEnabled ? "Disable event bell soundscape" : "Enable event bell soundscape"}
+                aria-label={soundscapeEnabled ? "Disable event bell soundscape" : "Enable event bell soundscape"}
+                type="button"
+                onClick={() => {
+                  if (soundscapeEnabled || soundscapeStatus === "starting") {
+                    disableSoundscape();
+                    return;
+                  }
+                  void enableSoundscape();
+                }}
+              >
+                {soundscapeEnabled ? <Volume2 className="size-4" aria-hidden /> : <VolumeX className="size-4" aria-hidden />}
+              </Button>
+            </div>
+          </div>
+          <div className="flex items-center justify-end gap-2">
+            <Button
+              variant="secondary"
+              className={cn(mapControlBtnClass, "hidden sm:inline-flex")}
+              title="Zoom out"
+              aria-label="Zoom out"
+              type="button"
+              onClick={() => zoomFromCenter(1 / MAP_BUTTON_ZOOM_FACTOR)}
+            >
+              <Minus className="size-4" aria-hidden />
             </Button>
-          ) : null}
-          <Button
-            variant="secondary"
-            className={cn(mapControlBtnClass, "hidden sm:inline-flex")}
-            title={nextFitAxis === "h" ? "Fit galaxy width" : "Fit galaxy height"}
-            aria-label={nextFitAxis === "h" ? "Fit galaxy width" : "Fit galaxy height"}
-            type="button"
-            onClick={resetMapView}
-          >
-            <Expand className="size-4" aria-hidden />
-          </Button>
-          <Button
-            variant="secondary"
-            className={cn(mapControlBtnClass, "hidden sm:inline-flex")}
-            title="Clear standing orders and rebuild from the selected strategy on the next planning pass"
-            aria-label="Rerun standing orders from selected strategy"
-            type="button"
-            onClick={() => {
-              void queueMyEmpireStandingOrdersRefresh({ gameId: activeGame._id });
-            }}
-          >
-            <Repeat2 className="size-4" aria-hidden />
-          </Button>
+            <Button
+              variant="secondary"
+              className={cn(mapControlBtnClass, "hidden sm:inline-flex")}
+              title="Zoom in"
+              aria-label="Zoom in"
+              type="button"
+              onClick={() => zoomFromCenter(MAP_BUTTON_ZOOM_FACTOR)}
+            >
+              <Plus className="size-4" aria-hidden />
+            </Button>
+            <Button
+              variant="secondary"
+              className={cn(mapControlBtnClass, "hidden sm:inline-flex")}
+              title={nextFitAxis === "h" ? "Fit galaxy width" : "Fit galaxy height"}
+              aria-label={nextFitAxis === "h" ? "Fit galaxy width" : "Fit galaxy height"}
+              type="button"
+              onClick={resetMapView}
+            >
+              <Expand className="size-4" aria-hidden />
+            </Button>
+          </div>
         </div>
         {!playerHomeMapLayout ? mapSoundStatusMessage : null}
       </div>
@@ -3615,6 +3623,7 @@ function StarSystemPanel({
               type="button"
               variant="secondary"
               aria-pressed={isPriorityStar}
+              aria-label={isPriorityStar ? "Unmark star" : "Mark star as priority"}
               className={`inline-flex h-7 items-center gap-1.5 px-2 text-[11px] ${
                 isPriorityStar
                   ? "border-cyan-400/70 bg-cyan-950/40 text-cyan-100 hover:border-cyan-300"
@@ -3624,7 +3633,9 @@ function StarSystemPanel({
               onClick={() => void onPriorityStarToggle(!isPriorityStar)}
               title={
                 canMarkPriorityStar
-                  ? "Mark this star as a strategic Priority star for the selected empire"
+                  ? isPriorityStar
+                    ? "Unmark this star. Click S on keyboard"
+                    : "Mark this star as priority. Click S on keyboard"
                   : (priorityDisabledReason ?? "Priority stars are unavailable right now")
               }
             >
@@ -3632,7 +3643,7 @@ function StarSystemPanel({
                 className={isPriorityStar ? "size-3 fill-current" : "size-3"}
                 aria-hidden
               />
-              {isPriorityStar ? "Unmark Priority star" : "Mark Priority star"}
+              {isPriorityStar ? "Unmark star" : "Mark star as priority"}
             </Button>
             {priorityMutationError !== null ? (
               <p className="mt-1 text-[10px] text-red-400">{priorityMutationError}</p>
