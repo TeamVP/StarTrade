@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { useQuery } from "convex/react";
 import { Link, Navigate, useParams } from "react-router-dom";
 import { PlayerGameLayout } from "@/app/router/PlayerGameLayout";
@@ -14,6 +15,7 @@ function formatFinishReason(reason: string): string {
 
 export function GameRoutePage() {
   const { gameId } = useParams();
+  const [hasSeenLiveGame, setHasSeenLiveGame] = useState(false);
 
   if (gameId === undefined || gameId.length === 0) {
     return <Navigate to="/lobby" replace />;
@@ -26,6 +28,12 @@ export function GameRoutePage() {
       ? { gameId: resolvedGame.gameId }
       : "skip",
   );
+
+  useEffect(() => {
+    if (resolvedGame !== null && resolvedGame !== undefined && resolvedGame.status !== "finished") {
+      setHasSeenLiveGame(true);
+    }
+  }, [resolvedGame]);
 
   if (resolvedGame === undefined) {
     return null;
@@ -40,7 +48,7 @@ export function GameRoutePage() {
     return <Navigate to={`/game/${canonicalRouteKey}`} replace />;
   }
 
-  if (resolvedGame.status === "finished") {
+  if (resolvedGame.status === "finished" && !hasSeenLiveGame) {
     const finishReason = durableResult?.gameResult.finishReason ?? null;
     const endedAt = durableResult?.gameResult.endedAt ?? resolvedGame.endedAt ?? null;
     const winner = durableResult?.placements.find((row) => row.isWinner) ?? null;
