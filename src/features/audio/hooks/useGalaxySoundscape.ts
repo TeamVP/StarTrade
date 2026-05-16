@@ -47,8 +47,9 @@ export function useGalaxySoundscape(params: {
   recentEvents: SoundscapeEventRow[];
   systemsById: Readonly<Record<string, SoundscapeSystemPosition>>;
   ownership?: SoundscapeOwnershipContext;
+  listenerEmpireId?: string | null;
 }) {
-  const { activeGameId, camera, recentEvents, systemsById, ownership } = params;
+  const { activeGameId, camera, recentEvents, systemsById, ownership, listenerEmpireId } = params;
   const [enabled, setEnabled] = useState<boolean>(() => readStoredEnabled());
   const [status, setStatus] = useState<SoundscapeStatus>(enabled ? "starting" : "off");
   const [error, setError] = useState<string | null>(null);
@@ -149,12 +150,13 @@ export function useGalaxySoundscape(params: {
         camera,
         systemsById,
         ownership,
+        listenerEmpireId,
       });
       if (intent !== null) {
         engine.playBell(intent);
       }
     }
-  }, [enabled, camera, recentEvents, systemsById, ownership]);
+  }, [enabled, camera, recentEvents, systemsById, ownership, listenerEmpireId]);
 
   return {
     soundscapeEnabled: enabled && status === "ready",

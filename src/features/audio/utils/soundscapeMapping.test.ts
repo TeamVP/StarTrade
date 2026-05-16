@@ -4,6 +4,7 @@ import {
   computeListeningRadius,
   computeSpatialMix,
   deriveEmpireBellProfile,
+  selectSoundscapeSampleKey,
   selectBellNote,
   toSoundscapeBellIntent,
   type SoundscapeCameraSnapshot,
@@ -71,6 +72,7 @@ describe("soundscapeMapping", () => {
 
     expect(intent).not.toBeNull();
     expect(intent?.actionType).toBe("attack");
+    expect(intent?.sampleKey).toBe("enemy_attack");
     expect(intent?.systemId).toBe("sys-a");
     expect(intent?.ownerEmpireId).toBe("emp-aurora");
     expect(intent?.fleetSize).toBe(24);
@@ -114,6 +116,44 @@ describe("soundscapeMapping", () => {
 
     expect(intent?.actionType).toBe("exploration");
     expect(intent?.ownerEmpireId).toBe("emp-scout");
+  });
+
+  test("selects player sample banks for the current empire and enemy banks otherwise", () => {
+    expect(
+      selectSoundscapeSampleKey({
+        actionType: "attack",
+        ownerEmpireId: "emp-aurora",
+        listenerEmpireId: "emp-aurora",
+      }),
+    ).toBe("player_attack");
+    expect(
+      selectSoundscapeSampleKey({
+        actionType: "attack",
+        ownerEmpireId: "emp-nebula",
+        listenerEmpireId: "emp-aurora",
+      }),
+    ).toBe("enemy_attack");
+
+    const intent = toSoundscapeBellIntent({
+      event: {
+        _id: "evt-4",
+        eventType: "system_held",
+        payload: JSON.stringify({
+          systemId: "sys-a",
+          defenderEmpireId: "emp-aurora",
+          defenderShips: 18,
+        }),
+        turnNumber: 10,
+      },
+      camera,
+      systemsById: {
+        "sys-a": { x: 110, y: 100 },
+      },
+      listenerEmpireId: "emp-aurora",
+    });
+
+    expect(intent?.sampleKey).toBe("player_defense");
+    expect(intent?.isListenerOwnedEvent).toBe(true);
   });
 
   test("drops events that cannot be located on the map", () => {

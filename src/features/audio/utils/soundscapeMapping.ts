@@ -2,6 +2,14 @@ import type { GalaxyMapCamera } from "@/features/galaxy/utils/mapCamera";
 
 export type SoundscapeActionType = "attack" | "defense" | "exploration";
 
+export type SoundscapeSampleKey =
+  | "player_attack"
+  | "player_defense"
+  | "player_exploration"
+  | "enemy_attack"
+  | "enemy_defense"
+  | "enemy_exploration";
+
 export type SoundscapeEventRow = {
   _id: string;
   eventType: string;
@@ -25,9 +33,11 @@ export type SoundscapeSystemPosition = {
 export type SoundscapeBellIntent = {
   eventId: string;
   actionType: SoundscapeActionType;
-  sampleKey: SoundscapeActionType;
+  sampleKey: SoundscapeSampleKey;
   systemId: string;
   ownerEmpireId: string | null;
+  listenerEmpireId: string | null;
+  isListenerOwnedEvent: boolean;
   ownerVariant: number;
   noteOffsetSemitones: number;
   ownerDetuneCents: number;
@@ -51,6 +61,19 @@ export type SoundscapeOwnershipContext = {
   colonyShipEmpireById?: Readonly<Record<string, string | null>>;
   systemOwnerById?: Readonly<Record<string, string | null>>;
 };
+
+export function selectSoundscapeSampleKey(params: {
+  actionType: SoundscapeActionType;
+  ownerEmpireId: string | null;
+  listenerEmpireId?: string | null;
+}): SoundscapeSampleKey {
+  const { actionType, ownerEmpireId, listenerEmpireId = null } = params;
+  const prefix =
+    ownerEmpireId !== null && listenerEmpireId !== null && ownerEmpireId === listenerEmpireId
+      ? "player"
+      : "enemy";
+  return `${prefix}_${actionType}` as SoundscapeSampleKey;
+}
 
 const ATTACK_EVENT_TYPES = new Set([
   "battle_started",
@@ -326,6 +349,7 @@ export function toSoundscapeBellIntent(params: {
   camera: SoundscapeCameraSnapshot;
   systemsById: Readonly<Record<string, SoundscapeSystemPosition>>;
   ownership?: SoundscapeOwnershipContext;
+  listenerEmpireId?: string | null;
 }): SoundscapeBellIntent | null {
   const actionType = classifySoundscapeActionType(params.event.eventType);
   if (actionType === null) {
@@ -352,14 +376,19 @@ export function toSoundscapeBellIntent(params: {
     payload,
     ownership: params.ownership,
   });
+  const listenerEmpireId = params.listenerEmpireId ?? null;
+  const isListenerOwnedEvent =
+    ownerEmpireId !== null && listenerEmpireId !== null && ownerEmpireId === listenerEmpireId;
   const ownerProfile = deriveEmpireBellProfile(ownerEmpireId);
 
   return {
     eventId: params.event._id,
     actionType,
-    sampleKey: actionType,
+    sampleKey: selectSoundscapeSampleKey({ actionType, ownerEmpireId, listenerEmpireId }),
     systemId,
     ownerEmpireId,
+    listenerEmpireId,
+    isListenerOwnedEvent,
     ownerVariant: ownerProfile.ownerVariant,
     noteOffsetSemitones: ownerProfile.noteOffsetSemitones,
     ownerDetuneCents: ownerProfile.ownerDetuneCents,

@@ -1050,6 +1050,7 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
       colonyShipEmpireById: soundscapeColonyShipEmpireById,
       systemOwnerById: soundscapeSystemOwnerById,
     },
+    listenerEmpireId: myEmpireId,
   });
 
   const focusEmpireHomeworld = useCallback(
