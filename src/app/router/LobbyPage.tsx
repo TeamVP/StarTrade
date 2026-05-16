@@ -50,6 +50,10 @@ function formatStatus(status: string): string {
   return status.charAt(0).toUpperCase() + status.slice(1);
 }
 
+function isActivationKey(key: string): boolean {
+  return key === "Enter" || key === " ";
+}
+
 function cardAccentClass(
   status: string | undefined,
   isFinishedWin: boolean,
@@ -155,7 +159,7 @@ export function LobbyPage() {
     if (entry.game.status === "lobby") {
       return "Start";
     }
-    return "Play";
+    return "Continue";
   }
 
   return (
@@ -218,6 +222,9 @@ export function LobbyPage() {
                 const game = entry.game;
                 const result = entry.result;
                 const isSelected = game !== null && selectedGameId === game._id;
+                const isBusy =
+                  busyScenarioKey === entry.key || resignBusyScenarioKey === entry.key;
+                const isCardClickable = entry.unlocked && game !== null && !isBusy;
                 const isFinishedWin =
                   game?.status === "finished" && result?.auroraWasWinner === true;
                 const isFinishedLoss =
@@ -230,13 +237,30 @@ export function LobbyPage() {
                 return (
                   <div
                     key={entry.key}
+                    role={isCardClickable ? "button" : undefined}
+                    tabIndex={isCardClickable ? 0 : undefined}
+                    aria-disabled={isCardClickable ? undefined : true}
                     className={cn(
                       "relative overflow-hidden rounded-xl border bg-st-panel transition-colors",
                       isSelected
                         ? "border-st-accent"
                         : "border-st-border hover:border-cyan-500/30",
+                      isCardClickable && "cursor-pointer focus:outline-none focus:ring-2 focus:ring-cyan-500/40",
                       !entry.unlocked && "opacity-60",
                     )}
+                    onClick={() => {
+                      if (!isCardClickable) {
+                        return;
+                      }
+                      void onScenarioAction(entry);
+                    }}
+                    onKeyDown={(event) => {
+                      if (!isCardClickable || !isActivationKey(event.key)) {
+                        return;
+                      }
+                      event.preventDefault();
+                      void onScenarioAction(entry);
+                    }}
                   >
                     {/* Left status stripe */}
                     <div
@@ -334,6 +358,9 @@ export function LobbyPage() {
                           <Link
                             to={getGamePath(game)}
                             className="mt-1.5 inline-block text-xs text-cyan-400/60 hover:text-cyan-300"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                            }}
                           >
                             /game/{getGameRouteKey(game)}
                           </Link>
@@ -389,7 +416,7 @@ export function LobbyPage() {
                       </div>
 
                       {/* ─ Action column ─ */}
-                      <div className="flex shrink-0 items-center gap-2 sm:flex-col sm:items-end">
+                      <div className="flex shrink-0 items-center gap-2">
                         {game !== null &&
                         entry.isActiveMember &&
                         game.status === "running" ? (
@@ -405,7 +432,8 @@ export function LobbyPage() {
                               busyScenarioKey === entry.key ||
                               resignBusyScenarioKey === entry.key
                             }
-                            onClick={() => {
+                            onClick={(event) => {
+                              event.stopPropagation();
                               void onScenarioResign(entry);
                             }}
                           >
@@ -426,7 +454,8 @@ export function LobbyPage() {
                             busyScenarioKey === entry.key ||
                             resignBusyScenarioKey === entry.key
                           }
-                          onClick={() => {
+                          onClick={(event) => {
+                            event.stopPropagation();
                             void onScenarioAction(entry);
                           }}
                         >
