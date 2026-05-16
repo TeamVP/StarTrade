@@ -9,9 +9,10 @@ import {
   type ReactNode,
 } from "react";
 import { useMutation, useQuery } from "convex/react";
-import { Expand, Info, Minus, Plus, Repeat2, Star } from "lucide-react";
+import { Expand, Info, Minus, Plus, Repeat2, Star, Volume2, VolumeX } from "lucide-react";
 import { api } from "../../../../convex/_generated/api";
 import type { Id } from "../../../../convex/_generated/dataModel";
+import { useGalaxySoundscape } from "@/features/audio/hooks/useGalaxySoundscape";
 import { formatPopulationPeople } from "@/lib/populationFormat";
 import { normalizeFleetDetachmentDisplayName } from "@/lib/fleetDisplayName";
 import { Button } from "@/components/ui/button";
@@ -311,6 +312,14 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
   const previousTurnCombatEvents = useMemo(
     () => previousTurnCombatEventsQuery ?? [],
     [previousTurnCombatEventsQuery],
+  );
+  const recentSoundscapeEventsQuery = useQuery(
+    api.sim.queries.listRecentEvents,
+    activeGame ? { gameId: activeGame._id, limit: 24 } : "skip",
+  );
+  const recentSoundscapeEvents = useMemo(
+    () => recentSoundscapeEventsQuery ?? [],
+    [recentSoundscapeEventsQuery],
   );
 
   const turnTimelineQuery = useQuery(
@@ -1005,6 +1014,43 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
   }, [systems, empireColors, priorityStarIds]);
 
   const stageNodes = useMemo<GalaxyNode[]>(() => Object.values(nodeMap), [nodeMap]);
+  const soundscapeSystemsById = useMemo(
+    () => Object.fromEntries(systems.map((system) => [system._id, { x: system.x, y: system.y }])),
+    [systems],
+  );
+  const soundscapeFleetEmpireById = useMemo(
+    () => Object.fromEntries(fleets.map((fleet) => [fleet._id, fleet.empireId])),
+    [fleets],
+  );
+  const soundscapeColonyShipEmpireById = useMemo(
+    () => Object.fromEntries(colonyShips.map((ship) => [ship._id, ship.empireId])),
+    [colonyShips],
+  );
+  const soundscapeSystemOwnerById = useMemo(
+    () => Object.fromEntries(systems.map((system) => [system._id, system.ownerEmpireId])),
+    [systems],
+  );
+  const {
+    soundscapeEnabled,
+    soundscapeStatus,
+    soundscapeError,
+    enableSoundscape,
+    disableSoundscape,
+  } = useGalaxySoundscape({
+    activeGameId,
+    camera: {
+      ...camera,
+      viewWidth: viewSize.width,
+      viewHeight: viewSize.height,
+    },
+    recentEvents: recentSoundscapeEvents,
+    systemsById: soundscapeSystemsById,
+    ownership: {
+      fleetEmpireById: soundscapeFleetEmpireById,
+      colonyShipEmpireById: soundscapeColonyShipEmpireById,
+      systemOwnerById: soundscapeSystemOwnerById,
+    },
+  });
 
   const focusEmpireHomeworld = useCallback(
     (empireId: Id<"emp_states">) => {
@@ -1936,6 +1982,22 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
         <Button
           variant="secondary"
           className={mapControlBtnClass}
+          title={soundscapeEnabled ? "Disable event bell soundscape" : "Enable event bell soundscape"}
+          aria-label={soundscapeEnabled ? "Disable event bell soundscape" : "Enable event bell soundscape"}
+          type="button"
+          onClick={() => {
+            if (soundscapeEnabled || soundscapeStatus === "starting") {
+              disableSoundscape();
+              return;
+            }
+            void enableSoundscape();
+          }}
+        >
+          {soundscapeEnabled ? <Volume2 className="size-4" aria-hidden /> : <VolumeX className="size-4" aria-hidden />}
+        </Button>
+        <Button
+          variant="secondary"
+          className={mapControlBtnClass}
           title="Zoom out"
           aria-label="Zoom out"
           type="button"
@@ -1963,6 +2025,15 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
         >
           <Expand className="size-4" aria-hidden />
         </Button>
+        {soundscapeError !== null ? (
+          <div className="pointer-events-auto max-w-44 rounded-md border border-red-500/40 bg-st-panel/95 px-2 py-1 text-[11px] text-red-200 shadow-lg">
+            {soundscapeError}
+          </div>
+        ) : soundscapeStatus === "starting" ? (
+          <div className="pointer-events-none rounded-md border border-st-border/70 bg-st-panel/90 px-2 py-1 text-[11px] text-st-muted shadow-lg">
+            Starting sound…
+          </div>
+        ) : null}
       </div>
     ) : null;
 
