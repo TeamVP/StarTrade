@@ -14,11 +14,9 @@ import { usePlayerEmpireId, usePlayerGameMembership } from "@/features/player/Pl
 function VictoryModal({
   empireName,
   missionKey,
-  onDismiss,
 }: {
   empireName: string | null;
   missionKey: string | null;
-  onDismiss: () => void;
 }) {
   const navigate = useNavigate();
   const resetMyStarterGame = useMutation(api.usr.mutations.resetMyStarterGame);
@@ -290,7 +288,7 @@ export function GameEndModal() {
   const empireName = membership.empireName ?? playerEmpire?.name ?? lastKnownEmpireName;
 
   if (modalKind === "victory")
-    return <VictoryModal empireName={empireName} missionKey={activeMissionKey} onDismiss={handleDismiss} />;
+    return <VictoryModal empireName={empireName} missionKey={activeMissionKey} />;
   if (modalKind === "defeat")
     return <DefeatModal empireName={empireName} isResigned={playerResigned} onDismiss={handleDismiss} />;
   return null;

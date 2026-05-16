@@ -30,7 +30,7 @@ export function PlayerHomePage() {
 
   // Latch the last known empire ID so the map and empire panel stay intact
   // when the game ends and the empire record is cleaned up (game-end modal flow).
-  const [lastKnownEmpireId, setLastKnownEmpireId] = useState<Id<"sim_empires"> | null>(empireId);
+  const [lastKnownEmpireId, setLastKnownEmpireId] = useState<Id<"emp_states"> | null>(empireId);
   useEffect(() => {
     if (empireId !== null) setLastKnownEmpireId(empireId);
   }, [empireId]);
