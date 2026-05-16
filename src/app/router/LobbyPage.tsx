@@ -309,7 +309,7 @@ export function LobbyPage() {
                     </div>
 
                     <div className="flex shrink-0 items-center gap-2">
-                      {game !== null && entry.isActiveMember && game.status !== "finished" ? (
+                      {game !== null && entry.isActiveMember && game.status === "running" ? (
                         <button
                           type="button"
                           className={cn(
