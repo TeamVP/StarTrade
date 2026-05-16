@@ -16,6 +16,7 @@ import { api } from "../../../../convex/_generated/api";
 import type { Id } from "../../../../convex/_generated/dataModel";
 import { useOptionalPlayerTopNavControlSetter } from "@/app/layout/PlayerTopNavControls";
 import { useGalaxySoundscape } from "@/features/audio/hooks/useGalaxySoundscape";
+import { playUiSound } from "@/lib/audio/uiSounds";
 import { getTurnEffectiveNowMs } from "@/lib/time/turnClock";
 import { useTurnClock } from "@/lib/time/useTurnClock";
 import { formatPopulationPeople } from "@/lib/populationFormat";
@@ -788,6 +789,9 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
         };
       });
       setPriorityMutationError(null);
+      if (enabled) {
+        playUiSound("set_priority_star");
+      }
       try {
         await setPriorityStar({
           gameId: activeGame._id,

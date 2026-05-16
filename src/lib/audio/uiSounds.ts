@@ -6,7 +6,8 @@ export type UiSoundKind =
   | "select_trader_ship"
   | "drag_commit_success"
   | "drag_commit_cancel"
-  | "sound_enabled_confirm";
+  | "sound_enabled_confirm"
+  | "set_priority_star";
 
 type UiSoundConfig = {
   cooldownMs: number;
@@ -21,6 +22,7 @@ const SOUND_CONFIG: Record<UiSoundKind, UiSoundConfig> = {
   drag_commit_success: { cooldownMs: 140 },
   drag_commit_cancel: { cooldownMs: 140 },
   sound_enabled_confirm: { cooldownMs: 180 },
+  set_priority_star: { cooldownMs: 400 },
 };
 
 function nowMs(): number {
@@ -32,7 +34,8 @@ class UiAudioEngine {
   private masterGain: GainNode | null = null;
   private lastPlayedAt = new Map<UiSoundKind, number>();
   private hoverOscillator: OscillatorNode | null = null;
-  private hoverModulator: OscillatorNode | null = null;
+  // @ts-ignore
+    private hoverModulator: OscillatorNode | null = null;
   private hoverGain: GainNode | null = null;
   private hoverFilter: BiquadFilterNode | null = null;
   private hoverActive = false;
@@ -210,7 +213,53 @@ class UiAudioEngine {
           filterHz: 3000,
         });
         return;
+      case "set_priority_star":
+        this.playTriumphGesture();
+        return;
     }
+  }
+
+  /**
+   * Triumphal ascending arpeggio: C5 → E5 → G5 → C6, staggered 60 ms apart.
+   * Signals that a meaningful strategic decision has just been committed.
+   */
+  private playTriumphGesture() {
+    const context = this.ensureContext();
+    const output = this.masterGain;
+    if (context === null || output === null) return;
+
+    const notes = [523.25, 659.25, 783.99, 1046.5]; // C5, E5, G5, C6
+    const stepMs = 60;
+
+    notes.forEach((freq, i) => {
+      const isTop = i === notes.length - 1;
+      const delayS = (i * stepMs) / 1000;
+      const now = context.currentTime + delayS;
+      const attackSeconds = 0.006;
+      const decaySeconds = isTop ? 0.9 : 0.55;
+
+      const filter = context.createBiquadFilter();
+      filter.type = "lowpass";
+      filter.frequency.value = isTop ? 4000 : 3200;
+      filter.Q.value = 0.7;
+      filter.connect(output);
+
+      const env = context.createGain();
+      env.gain.setValueAtTime(0.0001, now);
+      env.gain.linearRampToValueAtTime(isTop ? 0.068 : 0.052, now + attackSeconds);
+      env.gain.exponentialRampToValueAtTime(0.0001, now + attackSeconds + decaySeconds);
+      env.connect(filter);
+
+      const osc = context.createOscillator();
+      osc.type = "sine";
+      osc.frequency.value = freq;
+      osc.connect(env);
+      osc.start(now);
+      osc.stop(now + attackSeconds + decaySeconds + 0.05);
+
+      const totalMs = Math.round((delayS + attackSeconds + decaySeconds + 0.1) * 1000);
+      window.setTimeout(() => { env.disconnect(); filter.disconnect(); }, totalMs);
+    });
   }
 
   /** Bright high-register chord with long decay and rapid stereo pan shimmer. */
@@ -273,60 +322,57 @@ class UiAudioEngine {
   setFleetDragHoverActive(active: boolean) {
     const context = this.ensureContext();
     const output = this.masterGain;
-    if (context === null || output === null) {
-      return;
-    }
-    if (active === this.hoverActive) {
-      return;
-    }
+    if (context === null || output === null) return;
+    if (active === this.hoverActive) return;
     this.hoverActive = active;
 
     if (active) {
       if (this.hoverOscillator === null || this.hoverGain === null || this.hoverFilter === null) {
-        const carrier = context.createOscillator();
-        carrier.type = "sawtooth";
-        carrier.frequency.value = 96;
+        // Two slightly-detuned square waves — the beating between them creates
+        // a natural, organic buzz that reads unmistakably as "hovering over target".
+        const oscA = context.createOscillator();
+        oscA.type = "square";
+        oscA.frequency.value = 68;
 
+        const oscB = context.createOscillator();
+        oscB.type = "square";
+        oscB.frequency.value = 72; // ~4 Hz beat creates the buzz
+
+        // Gentle low-pass keeps the buzz warm rather than harsh
         const filter = context.createBiquadFilter();
-        filter.type = "bandpass";
-        filter.frequency.value = 640;
-        filter.Q.value = 6;
+        filter.type = "lowpass";
+        filter.frequency.value = 220;
+        filter.Q.value = 1.2;
 
         const gain = context.createGain();
         gain.gain.value = 0.0001;
 
-        const modulator = context.createOscillator();
-        modulator.type = "sine";
-        modulator.frequency.value = 7.5;
-
-        const modGain = context.createGain();
-        modGain.gain.value = 120;
-
-        carrier.connect(filter);
+        oscA.connect(filter);
+        oscB.connect(filter);
         filter.connect(gain);
         gain.connect(output);
-        modulator.connect(modGain);
-        modGain.connect(filter.frequency);
 
-        carrier.start();
-        modulator.start();
+        oscA.start();
+        oscB.start();
 
-        this.hoverOscillator = carrier;
-        this.hoverModulator = modulator;
+        this.hoverOscillator = oscA;
+        this.hoverModulator = oscB; // reuse field to keep second osc alive
         this.hoverGain = gain;
         this.hoverFilter = filter;
       }
 
-      this.hoverGain.gain.cancelScheduledValues(context.currentTime);
-      this.hoverGain.gain.setValueAtTime(this.hoverGain.gain.value, context.currentTime);
-      this.hoverGain.gain.linearRampToValueAtTime(0.018, context.currentTime + 0.08);
+      const g = this.hoverGain.gain;
+      g.cancelScheduledValues(context.currentTime);
+      g.setValueAtTime(g.value, context.currentTime);
+      g.linearRampToValueAtTime(0.055, context.currentTime + 0.07);
       return;
     }
 
-    if (this.hoverGain !== null && this.hoverModulator !== null) {
-      this.hoverGain.gain.cancelScheduledValues(context.currentTime);
-      this.hoverGain.gain.setValueAtTime(this.hoverGain.gain.value, context.currentTime);
-      this.hoverGain.gain.linearRampToValueAtTime(0.0001, context.currentTime + 0.06);
+    if (this.hoverGain !== null) {
+      const g = this.hoverGain.gain;
+      g.cancelScheduledValues(context.currentTime);
+      g.setValueAtTime(g.value, context.currentTime);
+      g.linearRampToValueAtTime(0.0001, context.currentTime + 0.06);
     }
   }
 }
