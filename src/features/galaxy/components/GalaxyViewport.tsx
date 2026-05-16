@@ -2219,19 +2219,19 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
 
   const mapSoundStatusMessage =
     mapPauseError !== null ? (
-      <div className="max-w-[min(72vw,20rem)] text-right text-[11px] leading-4 text-red-200" aria-live="polite">
+      <div className="max-w-[min(72vw,20rem)] text-left text-[11px] leading-4 text-red-200" aria-live="polite">
         {mapPauseError}
       </div>
     ) : soundscapeError !== null ? (
-      <div className="max-w-[min(72vw,20rem)] text-right text-[11px] leading-4 text-red-200" aria-live="polite">
+      <div className="max-w-[min(72vw,20rem)] text-left text-[11px] leading-4 text-red-200" aria-live="polite">
         {soundscapeError}
       </div>
     ) : soundscapeStatus === "starting" ? (
-      <div className="max-w-[min(72vw,20rem)] text-right text-[11px] leading-4 text-st-muted" aria-live="polite">
+      <div className="max-w-[min(72vw,20rem)] text-left text-[11px] leading-4 text-st-muted" aria-live="polite">
         Starting sound...
       </div>
     ) : soundscapeNotice !== null ? (
-      <div className="max-w-[min(72vw,20rem)] text-right text-[11px] leading-4 text-st-muted" aria-live="polite">
+      <div className="max-w-[min(72vw,20rem)] text-left text-[11px] leading-4 text-st-muted" aria-live="polite">
         {soundscapeNotice}
       </div>
     ) : null;
@@ -2728,12 +2728,12 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
                   </div>
                 ) : null}
                 {playerHomeMapLayout && mapSoundStatusMessage !== null ? (
-                  <div className="pointer-events-none absolute inset-x-3 top-3 flex justify-end sm:inset-x-auto sm:right-3 sm:top-12">
+                  <div className="pointer-events-none absolute bottom-3 left-3 right-3 flex justify-start sm:right-auto">
                     {mapSoundStatusMessage}
                   </div>
                 ) : null}
                 {mapZoomControlButtons !== null ? (
-                  <div className="pointer-events-auto absolute inset-x-3 top-11 sm:top-3 sm:inset-x-auto sm:right-3">
+                  <div className="pointer-events-auto absolute inset-x-3 top-2 sm:inset-x-auto sm:right-3 sm:top-3">
                     {mapZoomControlButtons}
                   </div>
                 ) : null}
