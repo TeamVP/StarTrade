@@ -39,6 +39,8 @@ npm run setup:auth
 
 That runs [`@convex-dev/auth`](https://labs.convex.dev/auth/setup/manual) and sets `JWT_PRIVATE_KEY`, `JWKS`, and `SITE_URL` on the deployment you pick (use the same dev deployment as `npx convex dev`).
 
+For production, set `SITE_URL` to the live frontend origin that users actually sign into, such as your Vercel custom domain. Keep `http://localhost:5173` only for the local dev deployment.
+
 For Google OAuth, also set `AUTH_GOOGLE_ID` and `AUTH_GOOGLE_SECRET` on the same Convex deployment. In Google Cloud, use your Convex HTTP actions URL with `/api/auth/callback/google` as the redirect URI.
 
 For `https://www.starstrat.org/`, register these Google Cloud OAuth values:
@@ -54,9 +56,11 @@ If `predev` already ran `setup.mjs --once` and skipped auth setup, you still nee
 
 ## Production deployment: Convex URL
 
-The frontend needs a Convex client URL at build time. For Vite deployments, set `VITE_CONVEX_URL` in your hosting provider.
+The frontend needs the Convex **Cloud URL** at build time. For Vite deployments, set `VITE_CONVEX_URL` in your hosting provider to the `https://<deployment>.convex.cloud` URL, not the `convex.site` HTTP Actions URL.
 
-If your deployment environment already has `CONVEX_URL`, the Vite config in this repo will also pick that up and inject it into the client build.
+If your deployment environment already has `CONVEX_URL`, the Vite config in this repo will also pick that up and inject it into the client build. That value should also be the Cloud URL.
+
+Use the `https://<deployment>.convex.site` HTTP Actions URL only for auth/site configuration such as `CONVEX_SITE_URL`.
 
 ## Learn more
 
