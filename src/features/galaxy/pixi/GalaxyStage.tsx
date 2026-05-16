@@ -845,7 +845,9 @@ function GalaxyStageInner({
 
     const onPointerUpOrCancel = (event: PointerEvent) => {
       removeTouchPointer(event);
-      if (event.pointerType === "touch") {
+      // Only suppress taps after an actual pinch/multi-touch gesture, not after
+      // every touch-up (which would swallow all mobile single-tap background events).
+      if (event.pointerType === "touch" && pinchSessionRef.current !== null) {
         gestureSuppressTapUntilRef.current = performance.now() + 150;
       }
     };

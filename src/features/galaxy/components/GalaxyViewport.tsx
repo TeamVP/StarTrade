@@ -1368,6 +1368,10 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
    */
   const handleStarTap = useCallback(
     (systemId: string) => {
+      if (systemId === selectedSystemId) {
+        dismissStarPanel();
+        return;
+      }
       setSelectedSystemId(systemId);
       setEmphasisCommitError(null);
       setImportSubsidyError(null);
@@ -1388,7 +1392,7 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
         rotation: cur.rotation,
       });
     },
-    [nodeMap, startCameraTweenTo],
+    [nodeMap, startCameraTweenTo, selectedSystemId, dismissStarPanel],
   );
 
   useEffect(() => {
