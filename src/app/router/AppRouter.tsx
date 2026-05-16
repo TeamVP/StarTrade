@@ -6,14 +6,36 @@ function lazyNamedComponent<TProps>(
   exportName: string,
 ) {
   return lazy(async () => {
-    const module = await loader();
-    const Component = module[exportName];
+    try {
+      const module = await loader();
+      const Component = module[exportName];
 
-    if (!Component) {
-      throw new Error(`Failed to load lazy route component: ${exportName}`);
+      if (!Component) {
+        throw new Error(`Failed to load lazy route component: ${exportName}`);
+      }
+
+      return { default: Component };
+    } catch (error) {
+      // When a new deploy replaces hashed chunks the browser still holds the
+      // old URL and the server returns an HTML 404 instead of JS, producing a
+      // MIME-type / fetch error.  Force a one-shot hard reload so the user
+      // transparently picks up the new bundle instead of seeing a crash.
+      const isChunkError =
+        error instanceof TypeError &&
+        (error.message.includes("Failed to fetch dynamically imported module") ||
+          error.message.includes("Importing a module script failed"));
+      if (isChunkError) {
+        const RELOAD_KEY = `chunk_reload_${exportName}`;
+        if (!sessionStorage.getItem(RELOAD_KEY)) {
+          sessionStorage.setItem(RELOAD_KEY, "1");
+          window.location.reload();
+          // Return a never-resolving promise; the reload will happen before it
+          // would need to settle.
+          return new Promise<never>(() => undefined);
+        }
+      }
+      throw error;
     }
-
-    return { default: Component };
   });
 }
 
