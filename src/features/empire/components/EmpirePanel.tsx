@@ -451,6 +451,28 @@ export function EmpirePanel(props: { focusEmpireId?: Id<"emp_states"> | null }) 
   const [gameActionError, setGameActionError] = useState<string | null>(null);
   const [pauseBusy, setPauseBusy] = useState(false);
   const [pauseError, setPauseError] = useState<string | null>(null);
+  const [barNow, setBarNow] = useState(() => Date.now());
+
+  const turnTimeline = useQuery(
+    api.sim.queries.getTurnTimelineForGame,
+    activeGame ? { gameId: activeGame._id } : "skip",
+  );
+
+  const turnStartedAt = turnTimeline?.turnStartedAt ?? null;
+  const turnDurationMs = turnTimeline?.turnDurationMs ?? null;
+  const isRunning = activeGame?.status === "running";
+
+  useEffect(() => {
+    if (!isRunning || turnStartedAt === null) return;
+    const id = window.setInterval(() => setBarNow(Date.now()), 250);
+    return () => window.clearInterval(id);
+  }, [isRunning, turnStartedAt]);
+
+  // Fraction elapsed in the current turn window [0..1]; drives the countdown wipe.
+  const turnElapsedFrac = useMemo(() => {
+    if (!isRunning || turnStartedAt === null || turnDurationMs === null || turnDurationMs <= 0) return null;
+    return Math.min(1, Math.max(0, (barNow - turnStartedAt) / turnDurationMs));
+  }, [isRunning, barNow, turnStartedAt, turnDurationMs]);
 
   type EmpireRow = (typeof empires)[number];
 
@@ -556,17 +578,31 @@ export function EmpirePanel(props: { focusEmpireId?: Id<"emp_states"> | null }) 
           <Button
             type="button"
             variant="secondary"
-            className="w-full"
+            className="relative w-full overflow-hidden"
             disabled={pauseBusy}
             onClick={() => {
               void onPauseToggle();
             }}
           >
-            {pauseBusy
-              ? "Updating..."
-              : activeGame?.status === "paused"
-                ? "Play game"
-                : "Pause game"}
+            {/* Countdown bar: fills from left, drains right-ward as the turn elapses */}
+            {turnElapsedFrac !== null && activeGame?.status === "running" ? (
+              <span
+                aria-hidden
+                className="pointer-events-none absolute inset-y-0 left-0 st-turn-countdown-bg"
+                style={{
+                  width: `${Math.round((1 - turnElapsedFrac) * 100)}%`,
+                  transition: "width 0.25s linear",
+                  opacity: 0.72,
+                }}
+              />
+            ) : null}
+            <span className="relative z-10">
+              {pauseBusy
+                ? "Updating..."
+                : activeGame?.status === "paused"
+                  ? "Play game"
+                  : "Pause game"}
+            </span>
           </Button>
           {pauseError !== null ? (
             <p className="mt-2 text-xs text-red-300" role="alert">

@@ -20,3 +20,24 @@ body,
   min-height: 100vh;
   font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
 }
+
+/* Mottled shifting nebula gradient used by the pause-button turn countdown bar */
+@keyframes st-turn-sweep {
+  0%   { background-position: 0% 50%; }
+  50%  { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+.st-turn-countdown-bg {
+  background: linear-gradient(
+    135deg,
+    #1e3a8a 0%,
+    #065f46 20%,
+    #4c1d95 40%,
+    #1d4ed8 55%,
+    #065f46 70%,
+    #7c3aed 85%,
+    #1e3a8a 100%
+  );
+  background-size: 300% 300%;
+  animation: st-turn-sweep 6s ease infinite;
+}
