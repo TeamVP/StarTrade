@@ -1,11 +1,7 @@
 import { Link } from "react-router-dom";
 import { Authenticated, Unauthenticated } from "convex/react";
 
-const publicLinks = [
-  { to: "/eplayer1", label: "Empire Player 1" },
-  { to: "/eplayer2", label: "Empire Player 2" },
-  { to: "/admin", label: "Admin" },
-] as const;
+const publicLinks = [{ to: "/admin", label: "Admin" }] as const;
 
 const authenticatedLinks = [
   { to: "/lobby", label: "Lobby" },
@@ -35,7 +31,7 @@ export function LandingPage() {
         </h1>
         <Unauthenticated>
           <p className="mt-4 max-w-xl text-sm leading-6 text-st-muted sm:text-base">
-            Choose a preview empire or enter the admin shell.
+            Enter the admin shell.
           </p>
         </Unauthenticated>
         <Authenticated>

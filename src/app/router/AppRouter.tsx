@@ -1,6 +1,5 @@
 import { Navigate, createBrowserRouter, RouterProvider } from "react-router-dom";
 import { lazy, Suspense, type ComponentType } from "react";
-import { PLAYER_PREVIEW_BY_PATH } from "@/features/player/playerPreviewConfig";
 
 function lazyNamedComponent<TProps>(
   loader: () => Promise<Record<string, ComponentType<TProps>>>,
@@ -192,16 +191,6 @@ const router = createBrowserRouter([
   {
     path: "/legals/tos",
     element: <TermsOfServicePage />,
-  },
-  {
-    path: "/eplayer1",
-    element: <PlayerGameLayout config={PLAYER_PREVIEW_BY_PATH["/eplayer1"]} />,
-    children: [...playerChildRoutes],
-  },
-  {
-    path: "/eplayer2",
-    element: <PlayerGameLayout config={PLAYER_PREVIEW_BY_PATH["/eplayer2"]} />,
-    children: [...playerChildRoutes],
   },
   {
     path: "/game/:gameId",
