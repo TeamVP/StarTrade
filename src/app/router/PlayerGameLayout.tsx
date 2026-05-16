@@ -34,7 +34,7 @@ export function PlayerGameLayout({
                 rootClassName="flex h-dvh min-h-0 flex-col bg-st-bg text-st-fg"
                 headerClassName="shrink-0 border-b border-st-border px-4 py-px sm:px-6"
                 headerContentClassName="mx-auto flex w-full max-w-none flex-col gap-1 sm:flex-row sm:items-center sm:justify-between"
-                mainClassName="flex min-h-0 min-w-0 flex-1 flex-col overflow-x-hidden overflow-y-auto px-4 pt-4 pb-4 lg:px-0 lg:pt-0 lg:pb-0 w-full max-w-none"
+                mainClassName="flex min-h-0 min-w-0 flex-1 flex-col overflow-x-hidden overflow-y-auto px-4 lg:px-0 lg:pt-0 w-full max-w-none"
               >
                 <Outlet />
                 <GameEndModal />
