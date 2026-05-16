@@ -2,7 +2,6 @@ import {
   createContext,
   useCallback,
   useContext,
-  useMemo,
   useState,
   type ReactNode,
 } from "react";
@@ -16,7 +15,10 @@ type PlayerTopNavControlsContextValue = {
   setMobileControl: (slot: PlayerTopNavControlSlot, control: ReactNode | null) => void;
 };
 
-const PlayerTopNavControlsContext = createContext<PlayerTopNavControlsContextValue | null>(null);
+const PlayerTopNavControlsStateContext = createContext<PlayerTopNavControlsState | null>(null);
+const PlayerTopNavControlsSetterContext = createContext<
+  ((slot: PlayerTopNavControlSlot, control: ReactNode | null) => void) | null
+>(null);
 
 export function PlayerTopNavControlsProvider({ children }: { children: ReactNode }) {
   const [controls, setControls] = useState<PlayerTopNavControlsState>({});
@@ -32,32 +34,50 @@ export function PlayerTopNavControlsProvider({ children }: { children: ReactNode
           delete next[slot];
           return next;
         }
+        if (current[slot] === control) {
+          return current;
+        }
         return { ...current, [slot]: control };
       });
     },
     [],
   );
 
-  const value = useMemo(
-    () => ({ controls, setMobileControl }),
-    [controls, setMobileControl],
-  );
-
   return (
-    <PlayerTopNavControlsContext.Provider value={value}>
-      {children}
-    </PlayerTopNavControlsContext.Provider>
+    <PlayerTopNavControlsSetterContext.Provider value={setMobileControl}>
+      <PlayerTopNavControlsStateContext.Provider value={controls}>
+        {children}
+      </PlayerTopNavControlsStateContext.Provider>
+    </PlayerTopNavControlsSetterContext.Provider>
   );
 }
 
 export function usePlayerTopNavControls() {
-  const value = useContext(PlayerTopNavControlsContext);
-  if (value === null) {
+  const controls = useContext(PlayerTopNavControlsStateContext);
+  const setMobileControl = useContext(PlayerTopNavControlsSetterContext);
+  if (controls === null || setMobileControl === null) {
     throw new Error("usePlayerTopNavControls must be used inside PlayerTopNavControlsProvider");
   }
-  return value;
+  return { controls, setMobileControl } satisfies PlayerTopNavControlsContextValue;
 }
 
 export function useOptionalPlayerTopNavControls() {
-  return useContext(PlayerTopNavControlsContext);
+  const controls = useContext(PlayerTopNavControlsStateContext);
+  const setMobileControl = useContext(PlayerTopNavControlsSetterContext);
+  if (controls === null || setMobileControl === null) {
+    return null;
+  }
+  return { controls, setMobileControl } satisfies PlayerTopNavControlsContextValue;
+}
+
+export function usePlayerTopNavControlSetter() {
+  const setMobileControl = useContext(PlayerTopNavControlsSetterContext);
+  if (setMobileControl === null) {
+    throw new Error("usePlayerTopNavControlSetter must be used inside PlayerTopNavControlsProvider");
+  }
+  return setMobileControl;
+}
+
+export function useOptionalPlayerTopNavControlSetter() {
+  return useContext(PlayerTopNavControlsSetterContext);
 }

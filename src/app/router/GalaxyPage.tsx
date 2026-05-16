@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useLocation } from "react-router-dom";
 import { ChevronRight, ChevronLeft } from "lucide-react";
-import { usePlayerTopNavControls } from "@/app/layout/PlayerTopNavControls";
+import { usePlayerTopNavControlSetter } from "@/app/layout/PlayerTopNavControls";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { GalaxyViewport } from "@/features/galaxy/components/GalaxyViewport";
@@ -20,7 +20,7 @@ export function GalaxyPage() {
   const location = useLocation();
   const focusFleetId = focusFleetIdFromState(location.state);
   const [showPanel, setShowPanel] = useState(false);
-  const { setMobileControl } = usePlayerTopNavControls();
+  const setMobileControl = usePlayerTopNavControlSetter();
 
   useEffect(() => {
     setMobileControl(

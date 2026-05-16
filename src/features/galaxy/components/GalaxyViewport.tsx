@@ -14,7 +14,7 @@ import { cn } from "@/lib/utils";
 import { useNavigate } from "react-router-dom";
 import { api } from "../../../../convex/_generated/api";
 import type { Id } from "../../../../convex/_generated/dataModel";
-import { useOptionalPlayerTopNavControls } from "@/app/layout/PlayerTopNavControls";
+import { useOptionalPlayerTopNavControlSetter } from "@/app/layout/PlayerTopNavControls";
 import { useGalaxySoundscape } from "@/features/audio/hooks/useGalaxySoundscape";
 import { getTurnEffectiveNowMs } from "@/lib/time/turnClock";
 import { useTurnClock } from "@/lib/time/useTurnClock";
@@ -255,7 +255,7 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
   } = props;
   const { activeGame, systems, links, empires, empireColors } = useGalaxyData();
   const galaxyMapNav = useGalaxyMapNav();
-  const playerTopNavControls = useOptionalPlayerTopNavControls();
+  const setMobileTopNavControl = useOptionalPlayerTopNavControlSetter() ?? null;
   const navigate = useNavigate();
   const activeGameId = activeGame?._id ?? null;
 
@@ -2157,73 +2157,82 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
       </div>
     ) : null;
 
+  const mobileSoundControl = useMemo(
+    () =>
+      activeGame === null ? null : (
+        <Button
+          type="button"
+          variant="secondary"
+          className="size-8 shrink-0 p-0 sm:hidden"
+          title={soundscapeEnabled ? "Disable event bell soundscape" : "Enable event bell soundscape"}
+          aria-label={soundscapeEnabled ? "Disable event bell soundscape" : "Enable event bell soundscape"}
+          onClick={() => {
+            if (soundscapeEnabled || soundscapeStatus === "starting") {
+              disableSoundscape();
+              return;
+            }
+            void enableSoundscape();
+          }}
+        >
+          {soundscapeEnabled ? <Volume2 className="size-4" aria-hidden /> : <VolumeX className="size-4" aria-hidden />}
+        </Button>
+      ),
+    [
+      activeGame,
+      disableSoundscape,
+      enableSoundscape,
+      soundscapeEnabled,
+      soundscapeStatus,
+    ],
+  );
+
+  const mobilePanelControl = useMemo(
+    () =>
+      !playerHomeMapLayout || starPanelAside === null ? null : (
+        <Button
+          type="button"
+          variant="secondary"
+          className="h-8 gap-1 px-2 text-xs sm:hidden"
+          onClick={() => setMobileAsideOpen((open) => !open)}
+        >
+          {mobileAsideOpen ? <ChevronLeft className="size-3.5" aria-hidden /> : null}
+          {mobileAsideOpen ? "Back to map" : "Info"}
+          {!mobileAsideOpen ? <ChevronRight className="size-3.5" aria-hidden /> : null}
+        </Button>
+      ),
+    [mobileAsideOpen, playerHomeMapLayout, starPanelAside],
+  );
+
   useEffect(() => {
-    if (playerTopNavControls === null) {
+    if (setMobileTopNavControl === null) {
       return;
     }
 
-    if (activeGame === null) {
-      playerTopNavControls.setMobileControl("sound", null);
+    if (mobileSoundControl === null) {
+      setMobileTopNavControl("sound", null);
       return () => {
-        playerTopNavControls.setMobileControl("sound", null);
+        setMobileTopNavControl("sound", null);
       };
     }
 
-    playerTopNavControls.setMobileControl(
-      "sound",
-      <Button
-        type="button"
-        variant="secondary"
-        className="size-8 shrink-0 p-0 sm:hidden"
-        title={soundscapeEnabled ? "Disable event bell soundscape" : "Enable event bell soundscape"}
-        aria-label={soundscapeEnabled ? "Disable event bell soundscape" : "Enable event bell soundscape"}
-        onClick={() => {
-          if (soundscapeEnabled || soundscapeStatus === "starting") {
-            disableSoundscape();
-            return;
-          }
-          void enableSoundscape();
-        }}
-      >
-        {soundscapeEnabled ? <Volume2 className="size-4" aria-hidden /> : <VolumeX className="size-4" aria-hidden />}
-      </Button>,
-    );
+    setMobileTopNavControl("sound", mobileSoundControl);
 
     return () => {
-      playerTopNavControls.setMobileControl("sound", null);
+      setMobileTopNavControl("sound", null);
     };
-  }, [
-    activeGame,
-    disableSoundscape,
-    enableSoundscape,
-    playerTopNavControls,
-    soundscapeEnabled,
-    soundscapeStatus,
-  ]);
+  }, [mobileSoundControl, setMobileTopNavControl]);
 
   useEffect(() => {
-    if (playerTopNavControls === null || !playerHomeMapLayout || starPanelAside === null) {
+    if (setMobileTopNavControl === null || mobilePanelControl === null) {
       return;
     }
 
-    playerTopNavControls.setMobileControl(
-      "panel",
-      <Button
-        type="button"
-        variant="secondary"
-        className="h-8 gap-1 px-2 text-xs sm:hidden"
-        onClick={() => setMobileAsideOpen((open) => !open)}
-      >
-        {mobileAsideOpen ? <ChevronLeft className="size-3.5" aria-hidden /> : null}
-        {mobileAsideOpen ? "Back to map" : "Info"}
-        {!mobileAsideOpen ? <ChevronRight className="size-3.5" aria-hidden /> : null}
-      </Button>,
-    );
+    setMobileTopNavControl("panel", mobilePanelControl);
 
     return () => {
-      playerTopNavControls.setMobileControl("panel", null);
+      setMobileTopNavControl("panel", null);
     };
-  }, [mobileAsideOpen, playerHomeMapLayout, playerTopNavControls, starPanelAside]);
+  }, [mobilePanelControl, setMobileTopNavControl]);
 
   const galaxyStageEl = (
     <GalaxyStage
