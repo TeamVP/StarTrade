@@ -99,5 +99,6 @@ The player should never see the fleet arrive, disappear, and then pop into orbit
 
 - Frontend build passes with the current renderer changes.
 - Convex deploy should remain clean because this work does not change schema or backend functions.
-- Live browser verification confirmed that the updated galaxy renderer mounts on the admin map route once an active game is selected.
-- Full visual verification of a moving fleet arrival still requires a running game with active fleet travel, which was not present in the current local data set during implementation.
+- A focused regression test suite now covers the fleet ghost handoff and idle marker fade decisions.
+- Live browser verification through the dev server is currently blocked by an unrelated Vite import-analysis error in `src/features/audio/lib/galaxySoundscapeEngine.ts`.
+- A starter mission was successfully started through the lobby flow, but the affected map routes could not be observed in the browser until that unrelated audio import issue is resolved.

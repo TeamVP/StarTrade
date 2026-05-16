@@ -24,6 +24,10 @@ import {
   turnTravelArrivalAlpha,
   turnTravelProgress,
 } from "@/features/galaxy/utils/turnTravelProgress";
+import {
+  resolveGhostRenderState,
+  shouldFadeInFleetMarker,
+} from "@/features/galaxy/utils/fleetRenderHandoff";
 
 extend({ Graphics, Container });
 
@@ -1039,9 +1043,8 @@ function GalaxyStageInner({
                     ? "pointer"
                     : "default"
             }
-            ghostRecentlyVisible={
-              visibleFleetGhostIds.has(fleet.fleetId) || recentFleetGhostIds.has(fleet.fleetId)
-            }
+            ghostVisibleNow={visibleFleetGhostIds.has(fleet.fleetId)}
+            ghostRecentlyVisible={recentFleetGhostIds.has(fleet.fleetId)}
             onPointerDown={(event: FederatedPointerEvent) =>
               handleFleetPointerDown(fleet, event)
             }
@@ -1890,13 +1893,14 @@ function EnRouteGhostGraphics({
         if (isFleetGhost) {
           rememberRecentFleetGhost(ghost.fleetId);
         }
-        const markerVisible = visibleFleetMarkerIds.has(ghost.fleetId);
-        const holdAtDestination = isFleetGhost && fraction >= 1 && !markerVisible;
-        if (isFleetGhost && fraction >= 1 && markerVisible) {
+        const { drawGhost, renderFraction } = resolveGhostRenderState({
+          variant: ghost.variant === "colony" ? "colony" : "fleet",
+          progress: fraction,
+          markerVisible: visibleFleetMarkerIds.has(ghost.fleetId),
+        });
+        if (!drawGhost) {
           continue;
         }
-
-        const renderFraction = holdAtDestination ? 1 : fraction;
         const gx = from.x + (to.x - from.x) * renderFraction;
         const gy = from.y + (to.y - from.y) * renderFraction;
         const ox = to.x - from.x;
@@ -2020,6 +2024,7 @@ function FleetMarkerGraphic({
   selected,
   eventMode,
   cursor,
+  ghostVisibleNow,
   ghostRecentlyVisible,
   onPointerDown,
 }: {
@@ -2028,12 +2033,15 @@ function FleetMarkerGraphic({
   selected: boolean;
   eventMode: "none" | "passive" | "auto" | "static" | "dynamic";
   cursor: string;
+  ghostVisibleNow: boolean;
   ghostRecentlyVisible: boolean;
   onPointerDown: (event: FederatedPointerEvent) => void;
 }) {
   const [frame, setFrame] = useState(0);
   const firstSeenAtRef = useRef<number | null>(null);
-  const shouldFadeRef = useRef(!ghostRecentlyVisible);
+  const shouldFadeRef = useRef(
+    shouldFadeInFleetMarker({ ghostVisibleNow, ghostRecentlyVisible }),
+  );
 
   useTick(() => {
     if (!shouldFadeRef.current) return;
