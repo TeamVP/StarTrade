@@ -69,6 +69,9 @@ export function useGalaxySoundscape(params: {
   const pendingPlaybackTimersRef = useRef<Map<string, number>>(new Map());
   const noticeTimerRef = useRef<number | null>(null);
   const activeGameIdRef = useRef<string | null>(activeGameId);
+  const startupPromiseRef = useRef<Promise<void> | null>(null);
+  const startupTokenRef = useRef(0);
+  const mountedRef = useRef(true);
 
   const clearPendingPlaybackTimers = useCallback(() => {
     for (const timer of pendingPlaybackTimersRef.current.values()) {
@@ -145,6 +148,8 @@ export function useGalaxySoundscape(params: {
   }, [recentEvents, showNotice, timeline?.currentTurn, toBellIntent]);
 
   const disableSoundscape = useCallback(() => {
+    startupTokenRef.current += 1;
+    startupPromiseRef.current = null;
     clearPendingPlaybackTimers();
     clearNoticeTimer();
     engineRef.current?.dispose();
@@ -167,32 +172,58 @@ export function useGalaxySoundscape(params: {
       return;
     }
 
-    setStatus("starting");
-    setError(null);
-    try {
-      await ensureToneReady();
-      const engine = await createGalaxySoundscapeEngine({
-        turnDurationMs: timeline?.turnDurationMs ?? null,
-      });
-      engineRef.current = engine;
-      activeGameIdRef.current = activeGameId;
-      playUiSound("sound_enabled_confirm");
-      playActivationPreview(engine);
-      seenEventIdsRef.current = new Set(recentEvents.map((event) => String(event._id)));
-      setEnabled(true);
-      setStatus("ready");
-      writeStoredEnabled(true);
-    } catch (soundError) {
-      setEnabled(false);
-      setStatus("error");
-      setError(errorMessage(soundError));
-      setNotice(null);
-      writeStoredEnabled(false);
+    if (startupPromiseRef.current !== null) {
+      await startupPromiseRef.current;
+      return;
     }
+
+    const startupToken = startupTokenRef.current + 1;
+    startupTokenRef.current = startupToken;
+    const startupPromise = (async () => {
+      setStatus("starting");
+      setError(null);
+      try {
+        await ensureToneReady();
+        const engine = await createGalaxySoundscapeEngine({
+          turnDurationMs: timeline?.turnDurationMs ?? null,
+        });
+        if (!mountedRef.current || startupToken !== startupTokenRef.current) {
+          engine.dispose();
+          return;
+        }
+        engineRef.current = engine;
+        activeGameIdRef.current = activeGameId;
+        playUiSound("sound_enabled_confirm");
+        playActivationPreview(engine);
+        seenEventIdsRef.current = new Set(recentEvents.map((event) => String(event._id)));
+        setEnabled(true);
+        setStatus("ready");
+        writeStoredEnabled(true);
+      } catch (soundError) {
+        if (!mountedRef.current || startupToken !== startupTokenRef.current) {
+          return;
+        }
+        setEnabled(false);
+        setStatus("error");
+        setError(errorMessage(soundError));
+        setNotice(null);
+        writeStoredEnabled(false);
+      } finally {
+        if (startupTokenRef.current === startupToken) {
+          startupPromiseRef.current = null;
+        }
+      }
+    })();
+    startupPromiseRef.current = startupPromise;
+    await startupPromise;
   }, [activeGameId, playActivationPreview, recentEvents, timeline?.turnDurationMs]);
 
   useEffect(() => {
+    mountedRef.current = true;
     return () => {
+      mountedRef.current = false;
+      startupTokenRef.current += 1;
+      startupPromiseRef.current = null;
       clearNoticeTimer();
       clearPendingPlaybackTimers();
       engineRef.current?.dispose();
