@@ -3,7 +3,6 @@ import { useMutation, useQuery } from "convex/react";
 import { api } from "../../../convex/_generated/api";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { SignOutButton } from "@/features/usr/components/SignOutButton";
 
 function initialsFromName(name: string | null | undefined, email: string | null | undefined): string {
   const source = name ?? email ?? "?";
@@ -101,7 +100,7 @@ export function ProfilePage() {
   return (
     <div className="w-full px-4 py-4 sm:px-6">
       <div className="mx-auto flex w-full max-w-4xl flex-col gap-4">
-        <Card className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <Card className="flex flex-col gap-4">
           <div className="flex min-w-0 items-center gap-4">
             {avatarUrl !== null ? (
               <img
@@ -122,18 +121,12 @@ export function ProfilePage() {
               </p>
             </div>
           </div>
-          <div className="flex shrink-0 items-center gap-2">
-            <SignOutButton />
-          </div>
         </Card>
 
         <Card>
           <div className="flex items-start justify-between gap-3">
             <div>
               <h2 className="text-sm font-semibold uppercase tracking-wide text-st-muted">Account</h2>
-              <p className="mt-2 text-sm text-st-muted">
-                Update the profile details shown across lobbies, scoreboards, and player seats.
-              </p>
             </div>
             {saveState === "saved" ? (
               <span className="rounded border border-emerald-500/40 bg-emerald-950/30 px-2 py-1 text-xs font-medium text-emerald-200">
@@ -191,8 +184,7 @@ export function ProfilePage() {
               Allow analytics for improving the game experience.
             </label>
             {error ? <p className="text-sm text-red-300">{error}</p> : null}
-            <div className="flex items-center justify-between gap-3">
-              <p className="text-sm text-st-muted">Email is managed by your sign-in provider.</p>
+            <div className="flex justify-end">
               <Button type="submit" disabled={saveState === "saving" || account === undefined || account === null}>
                 {saveState === "saving" ? "Saving..." : "Save profile"}
               </Button>
@@ -212,10 +204,6 @@ export function ProfilePage() {
               <dd className="mt-1 font-medium text-st-fg">
                 {avatarUrl !== null ? "Custom avatar set" : "Using initials"}
               </dd>
-            </div>
-            <div className="rounded border border-st-border bg-st-bg p-3">
-              <dt className="text-xs uppercase tracking-wide">Logout</dt>
-              <dd className="mt-1 font-medium text-st-fg">End the current session</dd>
             </div>
           </dl>
         </Card>
@@ -270,12 +258,7 @@ export function ProfilePage() {
               />
             </label>
             {passwordError ? <p className="text-sm text-red-300">{passwordError}</p> : null}
-            <div className="flex items-center justify-between gap-3">
-              <p className="text-sm text-st-muted">
-                {account?.user.email !== null
-                  ? "This updates the password tied to your current email address."
-                  : "Password sign-in requires an email address on the account."}
-              </p>
+            <div className="flex justify-end">
               <Button
                 type="submit"
                 disabled={
