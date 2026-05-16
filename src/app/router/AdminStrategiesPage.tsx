@@ -346,7 +346,7 @@ export function AdminStrategiesPage() {
   const strategies = useMemo(() => strategiesQuery?.strategies ?? [], [strategiesQuery]);
 
   return (
-    <div className="mx-auto max-w-6xl space-y-6 px-4 py-6">
+    <div className="mx-auto max-w-[86.4rem] space-y-6 px-4 py-6">
       <Card className="space-y-2">
         <p className="text-xs font-semibold uppercase tracking-[0.2em] text-st-muted">Admin</p>
         <h1 className="text-2xl font-semibold text-st-fg">Strategies</h1>

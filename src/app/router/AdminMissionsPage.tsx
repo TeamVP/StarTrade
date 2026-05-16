@@ -1552,7 +1552,7 @@ export function AdminMissionsPage() {
 
   if (missionsQuery === undefined || strategiesQuery === undefined || npcQuery === undefined) {
     return (
-      <div className="mx-auto max-w-6xl px-4 py-6">
+      <div className="mx-auto max-w-[86.4rem] px-4 py-6">
         <Card className="text-sm text-st-muted">Loading missions...</Card>
       </div>
     );
@@ -1560,14 +1560,14 @@ export function AdminMissionsPage() {
 
   if (!missionsQuery.authorized) {
     return (
-      <div className="mx-auto max-w-6xl px-4 py-6">
+      <div className="mx-auto max-w-[86.4rem] px-4 py-6">
         <Card className="text-sm text-st-muted">Sign in to manage missions.</Card>
       </div>
     );
   }
 
   return (
-    <div className="mx-auto max-w-6xl space-y-6 px-4 py-6">
+    <div className="mx-auto max-w-[86.4rem] space-y-6 px-4 py-6">
       <Card className="space-y-3">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>

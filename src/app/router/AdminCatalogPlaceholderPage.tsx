@@ -11,7 +11,7 @@ type AdminCatalogPlaceholderPageProps = {
 
 export function AdminCatalogPlaceholderPage(props: AdminCatalogPlaceholderPageProps) {
   return (
-    <div className="mx-auto max-w-5xl space-y-6 px-4 py-6">
+    <div className="mx-auto max-w-[76.8rem] space-y-6 px-4 py-6">
       <Card className="space-y-2">
         <p className="text-xs font-semibold uppercase tracking-[0.2em] text-st-muted">
           {props.eyebrow}

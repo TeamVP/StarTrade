@@ -546,6 +546,7 @@ export const createUser = mutation({
     image: v.optional(v.union(v.string(), v.null())),
     password: v.optional(v.union(v.string(), v.null())),
     isAnonymous: v.boolean(),
+    admin: v.boolean(),
     emailVerified: v.boolean(),
     phoneVerified: v.boolean(),
   },
@@ -585,6 +586,7 @@ export const createUser = mutation({
       ...(args.emailVerified ? { emailVerificationTime: now } : {}),
       ...(args.phoneVerified ? { phoneVerificationTime: now } : {}),
       ...(args.isAnonymous ? { isAnonymous: true } : {}),
+      ...(args.admin ? { admin: true } : {}),
     });
 
     if (email !== undefined && password !== undefined) {
@@ -611,6 +613,7 @@ export const updateUser = mutation({
     phone: v.optional(v.union(v.string(), v.null())),
     image: v.optional(v.union(v.string(), v.null())),
     isAnonymous: v.boolean(),
+    admin: v.boolean(),
     emailVerified: v.boolean(),
     phoneVerified: v.boolean(),
   },
@@ -696,6 +699,12 @@ export const updateUser = mutation({
       nextUser.isAnonymous = true;
     } else {
       delete nextUser.isAnonymous;
+    }
+
+    if (args.admin) {
+      nextUser.admin = true;
+    } else {
+      delete nextUser.admin;
     }
 
     await ctx.db.replace("users", args.userId, nextUser);

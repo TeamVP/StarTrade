@@ -40,6 +40,7 @@ export const listUsers = query({
           emailVerificationTime: user.emailVerificationTime ?? null,
           phoneVerificationTime: user.phoneVerificationTime ?? null,
           isAnonymous: user.isAnonymous ?? false,
+          admin: user.admin ?? false,
           hasPasswordAccount: passwordAccount?.userId === user._id,
         };
       }),

@@ -16,6 +16,7 @@ type AdminUserRow = {
   emailVerificationTime: number | null;
   phoneVerificationTime: number | null;
   isAnonymous: boolean;
+  admin: boolean;
   hasPasswordAccount: boolean;
 };
 
@@ -26,6 +27,7 @@ type AdminUserFormDefaults = {
   image: string;
   password: string;
   isAnonymous: boolean;
+  admin: boolean;
   emailVerified: boolean;
   phoneVerified: boolean;
 };
@@ -36,6 +38,7 @@ type AdminUserMutationFields = {
   phone: string | null;
   image: string | null;
   isAnonymous: boolean;
+  admin: boolean;
   emailVerified: boolean;
   phoneVerified: boolean;
 };
@@ -77,6 +80,7 @@ function readAdminUserMutationFields(formData: FormData): AdminUserMutationField
     phone: phone.length > 0 ? phone : null,
     image: image.length > 0 ? image : null,
     isAnonymous: formData.get("isAnonymous") === "on",
+    admin: formData.get("admin") === "on",
     emailVerified: formData.get("emailVerified") === "on",
     phoneVerified: formData.get("phoneVerified") === "on",
   };
@@ -90,6 +94,7 @@ function adminUserFormDefaultsFromUser(user: AdminUserRow): AdminUserFormDefault
     image: user.image ?? "",
     password: "",
     isAnonymous: user.isAnonymous,
+    admin: user.admin,
     emailVerified: user.emailVerificationTime !== null,
     phoneVerified: user.phoneVerificationTime !== null,
   };
@@ -178,7 +183,7 @@ function AdminUserModal(props: {
                 />
               </label>
             ) : null}
-            <div className="md:col-span-2 grid gap-2 sm:grid-cols-3">
+            <div className="md:col-span-2 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
               <label className="flex items-center gap-2 rounded border border-st-border bg-st-bg px-3 py-2 text-sm text-st-muted">
                 <input
                   type="checkbox"
@@ -205,6 +210,15 @@ function AdminUserModal(props: {
                   className="accent-cyan-400"
                 />
                 <span>Set phone verified now</span>
+              </label>
+              <label className="flex items-center gap-2 rounded border border-st-border bg-st-bg px-3 py-2 text-sm text-st-muted">
+                <input
+                  type="checkbox"
+                  name="admin"
+                  defaultChecked={props.defaults.admin}
+                  className="accent-cyan-400"
+                />
+                <span>Admin?</span>
               </label>
             </div>
           </div>
@@ -398,7 +412,7 @@ export function AdminUsersPage() {
   }
 
   return (
-    <div className="mx-auto max-w-6xl space-y-6 px-4 py-6">
+    <div className="mx-auto max-w-[86.4rem] space-y-6 px-4 py-6">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div className="space-y-1">
           <h1 className="text-2xl font-semibold text-st-fg">Users</h1>
@@ -437,6 +451,7 @@ export function AdminUsersPage() {
             image: "",
             password: "",
             isAnonymous: false,
+            admin: false,
             emailVerified: false,
             phoneVerified: false,
           }}
@@ -581,6 +596,7 @@ export function AdminUsersPage() {
                   <th className="border-b border-st-border px-3 py-2 font-medium">Phone Verified</th>
                   <th className="border-b border-st-border px-3 py-2 font-medium">Pwd Sign-In</th>
                   <th className="border-b border-st-border px-3 py-2 font-medium">Anon</th>
+                  <th className="border-b border-st-border px-3 py-2 font-medium">Admin</th>
                   <th className="border-b border-st-border px-3 py-2 font-medium">Image</th>
                   <th className="border-b border-st-border px-3 py-2 font-medium">Actions</th>
                 </tr>
@@ -623,6 +639,9 @@ export function AdminUsersPage() {
                     </td>
                     <td className="border-b border-st-border/60 px-3 py-2 text-st-fg">
                       {user.isAnonymous ? "Yes" : "No"}
+                    </td>
+                    <td className="border-b border-st-border/60 px-3 py-2 text-st-fg">
+                      {user.admin ? "Yes" : "-"}
                     </td>
                     <td className="border-b border-st-border/60 px-3 py-2 text-st-fg">
                       {user.image ?? "-"}
