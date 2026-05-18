@@ -7,7 +7,7 @@ type AppShellProps = {
   headerTrailing?: ReactNode;
   /** Classes for the main content wrapper (width, padding). */
   mainClassName?: string;
-  /** When false, the default “StarStrat” product title in the header is hidden (player / embedded layouts). */
+  /** When false, the default "StarStrat" product title in the header is hidden (player / embedded layouts). */
   showProductTitle?: boolean;
   /** Override inner header flex container (width constraints). */
   headerContentClassName?: string;

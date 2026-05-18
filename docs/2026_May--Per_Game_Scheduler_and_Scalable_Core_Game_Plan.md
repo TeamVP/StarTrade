@@ -1,8 +1,8 @@
 # Per-Game Scheduler and Scalable Core Game Plan
 
-Deprecated for active planning. Keep this document for historical review and prior design context, but use [2026_May--Per_Game_Scheduler_and_Scalable_Core_Game_Plan_v2.md](d:/vibe_dev/StarTrade/docs/2026_May--Per_Game_Scheduler_and_Scalable_Core_Game_Plan_v2.md) as the working plan.
+Deprecated for active planning. Keep this document for historical review and prior design context, but use [2026_May--Per_Game_Scheduler_and_Scalable_Core_Game_Plan_v2.md](2026_May--Per_Game_Scheduler_and_Scalable_Core_Game_Plan_v2.md) as the working plan.
 
-This document proposes the next architectural step for StarTrade after the current staged-turn controller work.
+This document proposes the next architectural step for StarStrat after the current staged-turn controller work.
 
 It complements the existing turn documents:
 
@@ -12,7 +12,7 @@ It complements the existing turn documents:
 
 This document answers a broader question:
 
-How should StarTrade be structured so that every new game can run at 10 second turns, with no intentional idle gap between turns, without one bad or heavy game degrading the rest of the deployment?
+How should StarStrat be structured so that every new game can run at 10 second turns, with no intentional idle gap between turns, without one bad or heavy game degrading the rest of the deployment?
 
 It also proposes a simplification path away from an empire-centric runtime model and toward a game-actor-centric core game that can scale before trader complexity is added back.
 
@@ -318,7 +318,7 @@ Cleanup helps after the fact. The larger win is to stop writing unnecessary rows
 
 ### Recommended mode architecture: registry-driven composition
 
-The best fit for StarTrade is not a fully generic plugin framework, but it is also not scattered `if mode then ...` checks across every resolver.
+The best fit for StarStrat is not a fully generic plugin framework, but it is also not scattered `if mode then ...` checks across every resolver.
 
 The practical middle ground is a registry-driven phase and capability model.
 
@@ -1069,4 +1069,4 @@ The cleanest strategic direction is:
 - migrate runtime ownership from empire-centric to game-actor-centric
 - treat empire as a label/snapshot rather than the root live identity
 
-That gets StarTrade to a simpler, faster core loop without blocking the future trader game. The trader game can then be reintroduced on top of a stable game-actor and scheduler foundation instead of being part of every game’s baseline cost.
+That gets StarStrat to a simpler, faster core loop without blocking the future trader game. The trader game can then be reintroduced on top of a stable game-actor and scheduler foundation instead of being part of every game’s baseline cost.

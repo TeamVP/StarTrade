@@ -2,79 +2,62 @@
 
 Proprietary software. All rights reserved.
 
-This is a [Convex](https://convex.dev/) project created with [`npm create convex`](https://www.npmjs.com/package/create-convex).
+StarStrat is a Convex + React strategy game project focused on short-turn empire play, scalable per-game simulation, and a shared official/community mission and automation catalog.
 
-After the initial setup (<2 minutes) you'll have a working full-stack app using:
+## Repository
 
-- Convex as your backend (database, server logic)
-- [React](https://react.dev/) as your frontend (web page interactivity)
-- [Vite](https://vitest.dev/) for optimized web hosting
-- [Tailwind](https://tailwindcss.com/) for building great looking UI
-- [Convex Auth](https://labs.convex.dev/auth) for authentication
+- Primary GitHub repository: `https://github.com/TeamVP/Starstrat`
+- Visibility: private
+- Local default publish target: `starstrat/main`
 
-## Get started
+## Current scope
 
-If you just cloned this codebase and didn't use `npm create convex`, run:
+- empire-first gameplay with `conquest_core` as the published free mode
+- future-gated trader support through `trader_economy`
+- admin tooling for missions, strategies, moderation, and metadata convergence
+- publisher tooling for community missions and automation strategies
 
-```
+## Local development
+
+```bash
 npm install
 npm run dev
 ```
 
-If you're reading this README on GitHub and want to use this template, run:
+Useful validation commands:
 
+```bash
+npx tsc --noEmit -p tsconfig.app.json --pretty false
+npx tsc --noEmit -p convex/tsconfig.json --pretty false
+npx convex dev --once
 ```
-npm create convex@latest -- -t react-vite-convexauth
-```
 
-For more information on how to configure Convex Auth, check out the [Convex Auth docs](https://labs.convex.dev/auth/).
+## Auth setup
 
-For more examples of different Convex Auth flows, check out this [example repo](https://www.convex.dev/templates/convex-auth).
-
-## Convex Auth: JWT keys (fix `JWT_PRIVATE_KEY` errors)
-
-Password sign-in needs **RSA keys on your Convex deployment** (not in `.env.local` alone). If sign-up/sign-in fails with `Missing environment variable JWT_PRIVATE_KEY`, run:
+Password sign-in requires RSA keys on the active Convex deployment. On a new machine or deployment, run:
 
 ```bash
 npm run setup:auth
 ```
 
-That runs [`@convex-dev/auth`](https://labs.convex.dev/auth/setup/manual) and sets `JWT_PRIVATE_KEY`, `JWKS`, and `SITE_URL` on the deployment you pick (use the same dev deployment as `npx convex dev`).
+That configures `JWT_PRIVATE_KEY`, `JWKS`, and `SITE_URL` for the selected Convex deployment.
 
-For production, set `SITE_URL` to the live frontend origin that users actually sign into, such as your Vercel custom domain. Keep `http://localhost:5173` only for the local dev deployment.
-
-For Google OAuth, also set `AUTH_GOOGLE_ID` and `AUTH_GOOGLE_SECRET` on the same Convex deployment. In Google Cloud, use your Convex HTTP actions URL with `/api/auth/callback/google` as the redirect URI.
-
-For `https://www.starstrat.org/`, register these Google Cloud OAuth values:
+For Google OAuth, also set `AUTH_GOOGLE_ID` and `AUTH_GOOGLE_SECRET` on the same Convex deployment, and register your Convex HTTP actions callback URL:
 
 - Authorized JavaScript origins: `https://www.starstrat.org`
 - Authorized redirect URIs: `https://<your-production-convex-site>.convex.site/api/auth/callback/google`
 
-If you also serve the apex domain, add `https://starstrat.org` as a second JavaScript origin and redirect users consistently to one canonical host.
+If you also serve the apex domain, add `https://starstrat.org` as an additional origin and keep one canonical host for sign-in redirects.
 
-Then restart `npm run dev`.
+## Deployment notes
 
-If `predev` already ran `setup.mjs --once` and skipped auth setup, you still need to run `npm run setup:auth` once per new machine or deployment. You can also set `JWT_PRIVATE_KEY` and `JWKS` manually under your project in the [Convex dashboard](https://dashboard.convex.dev) → **Settings** → **Environment Variables** (see the manual setup link above for key generation).
+- Set `VITE_CONVEX_URL` to the Convex Cloud URL: `https://<deployment>.convex.cloud`
+- Use the `convex.site` URL only for HTTP actions and auth callback configuration
+- `CONVEX_URL` can also be used as the source for the client build if your hosting environment already provides it
 
-## Production deployment: Convex URL
+## Key docs
 
-The frontend needs the Convex **Cloud URL** at build time. For Vite deployments, set `VITE_CONVEX_URL` in your hosting provider to the `https://<deployment>.convex.cloud` URL, not the `convex.site` HTTP Actions URL.
-
-If your deployment environment already has `CONVEX_URL`, the Vite config in this repo will also pick that up and inject it into the client build. That value should also be the Cloud URL.
-
-Use the `https://<deployment>.convex.site` HTTP Actions URL only for auth/site configuration such as `CONVEX_SITE_URL`.
-
-## Learn more
-
-To learn more about developing your project with Convex, check out:
-
-- The [Tour of Convex](https://docs.convex.dev/get-started) for a thorough introduction to Convex principles.
-- The rest of [Convex docs](https://docs.convex.dev/) to learn about all Convex features.
-- [Stack](https://stack.convex.dev/) for in-depth articles on advanced topics.
-
-## Join the community
-
-Join thousands of developers building full-stack apps with Convex:
-
-- Join the [Convex Discord community](https://convex.dev/community) to get help in real-time.
-- Follow [Convex on GitHub](https://github.com/get-convex/), star and contribute to the open-source implementation of Convex.
+- `docs/2026_May--Per_Game_Scheduler_and_Scalable_Core_Game_Plan_v2.md`
+- `docs/Turn_System.md`
+- `docs/State_Machine.md`
+- `docs/Database_Scalability_May_2026.md`

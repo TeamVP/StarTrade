@@ -1,6 +1,6 @@
 # Turn System — Work Log and Improvement Notes
 
-This document records the specific problems found, the changes made, the design decisions taken, and the known remaining issues with StarTrade's turn execution engine as of May 2026.
+This document records the specific problems found, the changes made, the design decisions taken, and the known remaining issues with StarStrat's turn execution engine as of May 2026.
 
 It is a working companion to [State_Machine.md](State_Machine.md), which owns the authoritative state diagram and transition rules. This document tracks the engineering history and the outstanding improvement backlog.
 

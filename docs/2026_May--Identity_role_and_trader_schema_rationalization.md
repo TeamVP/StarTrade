@@ -1,8 +1,8 @@
-# StarTrade identity, profile, role, and trader schema rationalization
+# StarStrat identity, profile, role, and trader schema rationalization
 
 ## Purpose
 
-This document proposes a concrete target data model for StarTrade user identity,
+This document proposes a concrete target data model for StarStrat user identity,
 profile, game participation, empire control, and trader participation.
 
 It is based on the current Convex schema and the planned v2 trader gameplay.
@@ -109,7 +109,7 @@ Current fields:
 
 Assessment:
 
-- The table is workable if and only if StarTrade allows exactly one active role
+- The table is workable if and only if StarStrat allows exactly one active role
   per user per game.
 - Current code uses `.unique()` by `gameId + userId`, which means the effective
   application rule today is one row per user per game.
@@ -473,7 +473,7 @@ It does need targeted rationalization in three areas:
 - make the participation model explicit instead of leaving `usr_game_roles`
   semantically ambiguous
 
-That gives StarTrade a stable structure for:
+That gives StarStrat a stable structure for:
 
 - auth and account linking
 - player-facing profile management

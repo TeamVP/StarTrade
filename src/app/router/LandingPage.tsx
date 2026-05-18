@@ -29,7 +29,7 @@ export function LandingPage() {
           className="mb-8 w-1/4 min-w-44 max-w-56 object-contain drop-shadow-[0_18px_40px_rgba(0,0,0,0.45)]"
         />
         <h1 className="text-4xl font-semibold tracking-[0.2em] text-white sm:text-6xl">
-          Welcome to Starstrat
+          Welcome to StarStrat
         </h1>
         <p className="mt-4 max-w-xl text-sm leading-6 text-st-muted sm:text-base">
           Join the game.

@@ -1,15 +1,15 @@
 # Per-Game Scheduler and Scalable Core Game Plan V2
 
 This document supersedes the earlier scheduler/core-game plan in
-[2026_May--Per_Game_Scheduler_and_Scalable_Core_Game_Plan.md](d:/vibe_dev/StarTrade/docs/2026_May--Per_Game_Scheduler_and_Scalable_Core_Game_Plan.md).
+[2026_May--Per_Game_Scheduler_and_Scalable_Core_Game_Plan.md](2026_May--Per_Game_Scheduler_and_Scalable_Core_Game_Plan.md).
 
 Keep the older document for design review and historical context, but treat this V2 plan as the working architecture and implementation handoff.
 
 It complements the other turn/runtime documents:
 
-- [State_Machine.md](d:/vibe_dev/StarTrade/docs/State_Machine.md) remains the authoritative turn-state model.
-- [Turn_System.md](d:/vibe_dev/StarTrade/docs/Turn_System.md) remains the work log and invariant list for the staged turn controller.
-- [Database_Scalability_May_2026.md](d:/vibe_dev/StarTrade/docs/Database_Scalability_May_2026.md) captures why storage volume and retention are now first-order architectural concerns.
+- [State_Machine.md](State_Machine.md) remains the authoritative turn-state model.
+- [Turn_System.md](Turn_System.md) remains the work log and invariant list for the staged turn controller.
+- [Database_Scalability_May_2026.md](Database_Scalability_May_2026.md) captures why storage volume and retention are now first-order architectural concerns.
 
 ## Executive Summary
 
@@ -252,6 +252,16 @@ Recommended rollout order:
 4. Allow published community strategies onto shared strategy-library surfaces with explicit community labeling, because that surface already tolerates mixed provenance better than the mission ladder.
 5. Launch published community missions through the dedicated `/publisher` / Community surface with per-user on-demand runs, rather than overloading the official progression pipeline or starter-game provisioning.
 
+## I. Product Naming Normalization
+
+User-facing product naming should now be normalized to `StarStrat` across current docs, UI surfaces, and future planning updates.
+
+Rules:
+
+1. Replace legacy `StarTrade` and `StarTrade V1` naming in user-facing copy with `StarStrat`.
+2. Keep technical identifiers such as existing local filesystem paths, deployment variables, and the GitHub repository slug `TeamVP/Starstrat` stable until a separate path/slug migration is intentionally planned.
+3. Prefer relative markdown links inside docs so naming cleanup does not depend on machine-specific absolute workspace paths.
+
 ## Prioritized Implementation Plan
 
 ### Phase 1. Storage Policy Matrix
@@ -411,16 +421,16 @@ The correct next order is:
 
 ### Specific files to use first
 
-- [schema.ts](d:/vibe_dev/StarTrade/convex/schema.ts)
-- [internal.ts](d:/vibe_dev/StarTrade/convex/sim/internal.ts)
-- [preparationOps.ts](d:/vibe_dev/StarTrade/convex/sim/preparationOps.ts)
-- [stagedTurnStore.ts](d:/vibe_dev/StarTrade/convex/sim/stagedTurnStore.ts)
-- [applyTurnEconomy.ts](d:/vibe_dev/StarTrade/convex/sim/economy/applyTurnEconomy.ts)
-- [applyBackgroundTrade.ts](d:/vibe_dev/StarTrade/convex/sim/economy/applyBackgroundTrade.ts)
-- [eventLog.ts](d:/vibe_dev/StarTrade/convex/sim/eventLog.ts)
-- [eventTypePolicies.ts](d:/vibe_dev/StarTrade/convex/sim/eventTypePolicies.ts)
-- [finalization.ts](d:/vibe_dev/StarTrade/convex/sim/finalization.ts)
-- [wipeGame.ts](d:/vibe_dev/StarTrade/convex/sim/wipeGame.ts)
+- [schema.ts](../convex/schema.ts)
+- [internal.ts](../convex/sim/internal.ts)
+- [preparationOps.ts](../convex/sim/preparationOps.ts)
+- [stagedTurnStore.ts](../convex/sim/stagedTurnStore.ts)
+- [applyTurnEconomy.ts](../convex/sim/economy/applyTurnEconomy.ts)
+- [applyBackgroundTrade.ts](../convex/sim/economy/applyBackgroundTrade.ts)
+- [eventLog.ts](../convex/sim/eventLog.ts)
+- [eventTypePolicies.ts](../convex/sim/eventTypePolicies.ts)
+- [finalization.ts](../convex/sim/finalization.ts)
+- [wipeGame.ts](../convex/sim/wipeGame.ts)
 
 ### Recommended next slices after this pass
 
@@ -429,6 +439,7 @@ The correct next order is:
 3. Continue write-side conquest-mode suppression for other derived history families that are already disabled on the read side.
 4. Carry the new retention-policy seam into any remaining transcript-heavy trader tables instead of adding more one-off pruning constants.
 5. Continue moving finished-game read dependencies off live runtime tables and off unnecessary result-row joins or scans when durable snapshots and indexes already exist, then remove fallback paths once old rows have converged.
+6. Continue replacing legacy `StarTrade` naming in user-facing docs and surfaces with `StarStrat`, while keeping repo/path identifiers stable until a dedicated slug migration is planned.
 
 ## Verification Requirements
 
@@ -491,6 +502,7 @@ Current backend status:
 - the current community/publisher slice now validates cleanly through `npx tsc --noEmit -p tsconfig.app.json --pretty false`, `npx tsc --noEmit -p convex/tsconfig.json --pretty false`, `npx convex dev --once`, and a clean `npx convex dev` ready startup,
 - and the remaining product-policy gap is operational rather than architectural: legacy rows still need explicit mode/access backfill before the old missing-mode fallback can be safely tightened.
 - latest validation remains green through `npx tsc --noEmit -p tsconfig.app.json --pretty false`, `npx tsc --noEmit -p convex/tsconfig.json --pretty false`, `npx convex dev --once`, and a live `npx convex dev` startup reaching `Convex functions ready! (5.78s)` before clean shutdown.
+- product naming cleanup is now an explicit tracked workstream: user-facing docs and primary shell copy are moving to `StarStrat`, while technical repo/path identifiers remain intentionally stable at `TeamVP/Starstrat` and the current workspace path until a dedicated migration is planned.
 
 The older scheduler/core-game plan remains available for historical review, but this document should now be treated as the working plan.
 
@@ -532,3 +544,4 @@ The older scheduler/core-game plan remains available for historical review, but 
 - May 18, 2026: Added a dedicated `/admin/moderation` queue that reuses the shared mission and strategy catalogs plus recent moderation history to surface draft, ownerless, and recently moderated community content in one review screen.
 - May 18, 2026: Added moderation-queue deep links into prefiltered mission and strategy admin catalogs so queue review can hand off directly into the existing editing screens with preserved source/status/owner/search context.
 - May 18, 2026: Polished moderation-queue deep links so the mission and strategy admin pages keep their local filters synchronized with URL params after mount, then revalidated app TypeScript and live `npx convex dev` startup (`Convex functions ready! (5.78s)`).
+- May 18, 2026: Began product naming normalization by replacing remaining legacy `StarTrade` references in active docs and primary UI copy with `StarStrat`, while keeping the new private repository slug at `TeamVP/Starstrat`.
