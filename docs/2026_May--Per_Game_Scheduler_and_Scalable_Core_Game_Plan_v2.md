@@ -496,6 +496,7 @@ Current backend status:
 - those admin mission and strategy catalogs now also surface review-state backlog counts directly in their summary cards, so operators can see `unreviewed`, `needs_changes`, approved, and ownerless-community pressure without leaving the catalog screens for `/admin/moderation`,
 - admin single-row and bulk moderation note inputs now also expose canned note presets for common review outcomes, reducing repetitive operator typing while keeping freeform notes available,
 - the `/publisher` workspace now also shows the current review state on owned community missions and strategies, so publishers can see whether content is still unreviewed, needs changes, or has been approved without gaining permission to edit that field,
+- the shared publisher/moderation slice is now functionally usable end to end for owner-scoped creation, admin review, batch moderation, and publisher-visible review feedback, so the remaining gaps are primarily workflow polish and richer reviewer-to-publisher communication rather than missing catalog lifecycle fundamentals,
 - metadata convergence now also sweeps the new publisher/community fields on users, missions, and strategies, including explicit review state on shared missions and strategies, so those rows can become explicit instead of remaining fallback-shaped legacy data,
 - starter mission game creation now passes explicit mission modes instead of inheriting the old missing-mode behavior,
 - non-trader modes now suppress and automatically drain most legacy trader/economy transcript families,
@@ -504,7 +505,7 @@ Current backend status:
 - older finished rows now converge toward the new durable result shape through bounded cron backfill instead of a one-shot migration,
 - the current community/publisher slice now validates cleanly through `npx tsc --noEmit -p tsconfig.app.json --pretty false`, `npx tsc --noEmit -p convex/tsconfig.json --pretty false`, `npx convex dev --once`, and a clean `npx convex dev` ready startup,
 - and the remaining product-policy gap is operational rather than architectural: legacy rows still need explicit mode/access backfill before the old missing-mode fallback can be safely tightened.
-- latest validation remains green through `npx tsc --noEmit -p tsconfig.app.json --pretty false`, `npx tsc --noEmit -p convex/tsconfig.json --pretty false`, `npx convex dev --once`, and a live `npx convex dev` startup reaching `Convex functions ready! (5.78s)` before clean shutdown.
+- latest validation remains green through `npx tsc --noEmit -p tsconfig.app.json --pretty false`, `npx tsc --noEmit -p convex/tsconfig.json --pretty false`, `npx convex dev --once` reaching `Convex functions ready! (5.77s)`, and a live `npx convex dev` startup reaching `Convex functions ready! (5.36s)` before clean shutdown.
 - product naming cleanup is now an explicit tracked workstream: user-facing docs and primary shell copy are moving to `StarStrat`, while technical repo/path identifiers remain intentionally stable at `TeamVP/Starstrat` and the current workspace path until a dedicated migration is planned.
 
 The older scheduler/core-game plan remains available for historical review, but this document should now be treated as the working plan.
