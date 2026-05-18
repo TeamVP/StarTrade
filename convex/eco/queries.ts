@@ -329,24 +329,6 @@ export const listActiveTraders = query({
 });
 
 /**
- * Returns recently completed trader deliveries for a game (last N delivered records).
- */
-export const listRecentDeliveries = query({
-  args: { gameId: v.id("sim_games"), limit: v.number() },
-  handler: async (ctx, args) => {
-    const game = await loadGameWithResolvedMode(ctx, args.gameId);
-    if (game === null || !gameUsesTraderEconomy(game)) return [];
-    return await ctx.db
-      .query("eco_bg_traders")
-      .withIndex("by_gameId_and_status", (q) =>
-        q.eq("gameId", args.gameId).eq("status", "delivered"),
-      )
-      .order("desc")
-      .take(args.limit);
-  },
-});
-
-/**
  * Empires and independent systems NPC background traders refuse to serve until the boycott lifts
  * (set when a buyer could not pay full delivery proceeds).
  */
@@ -538,12 +520,7 @@ export const getNpcTraderPoolSettings = query({
 export const listTradersWithDetails = query({
   args: {
     gameId: v.id("sim_games"),
-    statusFilter: v.union(
-      v.literal("enRoute"),
-      v.literal("delivered"),
-      v.literal("cancelled"),
-      v.literal("all"),
-    ),
+    statusFilter: v.union(v.literal("enRoute"), v.literal("delivered")),
     limit: v.number(),
   },
   handler: async (ctx, args) => {
@@ -578,35 +555,13 @@ export const listTradersWithDetails = query({
       };
     }
 
-    let traders: Doc<"eco_bg_traders">[];
-    const statusFilter = args.statusFilter;
-
-    if (statusFilter === "all") {
-      const statuses = ["enRoute", "delivered", "cancelled"] as const;
-      const batches = await Promise.all(
-        statuses.map((status) =>
-          ctx.db
-            .query("eco_bg_traders")
-            .withIndex("by_gameId_and_status", (q) =>
-              q.eq("gameId", args.gameId).eq("status", status),
-            )
-            .order("desc")
-            .take(args.limit),
-        ),
-      );
-      traders = batches
-        .flat()
-        .sort((a, b) => b._creationTime - a._creationTime)
-        .slice(0, args.limit);
-    } else {
-      traders = await ctx.db
-        .query("eco_bg_traders")
-        .withIndex("by_gameId_and_status", (q) =>
-          q.eq("gameId", args.gameId).eq("status", statusFilter),
-        )
-        .order("desc")
-        .take(args.limit);
-    }
+    const traders = await ctx.db
+      .query("eco_bg_traders")
+      .withIndex("by_gameId_and_status", (q) =>
+        q.eq("gameId", args.gameId).eq("status", args.statusFilter),
+      )
+      .order("desc")
+      .take(args.limit);
 
     // Resolve origin + destination system names and owner IDs.
     const systemIdSet = new Set<string>();

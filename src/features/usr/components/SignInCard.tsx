@@ -1,5 +1,7 @@
 import { useState } from "react";
+import { useQuery } from "convex/react";
 import { useAuthActions } from "@convex-dev/auth/react";
+import { api } from "../../../../convex/_generated/api";
 
 function GoogleIcon() {
   return (
@@ -28,11 +30,13 @@ function readableAuthError(message: string, flow: "signIn" | "signUp") {
 }
 
 const inputClass =
-  "w-full rounded-lg border border-st-border bg-st-bg px-3 py-2.5 text-sm text-st-fg placeholder:text-st-muted/50 transition-colors focus:border-st-accent focus:outline-none";
+  "rounded-md border border-st-border bg-st-bg px-3 py-2 text-sm text-st-fg outline-none transition-colors focus:border-st-accent";
 const labelClass = "mb-1 block text-xs font-medium text-st-muted";
 
 export function SignInCard() {
   const { signIn } = useAuthActions();
+  const authSettings = useQuery(api.siteSettings.getAuthSettings);
+  const googleOauthEnabled = authSettings?.googleOauthEnabled ?? true;
   const [flow, setFlow] = useState<"signIn" | "signUp">("signIn");
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
@@ -115,22 +119,26 @@ export function SignInCard() {
         </button>
       </div>
 
-      {/* Google OAuth */}
-      <button
-        type="button"
-        disabled={pending}
-        onClick={handleGoogleSignIn}
-        className="flex w-full items-center justify-center gap-3 rounded-lg border border-st-border bg-white/5 px-4 py-2.5 text-sm font-medium text-st-fg transition-colors hover:bg-white/10 disabled:opacity-50"
-      >
-        <GoogleIcon />
-        Continue with Google
-      </button>
+      {googleOauthEnabled ? (
+        <>
+          {/* Google OAuth */}
+          <button
+            type="button"
+            disabled={pending}
+            onClick={handleGoogleSignIn}
+            className="flex w-full items-center justify-center gap-3 rounded-lg border border-st-border bg-white/5 px-4 py-2.5 text-sm font-medium text-st-fg transition-colors hover:bg-white/10 disabled:opacity-50"
+          >
+            <GoogleIcon />
+            Continue with Google
+          </button>
 
-      <div className="my-5 flex items-center gap-3 text-xs text-st-muted">
-        <div className="h-px flex-1 bg-st-border" />
-        <span>or use email</span>
-        <div className="h-px flex-1 bg-st-border" />
-      </div>
+          <div className="my-5 flex items-center gap-3 text-xs text-st-muted">
+            <div className="h-px flex-1 bg-st-border" />
+            <span>or use email</span>
+            <div className="h-px flex-1 bg-st-border" />
+          </div>
+        </>
+      ) : null}
 
       {/* Form */}
       <form className="space-y-3" onSubmit={handleSubmit}>
@@ -143,7 +151,7 @@ export function SignInCard() {
               required
               placeholder="Commander Zara"
               autoComplete="name"
-              className={inputClass}
+              className={`${inputClass} w-full`}
             />
           </div>
         )}
@@ -156,7 +164,7 @@ export function SignInCard() {
             required
             placeholder="you@example.com"
             autoComplete="email"
-            className={inputClass}
+            className={`${inputClass} w-full`}
           />
         </div>
 
@@ -168,7 +176,7 @@ export function SignInCard() {
             required
             placeholder={flow === "signUp" ? "Min. 8 characters" : "Your password"}
             autoComplete={flow === "signIn" ? "current-password" : "new-password"}
-            className={inputClass}
+            className={`${inputClass} w-full`}
           />
         </div>
 
@@ -181,7 +189,7 @@ export function SignInCard() {
               autoComplete="new-password"
               value={confirmPassword}
               onChange={(e) => setConfirmPassword(e.target.value)}
-              className={inputClass}
+              className={`${inputClass} w-full`}
             />
           </div>
         )}

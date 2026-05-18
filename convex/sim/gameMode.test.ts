@@ -1,14 +1,21 @@
 import { describe, expect, test } from "vitest";
 import {
+  assertGameUsesTraderEconomy,
   compareTurnResolutionPhases,
   FIRST_TURN_RESOLUTION_PHASE,
   gameRunsResolutionPhase,
   nextTurnResolutionPhase,
   parseTurnResolutionPhase,
+  resolveGameMode,
   resolutionPhasesBetween,
 } from "./gameMode";
 
 describe("game mode resolution phases", () => {
+  test("defaults missing game modes to conquest core", () => {
+    expect(resolveGameMode(undefined)).toBe("conquest_core");
+    expect(resolveGameMode(null)).toBe("conquest_core");
+  });
+
   test("uses a shared initial resolution phase constant", () => {
     expect(FIRST_TURN_RESOLUTION_PHASE).toBe("movement");
   });
@@ -34,6 +41,18 @@ describe("game mode resolution phases", () => {
     expect(nextTurnResolutionPhase(conquestGame, "npc")).toBe("garrisons");
     expect(resolutionPhasesBetween(conquestGame, "npc", "garrisons")).toEqual([]);
     expect(nextTurnResolutionPhase(conquestGame, "garrisons")).toBe("finalize");
+  });
+
+  test("trader write invariants reject non-trader modes", () => {
+    expect(() =>
+      assertGameUsesTraderEconomy({ mode: "conquest_core" }, "applyBackgroundTrade"),
+    ).toThrow("applyBackgroundTrade requires trader_economy mode; got conquest_core.");
+    expect(() =>
+      assertGameUsesTraderEconomy({ mode: undefined }, "spawnBackgroundTrade"),
+    ).toThrow("spawnBackgroundTrade requires trader_economy mode; got conquest_core.");
+    expect(() =>
+      assertGameUsesTraderEconomy({ mode: "trader_economy" }, "spawnBackgroundTrade"),
+    ).not.toThrow();
   });
 
   test("trader economy mode retains trader-only phases", () => {

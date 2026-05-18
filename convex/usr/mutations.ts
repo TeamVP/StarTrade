@@ -219,7 +219,6 @@ export function shouldRefreshMissionGame(
 export const upsertMyProfile = mutation({
   args: {
     displayName: v.string(),
-    avatarUrl: v.union(v.string(), v.null()),
     timezone: v.union(v.string(), v.null()),
     analyticsConsent: v.boolean(),
   },
@@ -235,10 +234,52 @@ export const upsertMyProfile = mutation({
       .unique();
 
     if (existing === null) {
-      return await ctx.db.insert("usr_profiles", { userId, ...args });
+      return await ctx.db.insert("usr_profiles", {
+        userId,
+        avatarUrl: null,
+        ...args,
+      });
     }
 
     await ctx.db.patch("usr_profiles", existing._id, args);
+    return existing._id;
+  },
+});
+
+export const replaceMyAvatar = mutation({
+  args: {
+    storageId: v.id("_storage"),
+    avatarUrl: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const userId = await requireAuthUserId(ctx);
+    const [existing, user] = await Promise.all([
+      ctx.db
+        .query("usr_profiles")
+        .withIndex("by_userId", (q) => q.eq("userId", userId))
+        .unique(),
+      ctx.db.get("users", userId),
+    ]);
+
+    if (existing?.avatarStorageId !== undefined && existing.avatarStorageId !== args.storageId) {
+      await ctx.storage.delete(existing.avatarStorageId);
+    }
+
+    if (existing === null) {
+      return await ctx.db.insert("usr_profiles", {
+        userId,
+        displayName: normalizeOptionalUserField(user?.name) ?? "Player",
+        avatarUrl: args.avatarUrl,
+        avatarStorageId: args.storageId,
+        timezone: null,
+        analyticsConsent: false,
+      });
+    }
+
+    await ctx.db.patch("usr_profiles", existing._id, {
+      avatarUrl: args.avatarUrl,
+      avatarStorageId: args.storageId,
+    });
     return existing._id;
   },
 });

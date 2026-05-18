@@ -1,8 +1,10 @@
 import { useEffect, useState } from "react";
-import { useMutation, useQuery } from "convex/react";
+import { useAction, useMutation, useQuery } from "convex/react";
 import { api } from "../../../convex/_generated/api";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { ImageCropUpload } from "@/features/usr/components/ImageCropUpload";
+import { SignOutButton } from "@/features/usr/components/SignOutButton";
 
 function initialsFromName(name: string | null | undefined, email: string | null | undefined): string {
   const source = name ?? email ?? "?";
@@ -17,12 +19,14 @@ export function ProfilePage() {
   const account = useQuery(api.usr.queries.getMyAccount, {});
   const upsertMyProfile = useMutation(api.usr.mutations.upsertMyProfile);
   const setMyPassword = useMutation(api.usr.mutations.setMyPassword);
+  const uploadMyAvatar = useAction(api.usr.avatarActions.uploadMyAvatar);
   const [displayNameInput, setDisplayNameInput] = useState("");
-  const [avatarUrlInput, setAvatarUrlInput] = useState("");
   const [timezoneInput, setTimezoneInput] = useState("");
   const [analyticsConsent, setAnalyticsConsent] = useState(false);
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved">("idle");
   const [error, setError] = useState<string | null>(null);
+  const [avatarState, setAvatarState] = useState<"idle" | "saving" | "saved">("idle");
+  const [avatarError, setAvatarError] = useState<string | null>(null);
   const [passwordInput, setPasswordInput] = useState("");
   const [passwordConfirmInput, setPasswordConfirmInput] = useState("");
   const [passwordState, setPasswordState] = useState<"idle" | "saving" | "saved">("idle");
@@ -33,7 +37,6 @@ export function ProfilePage() {
       return;
     }
     setDisplayNameInput(account.profile?.displayName ?? account.user.name ?? "");
-    setAvatarUrlInput(account.profile?.avatarUrl ?? account.user.image ?? "");
     setTimezoneInput(account.profile?.timezone ?? "");
     setAnalyticsConsent(account.profile?.analyticsConsent ?? false);
   }, [account]);
@@ -62,7 +65,6 @@ export function ProfilePage() {
     try {
       await upsertMyProfile({
         displayName: displayNameInput,
-        avatarUrl: avatarUrlInput.trim().length > 0 ? avatarUrlInput.trim() : null,
         timezone: timezoneInput.trim().length > 0 ? timezoneInput.trim() : null,
         analyticsConsent,
       });
@@ -71,6 +73,20 @@ export function ProfilePage() {
       const message = mutationError instanceof Error ? mutationError.message : String(mutationError);
       setError(message.replace(/^[\s\S]*?Error:\s*/g, "").trim());
       setSaveState("idle");
+    }
+  }
+
+  async function handleAvatarUpload(dataUrl: string) {
+    setAvatarState("saving");
+    setAvatarError(null);
+    try {
+      await uploadMyAvatar({ dataUrl });
+      setAvatarState("saved");
+    } catch (actionError) {
+      const message = actionError instanceof Error ? actionError.message : String(actionError);
+      setAvatarError(message.replace(/^[\s\S]*?Error:\s*/g, "").trim());
+      setAvatarState("idle");
+      throw actionError;
     }
   }
 
@@ -102,27 +118,32 @@ export function ProfilePage() {
     <div className="w-full px-4 py-4 sm:px-6">
       <div className="mx-auto flex w-full max-w-4xl flex-col gap-4">
         <Card className="flex flex-col gap-4">
-          <div className="flex min-w-0 items-center gap-4">
-            {avatarUrl !== null ? (
-              <img
-                src={avatarUrl}
-                alt={displayName}
-                className="h-20 w-20 rounded-full border border-st-border object-cover"
-              />
-            ) : (
-              <div className="flex h-20 w-20 items-center justify-center rounded-full border border-st-border bg-st-panel text-xl font-semibold text-st-fg">
-                {initials}
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+            <div className="flex min-w-0 items-center gap-4">
+              {avatarUrl !== null ? (
+                <img
+                  src={avatarUrl}
+                  alt={displayName}
+                  className="h-20 w-20 rounded-full border border-st-border object-cover"
+                />
+              ) : (
+                <div className="flex h-20 w-20 items-center justify-center rounded-full border border-st-border bg-st-panel text-xl font-semibold text-st-fg">
+                  {initials}
+                </div>
+              )}
+              <div className="min-w-0">
+                <h1 className="truncate text-2xl font-semibold text-st-fg">{displayName}</h1>
+                <p className="mt-1 text-sm text-st-muted">{email}</p>
+                <p className="mt-2 text-xs uppercase tracking-wide text-st-muted">
+                  Plan <span className="font-medium text-st-fg">{plan === "pro" ? "Pro" : "Free"}</span>
+                </p>
+                <p className="mt-2 text-sm text-st-muted">
+                  Manage your gamer profile, account details, and session state from one place.
+                </p>
               </div>
-            )}
-            <div className="min-w-0">
-              <h1 className="truncate text-2xl font-semibold text-st-fg">{displayName}</h1>
-              <p className="mt-1 text-sm text-st-muted">{email}</p>
-              <p className="mt-2 text-xs uppercase tracking-wide text-st-muted">
-                Plan <span className="font-medium text-st-fg">{plan === "pro" ? "Pro" : "Free"}</span>
-              </p>
-              <p className="mt-2 text-sm text-st-muted">
-                Manage your gamer profile, account details, and session state from one place.
-              </p>
+            </div>
+            <div className="flex shrink-0 items-center sm:pt-1">
+              <SignOutButton />
             </div>
           </div>
         </Card>
@@ -130,13 +151,33 @@ export function ProfilePage() {
         <Card>
           <div className="flex items-start justify-between gap-3">
             <div>
-              <h2 className="text-sm font-semibold uppercase tracking-wide text-st-muted">Account</h2>
+              <h2 className="text-sm font-semibold uppercase tracking-wide text-st-muted">Your Profile</h2>
+              <p className="mt-2 text-sm text-st-muted">
+                Upload a photo, update your display name, and manage the profile details shown across StarStrat.
+              </p>
             </div>
             {saveState === "saved" ? (
               <span className="rounded border border-emerald-500/40 bg-emerald-950/30 px-2 py-1 text-xs font-medium text-emerald-200">
                 Saved
               </span>
             ) : null}
+          </div>
+          <div className="mt-4 flex flex-col gap-4 rounded-lg border border-st-border bg-st-bg p-4 lg:flex-row lg:items-start lg:justify-between">
+            <div className="max-w-md">
+              <p className="text-sm font-medium text-st-fg">Profile photo</p>
+              <p className="mt-2 text-sm text-st-muted">
+                Images are center-cropped to a square avatar and stored in Convex for your account.
+              </p>
+              {avatarState === "saved" ? (
+                <p className="mt-3 text-sm text-emerald-200">Profile photo updated.</p>
+              ) : null}
+              {avatarError !== null ? <p className="mt-3 text-sm text-red-300">{avatarError}</p> : null}
+            </div>
+            <ImageCropUpload
+              initialImage={avatarUrl ?? undefined}
+              onUpload={handleAvatarUpload}
+              disabled={account === undefined || account === null || avatarState === "saving"}
+            />
           </div>
           <form className="mt-4 grid gap-4" onSubmit={handleSubmit}>
             <label className="grid gap-2 text-sm text-st-muted">
@@ -149,18 +190,6 @@ export function ProfilePage() {
                 }}
                 className="rounded-md border border-st-border bg-st-bg px-3 py-2 text-sm text-st-fg outline-none transition-colors focus:border-st-accent"
                 placeholder="Enter your display name"
-              />
-            </label>
-            <label className="grid gap-2 text-sm text-st-muted">
-              <span className="text-xs uppercase tracking-wide">Avatar URL</span>
-              <input
-                value={avatarUrlInput}
-                onChange={(event) => {
-                  setAvatarUrlInput(event.target.value);
-                  setSaveState("idle");
-                }}
-                className="rounded-md border border-st-border bg-st-bg px-3 py-2 text-sm text-st-fg outline-none transition-colors focus:border-st-accent"
-                placeholder="https://example.com/avatar.png"
               />
             </label>
             <label className="grid gap-2 text-sm text-st-muted">
@@ -204,10 +233,8 @@ export function ProfilePage() {
               <dd className="mt-1 font-medium text-st-fg">{email}</dd>
             </div>
             <div className="rounded border border-st-border bg-st-bg p-3">
-              <dt className="text-xs uppercase tracking-wide">Avatar</dt>
-              <dd className="mt-1 font-medium text-st-fg">
-                {avatarUrl !== null ? "Custom avatar set" : "Using initials"}
-              </dd>
+              <dt className="text-xs uppercase tracking-wide">Publisher</dt>
+              <dd className="mt-1 font-medium text-st-fg">{account?.user.publisher ? "Yes" : "No"}</dd>
             </div>
             <div className="rounded border border-st-border bg-st-bg p-3">
               <dt className="text-xs uppercase tracking-wide">Plan</dt>

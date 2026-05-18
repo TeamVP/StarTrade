@@ -6,7 +6,12 @@ import { getAutomationStrategyByKey, toAutomationStrategyCatalogRow } from "../u
 import { listMissions as listMissionCatalogRows } from "../usr/missionCatalog";
 import { listNpcEmpirePlayers } from "../seed/npcEmpirePlayers";
 import { TRADER_EVENT_TYPES } from "../sim/eventTypePolicies";
-import { gameUsesTraderEconomy, loadGameWithResolvedMode, resolveLoadedGameMode } from "../sim/gameMode";
+import {
+  gameUsesTraderEconomy,
+  loadGameWithResolvedMode,
+  resolveGameMode,
+  resolveLoadedGameMode,
+} from "../sim/gameMode";
 
 async function loadOwnerLabels(
   ctx: QueryCtx,
@@ -357,7 +362,7 @@ export const getDatabaseHealth = query({
             gameId: selectedGame._id,
             urlCode: selectedGame.urlCode ?? null,
             name: selectedGame.name,
-            mode: selectedGame.mode ?? "trader_economy",
+            mode: resolveGameMode(selectedGame.mode),
           runtimeVersion: selectedGame.runtimeVersion ?? "v1_empire",
             status: selectedGame.status,
             currentTurn: selectedGame.currentTurn,
@@ -516,8 +521,6 @@ export const getDatabaseHealth = query({
           lastRunAt: metadataSweepState?.lastRunAt ?? null,
           lastSweepCompletedAt: metadataSweepState?.lastSweepCompletedAt ?? null,
           lastUpdatedRows: metadataSweepState?.lastUpdatedRows ?? null,
-          lastFallbackGameModes: metadataSweepState?.lastFallbackGameModes ?? null,
-          lastMissionBackedGameModes: metadataSweepState?.lastMissionBackedGameModes ?? null,
         },
         cleanupCandidates,
         cleanupCandidateCount: cleanupCandidates.length,

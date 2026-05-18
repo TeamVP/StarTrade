@@ -30,7 +30,6 @@ import { applyGarrisonRoutes } from "./garrisonRoutes";
 import { reconcileSystemHolding, resolveGameActorIdForEmpire } from "./systemHoldings";
 import { POPULATION_MIN_INHABITED_PEOPLE } from "./economy/population";
 import { findLinkBetweenSystems } from "../gal/linkUtils";
-import { getMissionByKey } from "../usr/missionCatalog";
 import { travelTurnsFromLinkCost } from "./fleetDispatch";
 import { evaluateGameFinalization } from "./finalization";
 import { recordGameTurnResolved } from "./helpers";
@@ -58,6 +57,7 @@ import {
   gameUsesTraderEconomy,
   gameRunsResolutionPhase,
   liveEventHistoryTurnsToKeep,
+  loadGameWithPersistedResolvedMode,
   nextTurnResolutionPhase,
   parseTurnResolutionPhase,
   resolutionPhasesBetween,
@@ -82,23 +82,7 @@ async function loadGameWithMissionModeHydrated(
   ctx: MutationCtx,
   gameId: Id<"sim_games">,
 ): Promise<Doc<"sim_games"> | null> {
-  const game = await ctx.db.get(gameId);
-  if (game === null || game.mode !== undefined) {
-    return game;
-  }
-
-  const missionKey = game.missionKey ?? game.lobbyScenarioKey ?? undefined;
-  if (missionKey === undefined || missionKey === null) {
-    return game;
-  }
-
-  const mission = await getMissionByKey(ctx, missionKey);
-  if (mission === null) {
-    return game;
-  }
-
-  await ctx.db.patch(gameId, { mode: mission.mode });
-  return { ...game, mode: mission.mode };
+  return await loadGameWithPersistedResolvedMode(ctx, gameId);
 }
 
 async function loadEnRouteFleetsForArrivals(
@@ -1942,15 +1926,11 @@ async function pruneHistoricalCompletedTraderVoyages(
   const cancelledBatch = await ctx.db
     .query("eco_bg_traders")
     .withIndex("by_gameId_and_status", (q) => q.eq("gameId", gameId).eq("status", "cancelled"))
-    .order("asc")
     .take(TRADER_VOYAGE_PRUNE_BATCH_SIZE);
-  const staleCancelled = cancelledBatch.filter(
-    (row) => Math.max(row.etaTurn, row.dispatchedTurn) < firstRetainedTurn,
-  );
-  for (const row of staleCancelled) {
+  for (const row of cancelledBatch) {
     await ctx.db.delete("eco_bg_traders", row._id);
   }
-  return staleCancelled.length === TRADER_VOYAGE_PRUNE_BATCH_SIZE;
+  return cancelledBatch.length === TRADER_VOYAGE_PRUNE_BATCH_SIZE;
 }
 
 async function pruneHistoricalEconomyMarketSnapshots(
@@ -1963,6 +1943,20 @@ async function pruneHistoricalEconomyMarketSnapshots(
     .withIndex("by_gameId_and_turnNumber", (q) =>
       q.eq("gameId", gameId).lt("turnNumber", firstRetainedTurn),
     )
+    .take(ECONOMY_TRANSCRIPT_PRUNE_BATCH_SIZE);
+  for (const row of staleRows) {
+    await ctx.db.delete("eco_market_snapshots", row._id);
+  }
+  return staleRows.length === ECONOMY_TRANSCRIPT_PRUNE_BATCH_SIZE;
+}
+
+async function pruneLegacyEconomyMarketSnapshotsForNonTraderGame(
+  ctx: MutationCtx,
+  gameId: Id<"sim_games">,
+): Promise<boolean> {
+  const staleRows = await ctx.db
+    .query("eco_market_snapshots")
+    .withIndex("by_gameId_and_turnNumber", (q) => q.eq("gameId", gameId))
     .take(ECONOMY_TRANSCRIPT_PRUNE_BATCH_SIZE);
   for (const row of staleRows) {
     await ctx.db.delete("eco_market_snapshots", row._id);
@@ -2349,6 +2343,8 @@ export const postCommitMaintenance = internalMutation({
             args.gameId,
             firstRetainedEconomyTurn,
           )
+        : game !== null && !gameUsesTraderEconomy(game)
+          ? await pruneLegacyEconomyMarketSnapshotsForNonTraderGame(ctx, args.gameId)
         : false;
     const hasMoreHistoricalSystemOutputs =
       game !== null

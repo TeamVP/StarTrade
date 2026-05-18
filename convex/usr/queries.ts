@@ -295,6 +295,11 @@ export const getMyAccount = query({
         .unique(),
     ]);
 
+    const resolvedAvatarUrl =
+      profile?.avatarStorageId !== undefined
+        ? await ctx.storage.getUrl(profile.avatarStorageId)
+        : profile?.avatarUrl ?? null;
+
     return {
       user: {
         _id: user._id,
@@ -306,7 +311,13 @@ export const getMyAccount = query({
         publisher: user.publisher ?? false,
         plan: user.plan ?? "free",
       },
-      profile,
+      profile:
+        profile === null
+          ? null
+          : {
+              ...profile,
+              avatarUrl: resolvedAvatarUrl,
+            },
       hasPasswordAccount: passwordAccount?.userId === user._id,
     };
   },

@@ -4,7 +4,12 @@ import { paginationOptsValidator } from "convex/server";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import type { Doc, Id } from "../_generated/dataModel";
 import { isSoundscapeEventType, isTraderEventType } from "./eventTypePolicies";
-import { gameUsesTraderEconomy, loadGameWithResolvedMode, resolveLoadedGameMode } from "./gameMode";
+import {
+  gameUsesTraderEconomy,
+  loadGameWithResolvedMode,
+  resolveGameMode,
+  resolveLoadedGameMode,
+} from "./gameMode";
 
 function resolveGameRuntimeVersion(
   runtimeVersion: "v1_empire" | "v2_game_actor" | null | undefined,
@@ -500,7 +505,7 @@ export const listRunningGamesTurnProgress = query({
         urlCode: game.urlCode ?? null,
         name: game.name,
         mapKey: game.mapKey,
-        mode: game.mode ?? "trader_economy",
+        mode: resolveGameMode(game.mode),
         runtimeVersion: resolveGameRuntimeVersion(game.runtimeVersion),
         currentTurn: game.currentTurn,
         gameStartedAt: game.startedAt,

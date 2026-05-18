@@ -1,6 +1,7 @@
 import type { Id } from "../../_generated/dataModel";
 import type { MutationCtx } from "../../_generated/server";
 import { NPC_TRADER_CATALOG_SIZE } from "../../seed/npcTraderCatalog";
+import { loadTraderEconomyGame } from "../gameMode";
 import {
   BG_TRADER_AUTOMATION_INCREASE_EARNINGS_TO_COST_RATIO,
   BG_TRADER_AUTOMATION_MIN_NPC_DELIVERIES_IN_WINDOW,
@@ -23,6 +24,8 @@ export async function maybeAdjustAutomatedNpcTraderLimits(
   if (completedTurn <= 0 || completedTurn % 10 !== 0) {
     return;
   }
+
+  await loadTraderEconomyGame(ctx, gameId, "maybeAdjustAutomatedNpcTraderLimits");
 
   const settings = await loadGameSettings(ctx, gameId);
   if (!settings.traderLimitsAutomated) {

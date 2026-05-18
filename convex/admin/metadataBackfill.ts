@@ -1,6 +1,6 @@
 import type { Id } from "../_generated/dataModel";
 import type { MutationCtx } from "../_generated/server";
-import { getMissionByKey } from "../usr/missionCatalog";
+import { resolveMissingGameMode } from "../sim/gameMode";
 import {
   resolvePublisherContentReviewStatus,
   resolvePublisherContentStatus,
@@ -24,8 +24,6 @@ export type MetadataBackfillResult = {
   updatedGames: number;
   updatedMissions: number;
   updatedStrategies: number;
-  missionBackedGameModes: number;
-  fallbackGameModes: number;
   updatedUserIds: Id<"users">[];
   updatedGameIds: Id<"sim_games">[];
   updatedMissionIds: Id<"sim_missions">[];
@@ -50,8 +48,6 @@ export async function runMetadataBackfillBatch(
   let scannedGames = 0;
   let scannedMissions = 0;
   let scannedStrategies = 0;
-  let missionBackedGameModes = 0;
-  let fallbackGameModes = 0;
 
   const updatedUserIds: Id<"users">[] = [];
   const updatedGameIds: Id<"sim_games">[] = [];
@@ -173,17 +169,10 @@ export async function runMetadataBackfillBatch(
     if (game.mode !== undefined) {
       continue;
     }
-    const missionKey = game.missionKey ?? game.lobbyScenarioKey ?? undefined;
-    const mission = missionKey === undefined || missionKey === null ? null : await getMissionByKey(ctx, missionKey);
-    const mode = mission?.mode ?? "trader_economy";
-    await ctx.db.patch("sim_games", game._id, { mode });
+    const resolved = await resolveMissingGameMode(ctx, game);
+    await ctx.db.patch("sim_games", game._id, { mode: resolved.mode });
     updatedGames += 1;
     updatedGameIds.push(game._id);
-    if (mission !== null) {
-      missionBackedGameModes += 1;
-    } else {
-      fallbackGameModes += 1;
-    }
   }
 
   return {
@@ -196,8 +185,6 @@ export async function runMetadataBackfillBatch(
     updatedGames,
     updatedMissions,
     updatedStrategies,
-    missionBackedGameModes,
-    fallbackGameModes,
     updatedUserIds,
     updatedGameIds,
     updatedMissionIds,

@@ -21,11 +21,8 @@ function StatusBadge({ status }: { status: string }) {
   const classes =
     status === "enRoute"
       ? "bg-sky-500/15 text-sky-300 ring-1 ring-sky-500/30"
-      : status === "delivered"
-        ? "bg-emerald-500/15 text-emerald-300 ring-1 ring-emerald-500/30"
-        : "bg-st-border/40 text-st-muted ring-1 ring-st-border";
-  const label =
-    status === "enRoute" ? "En Route" : status === "delivered" ? "Delivered" : "Cancelled";
+      : "bg-emerald-500/15 text-emerald-300 ring-1 ring-emerald-500/30";
+  const label = status === "enRoute" ? "En Route" : "Delivered";
   return (
     <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${classes}`}>
       {label}
@@ -37,7 +34,7 @@ function StatusBadge({ status }: { status: string }) {
 
 type EnrichedTrader = {
   _id: Id<"eco_bg_traders">;
-  status: "enRoute" | "delivered" | "cancelled";
+  status: "enRoute" | "delivered";
   commodity: string;
   cargoUnits: number;
   boughtAtPrice: number;

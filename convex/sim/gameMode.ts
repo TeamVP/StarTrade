@@ -3,6 +3,7 @@ import type { MutationCtx, QueryCtx } from "../_generated/server";
 import { getMissionByKey } from "../usr/missionCatalog";
 
 export type GameMode = "conquest_core" | "conquest_plus" | "trader_economy";
+export type ResolvedMissingGameModeSource = "mission" | "legacy_trader_runtime" | "fallback";
 export const TURN_RESOLUTION_PHASES = [
   "movement",
   "economy",
@@ -63,10 +64,40 @@ const GAME_MODE_CONFIG: Record<GameMode, GameModeConfig> = {
 };
 
 export function resolveGameMode(mode: GameMode | undefined | null): GameMode {
-  return mode ?? "trader_economy";
+  return mode ?? "conquest_core";
 }
 
 type DbCtx = { db: QueryCtx["db"] | MutationCtx["db"] };
+
+async function legacyGameShowsTraderRuntime(
+  ctx: DbCtx,
+  gameId: Id<"sim_games">,
+): Promise<boolean> {
+  const activeVoyages = await ctx.db
+    .query("eco_bg_traders")
+    .withIndex("by_gameId_and_status", (q) => q.eq("gameId", gameId).eq("status", "enRoute"))
+    .take(1);
+  return activeVoyages.length > 0;
+}
+
+export async function resolveMissingGameMode(
+  ctx: DbCtx,
+  game: Doc<"sim_games">,
+): Promise<{ mode: GameMode; source: ResolvedMissingGameModeSource }> {
+  const missionKey = game.missionKey ?? game.lobbyScenarioKey ?? undefined;
+  if (missionKey !== undefined && missionKey !== null) {
+    const mission = await getMissionByKey(ctx, missionKey);
+    if (mission !== null) {
+      return { mode: mission.mode, source: "mission" };
+    }
+  }
+
+  if (await legacyGameShowsTraderRuntime(ctx, game._id)) {
+    return { mode: "trader_economy", source: "legacy_trader_runtime" };
+  }
+
+  return { mode: "conquest_core", source: "fallback" };
+}
 
 export async function resolveLoadedGameMode(
   ctx: DbCtx,
@@ -76,17 +107,8 @@ export async function resolveLoadedGameMode(
     return game;
   }
 
-  const missionKey = game.missionKey ?? game.lobbyScenarioKey ?? undefined;
-  if (missionKey === undefined || missionKey === null) {
-    return game;
-  }
-
-  const mission = await getMissionByKey(ctx, missionKey);
-  if (mission === null) {
-    return game;
-  }
-
-  return { ...game, mode: mission.mode };
+  const resolved = await resolveMissingGameMode(ctx, game);
+  return { ...game, mode: resolved.mode };
 }
 
 export async function persistLoadedGameMode(
@@ -124,6 +146,30 @@ export function gameUsesTraderEconomy(
   game: Pick<Doc<"sim_games">, "mode"> | { mode?: GameMode | null | undefined },
 ): boolean {
   return getGameModeConfig(game).capabilities.traderEconomy;
+}
+
+export function assertGameUsesTraderEconomy(
+  game: Pick<Doc<"sim_games">, "mode"> | { mode?: GameMode | null | undefined },
+  operation: string,
+): void {
+  const mode = resolveGameMode(game.mode);
+  if (gameUsesTraderEconomy(game)) {
+    return;
+  }
+  throw new Error(`${operation} requires trader_economy mode; got ${mode}.`);
+}
+
+export async function loadTraderEconomyGame(
+  ctx: MutationCtx,
+  gameId: Id<"sim_games">,
+  operation: string,
+): Promise<Doc<"sim_games">> {
+  const game = await loadGameWithPersistedResolvedMode(ctx, gameId);
+  if (game === null) {
+    throw new Error(`${operation} requires an existing game.`);
+  }
+  assertGameUsesTraderEconomy(game, operation);
+  return game;
 }
 
 export function liveEventHistoryTurnsToKeep(

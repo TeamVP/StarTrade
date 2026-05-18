@@ -177,8 +177,6 @@ export const runMetadataBackfillSweep = internalMutation({
         updatedGames: result.updatedGames + nextPass.updatedGames,
         updatedMissions: result.updatedMissions + nextPass.updatedMissions,
         updatedStrategies: result.updatedStrategies + nextPass.updatedStrategies,
-        missionBackedGameModes: result.missionBackedGameModes + nextPass.missionBackedGameModes,
-        fallbackGameModes: result.fallbackGameModes + nextPass.fallbackGameModes,
         updatedUserIds: [...result.updatedUserIds, ...nextPass.updatedUserIds],
         updatedGameIds: [...result.updatedGameIds, ...nextPass.updatedGameIds],
         updatedMissionIds: [...result.updatedMissionIds, ...nextPass.updatedMissionIds],
@@ -203,8 +201,6 @@ export const runMetadataBackfillSweep = internalMutation({
       lastRunAt: now,
       lastSweepCompletedAt: result.sweepComplete ? now : (existingState?.lastSweepCompletedAt ?? undefined),
       lastUpdatedRows: updatedRows,
-      lastFallbackGameModes: result.fallbackGameModes,
-      lastMissionBackedGameModes: result.missionBackedGameModes,
     };
 
     if (existingState === null) {
@@ -213,7 +209,10 @@ export const runMetadataBackfillSweep = internalMutation({
         ...nextState,
       });
     } else {
-      await ctx.db.patch("admin_metadata_backfill_state", existingState._id, nextState);
+      await ctx.db.replace("admin_metadata_backfill_state", existingState._id, {
+        key: METADATA_BACKFILL_STATE_KEY,
+        ...nextState,
+      });
     }
 
     return result;

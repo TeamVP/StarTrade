@@ -98,8 +98,8 @@ export function DatabaseScreen() {
       setMetadataResult(
         updated > 0
           ? result.sweepComplete
-            ? `Backfilled ${updated} rows: ${result.updatedUsers} users, ${result.updatedMissions} missions, ${result.updatedStrategies} strategies, ${result.updatedGames} games (${result.missionBackedGameModes} mission-backed, ${result.fallbackGameModes} fallback game modes). Metadata sweep complete.`
-            : `Backfilled ${updated} rows: ${result.updatedUsers} users, ${result.updatedMissions} missions, ${result.updatedStrategies} strategies, ${result.updatedGames} games (${result.missionBackedGameModes} mission-backed, ${result.fallbackGameModes} fallback game modes). Continue running to scan older rows.`
+            ? `Backfilled ${updated} rows: ${result.updatedUsers} users, ${result.updatedMissions} missions, ${result.updatedStrategies} strategies, ${result.updatedGames} games. Metadata sweep complete.`
+            : `Backfilled ${updated} rows: ${result.updatedUsers} users, ${result.updatedMissions} missions, ${result.updatedStrategies} strategies, ${result.updatedGames} games. Continue running to scan older rows.`
           : result.sweepComplete
             ? "Metadata sweep complete. No scanned rows needed backfill in the final pass."
             : `Scanned ${scanned} rows with no updates in this pass. Continue running to scan older rows.`,
@@ -284,12 +284,10 @@ export function DatabaseScreen() {
           <div>Strategies missing review: <span className="font-medium text-st-fg">{overview?.metadataCounts.missingStrategyReviewStatus ?? "-"}</span></div>
           <div>Strategies missing status: <span className="font-medium text-st-fg">{overview?.metadataCounts.missingStrategyStatus ?? "-"}</span></div>
         </div>
-        <div className="mt-4 grid gap-2 md:grid-cols-2 xl:grid-cols-5 text-sm text-st-muted">
+        <div className="mt-4 grid gap-2 md:grid-cols-2 xl:grid-cols-3 text-sm text-st-muted">
           <div>Last auto run: <span className="font-medium text-st-fg">{formatDateTime(overview?.metadataSweep.lastRunAt ?? null)}</span></div>
           <div>Last completed sweep: <span className="font-medium text-st-fg">{formatDateTime(overview?.metadataSweep.lastSweepCompletedAt ?? null)}</span></div>
           <div>Last updated rows: <span className="font-medium text-st-fg">{overview?.metadataSweep.lastUpdatedRows ?? "-"}</span></div>
-          <div>Last mission-backed modes: <span className="font-medium text-st-fg">{overview?.metadataSweep.lastMissionBackedGameModes ?? "-"}</span></div>
-          <div>Last fallback modes: <span className="font-medium text-st-fg">{overview?.metadataSweep.lastFallbackGameModes ?? "-"}</span></div>
         </div>
         {metadataResult !== null ? (
           <p className="mt-3 text-sm text-st-muted">{metadataResult}</p>

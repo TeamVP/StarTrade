@@ -65,6 +65,10 @@ const AdminDatabasePage = lazyNamedComponent(
   () => import("@/app/router/AdminDatabasePage"),
   "AdminDatabasePage",
 );
+const AdminSettingsPage = lazyNamedComponent(
+  () => import("@/app/router/AdminSettingsPage"),
+  "AdminSettingsPage",
+);
 const AdminModerationPage = lazyNamedComponent(
   () => import("@/app/router/AdminModerationPage"),
   "AdminModerationPage",
@@ -171,6 +175,7 @@ const adminChildRoutes = [
   { path: "history", element: <HistoryPage /> },
   { path: "results", element: <ResultsPage /> },
   { path: "db", element: <AdminDatabasePage /> },
+  { path: "settings", element: <AdminSettingsPage /> },
   { path: "moderation", element: <AdminModerationPage /> },
   { path: "strategies", element: <AdminStrategiesPage /> },
   { path: "mission", element: <AdminMissionsPage /> },

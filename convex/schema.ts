@@ -203,8 +203,11 @@ export default defineSchema({
     lastRunAt: v.optional(v.number()),
     lastSweepCompletedAt: v.optional(v.number()),
     lastUpdatedRows: v.optional(v.number()),
-    lastFallbackGameModes: v.optional(v.number()),
-    lastMissionBackedGameModes: v.optional(v.number()),
+  }).index("by_key", ["key"]),
+
+  site_settings: defineTable({
+    key: v.string(),
+    googleOauthEnabled: v.boolean(),
   }).index("by_key", ["key"]),
 
   sim_game_results: defineTable({
@@ -466,6 +469,7 @@ export default defineSchema({
     userId: v.id("users"),
     displayName: v.string(),
     avatarUrl: v.union(v.string(), v.null()),
+    avatarStorageId: v.optional(v.id("_storage")),
     timezone: v.union(v.string(), v.null()),
     analyticsConsent: v.boolean(),
     /** The user's preferred starting strategy profile, applied at game start when shown the ready modal. */

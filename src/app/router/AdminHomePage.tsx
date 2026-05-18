@@ -38,6 +38,7 @@ const liveLinks: readonly AdminLink[] = [
 
 const adminLinks: readonly AdminLink[] = [
   { to: "/admin/db", label: "Database", description: "Database health, cleanup backlog, and maintenance actions." },
+  { to: "/admin/settings", label: "Settings", description: "Authentication and site-wide controls." },
   { to: "/admin/users", label: "Users", description: "View auth users and create new user records." },
   {
     to: "/admin/moderation",

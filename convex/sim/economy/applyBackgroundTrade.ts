@@ -29,6 +29,7 @@ import { internalMutation } from "../../_generated/server";
 import { v } from "convex/values";
 import type { GameSettings } from "./gameSettings";
 import { loadGameSettings } from "./gameSettings";
+import { loadTraderEconomyGame } from "../gameMode";
 import { computeSystemFoodPrice, foodOversupplyUnits } from "./foodPricing";
 import { computeFoodDeliverySettlementPrices } from "./foodTradeSettlement";
 import { travelTurnsFromLinkCost } from "../fleetDispatch";
@@ -1030,6 +1031,7 @@ export async function applyBackgroundTrade(
   ctx: MutationCtx,
   params: { gameId: Id<"sim_games">; turnNumber: number; traderShipCostMult?: number },
 ): Promise<void> {
+  await loadTraderEconomyGame(ctx, params.gameId, "applyBackgroundTrade");
   await setupBackgroundTradeNpcs(ctx, params);
   await spawnBackgroundTrade(ctx, params);
   await deliverBackgroundTrade(ctx, params);
@@ -1039,6 +1041,7 @@ export async function setupBackgroundTradeNpcs(
   ctx: MutationCtx,
   params: { gameId: Id<"sim_games"> },
 ): Promise<void> {
+  await loadTraderEconomyGame(ctx, params.gameId, "setupBackgroundTradeNpcs");
   const settings = await loadGameSettings(ctx, params.gameId);
   await ensureNpcTraderIdentitiesForGame(ctx, params.gameId);
   await refillActiveNpcIdentities(ctx, {
@@ -1051,6 +1054,7 @@ export async function deliverBackgroundTrade(
   ctx: MutationCtx,
   params: { gameId: Id<"sim_games">; turnNumber: number },
 ): Promise<void> {
+  await loadTraderEconomyGame(ctx, params.gameId, "deliverBackgroundTrade");
   const settings = await loadGameSettings(ctx, params.gameId);
   await deliverArrivedTraders(ctx, { ...params, settings });
 }
@@ -1059,6 +1063,7 @@ export async function spawnBackgroundTrade(
   ctx: MutationCtx,
   params: { gameId: Id<"sim_games">; turnNumber: number; traderShipCostMult?: number },
 ): Promise<void> {
+  await loadTraderEconomyGame(ctx, params.gameId, "spawnBackgroundTrade");
   const settings = await loadGameSettings(ctx, params.gameId);
   await spawnNewTraders(ctx, {
     ...params,
