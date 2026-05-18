@@ -650,6 +650,7 @@ export function AdminStrategiesPage() {
   const createAutomationStrategy = useMutation(api.admin.mutations.createAutomationStrategy);
   const updateAutomationStrategy = useMutation(api.admin.mutations.updateAutomationStrategy);
   const bulkUpdateAutomationStrategyStatus = useMutation(api.admin.mutations.bulkUpdateAutomationStrategyStatus);
+  const bulkUpdateAutomationStrategyReviewStatus = useMutation(api.admin.mutations.bulkUpdateAutomationStrategyReviewStatus);
   const bulkUpdateAutomationStrategyOwner = useMutation(api.admin.mutations.bulkUpdateAutomationStrategyOwner);
   const bulkUpdateAutomationStrategySource = useMutation(api.admin.mutations.bulkUpdateAutomationStrategySource);
   const seedMissingAutomationStrategies = useMutation(api.admin.mutations.seedMissingAutomationStrategies);
@@ -671,6 +672,10 @@ export function AdminStrategiesPage() {
   const [bulkBusy, setBulkBusy] = useState(false);
   const [bulkResult, setBulkResult] = useState<string | null>(null);
   const [bulkError, setBulkError] = useState<string | null>(null);
+  const [bulkReviewStatus, setBulkReviewStatus] = useState<StrategyCatalogRow["reviewStatus"]>("approved");
+  const [bulkReviewBusy, setBulkReviewBusy] = useState(false);
+  const [bulkReviewResult, setBulkReviewResult] = useState<string | null>(null);
+  const [bulkReviewError, setBulkReviewError] = useState<string | null>(null);
   const [bulkOwnerUserId, setBulkOwnerUserId] = useState<Id<"users"> | "">("");
   const [bulkOwnerBusy, setBulkOwnerBusy] = useState(false);
   const [bulkOwnerResult, setBulkOwnerResult] = useState<string | null>(null);
@@ -746,6 +751,8 @@ export function AdminStrategiesPage() {
   function clearBulkFeedback() {
     setBulkResult(null);
     setBulkError(null);
+    setBulkReviewResult(null);
+    setBulkReviewError(null);
     setBulkOwnerResult(null);
     setBulkOwnerError(null);
     setBulkSourceResult(null);
@@ -825,6 +832,33 @@ export function AdminStrategiesPage() {
       setBulkOwnerError(mutationErrorMessage(error));
     } finally {
       setBulkOwnerBusy(false);
+    }
+  }
+
+  async function handleBulkReviewUpdate() {
+    clearBulkFeedback();
+    if (selectedKeys.length === 0) {
+      setBulkReviewError("Select at least one strategy first.");
+      setBulkReviewResult(null);
+      return;
+    }
+
+    setBulkReviewBusy(true);
+    setBulkReviewResult(null);
+    setBulkReviewError(null);
+    try {
+      const result = await bulkUpdateAutomationStrategyReviewStatus({
+        keys: selectedKeys,
+        reviewStatus: bulkReviewStatus,
+        moderationNote: bulkModerationNote,
+      });
+      setBulkReviewResult(`Updated ${result.updatedKeys.length} strategy review states. Skipped ${result.skippedKeys.length}.`);
+      setBulkModerationNote("");
+      setSelectedKeys([]);
+    } catch (error) {
+      setBulkReviewError(mutationErrorMessage(error));
+    } finally {
+      setBulkReviewBusy(false);
     }
   }
 
@@ -976,6 +1010,24 @@ export function AdminStrategiesPage() {
               </div>
 
               <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
+                <div className="grid gap-3 lg:grid-cols-[180px_auto]">
+                  <select
+                    value={bulkReviewStatus}
+                    onChange={(event) => setBulkReviewStatus(event.target.value as StrategyCatalogRow["reviewStatus"])}
+                    className="rounded border border-st-border bg-st-bg px-3 py-2 text-sm text-st-fg"
+                  >
+                    <option value="unreviewed">Set review to unreviewed</option>
+                    <option value="needs_changes">Set review to needs_changes</option>
+                    <option value="approved">Set review to approved</option>
+                  </select>
+                  <Button type="button" onClick={() => void handleBulkReviewUpdate()} disabled={bulkReviewBusy || selectedKeys.length === 0}>
+                    {bulkReviewBusy ? "Applying..." : "Apply review"}
+                  </Button>
+                </div>
+                <p className="text-xs text-st-muted">Official rows only accept approved review state</p>
+              </div>
+
+              <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
                 <div className="grid gap-3 lg:grid-cols-[minmax(0,260px)_auto]">
                   <select
                     value={bulkOwnerUserId}
@@ -1027,6 +1079,8 @@ export function AdminStrategiesPage() {
 
             {bulkResult !== null ? <p className="text-sm text-emerald-300">{bulkResult}</p> : null}
             {bulkError !== null ? <p className="text-sm text-red-300">{bulkError}</p> : null}
+            {bulkReviewResult !== null ? <p className="text-sm text-emerald-300">{bulkReviewResult}</p> : null}
+            {bulkReviewError !== null ? <p className="text-sm text-red-300">{bulkReviewError}</p> : null}
             {bulkOwnerResult !== null ? <p className="text-sm text-emerald-300">{bulkOwnerResult}</p> : null}
             {bulkOwnerError !== null ? <p className="text-sm text-red-300">{bulkOwnerError}</p> : null}
             {bulkSourceResult !== null ? <p className="text-sm text-emerald-300">{bulkSourceResult}</p> : null}

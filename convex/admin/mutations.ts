@@ -261,7 +261,7 @@ async function recordModerationEvent(
     contentType: "mission" | "strategy";
     contentKey: string;
     actorUserId: Id<"users">;
-    action: "created" | "updated" | "bulk_status_updated" | "bulk_owner_updated" | "bulk_source_updated";
+    action: "created" | "updated" | "bulk_status_updated" | "bulk_review_updated" | "bulk_owner_updated" | "bulk_source_updated";
     summary: string;
     note?: string;
   },
@@ -1629,6 +1629,63 @@ export const bulkUpdateAutomationStrategyStatus = mutation({
   },
 });
 
+export const bulkUpdateAutomationStrategyReviewStatus = mutation({
+  args: {
+    keys: v.array(v.string()),
+    reviewStatus: v.union(
+      v.literal("unreviewed"),
+      v.literal("needs_changes"),
+      v.literal("approved"),
+    ),
+    moderationNote: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (userId === null) {
+      throw new Error("Authentication required.");
+    }
+
+    const keys = normalizeUniqueKeys(args.keys, normalizeStrategyKey);
+    const updatedKeys: string[] = [];
+    const skippedKeys: string[] = [];
+
+    for (const key of keys) {
+      const existing = await getAutomationStrategyByKey(ctx, key);
+      if (existing === null) {
+        skippedKeys.push(key);
+        continue;
+      }
+
+      const currentStatus = resolvePublisherContentStatus({ status: existing.status });
+      if (isTerminalContentStatus(currentStatus)) {
+        skippedKeys.push(key);
+        continue;
+      }
+
+      if ((existing.source ?? "official") === "official" && args.reviewStatus !== "approved") {
+        skippedKeys.push(key);
+        continue;
+      }
+
+      await ctx.db.patch("usr_automation_strategies", existing._id, {
+        reviewStatus: args.reviewStatus,
+        updatedAt: Date.now(),
+      });
+      await recordModerationEvent(ctx, {
+        contentType: "strategy",
+        contentKey: key,
+        actorUserId: userId,
+        action: "bulk_review_updated",
+        summary: `Bulk updated review state to ${args.reviewStatus}.`,
+        note: args.moderationNote,
+      });
+      updatedKeys.push(key);
+    }
+
+    return { updatedKeys, skippedKeys };
+  },
+});
+
 export const bulkUpdateAutomationStrategyOwner = mutation({
   args: {
     keys: v.array(v.string()),
@@ -2271,6 +2328,70 @@ export const bulkUpdateMissionStatus = mutation({
         actorUserId: userId,
         action: "bulk_status_updated",
         summary: `Bulk updated status to ${args.status}.`,
+        note: args.moderationNote,
+      });
+      updatedKeys.push(key);
+    }
+
+    return { updatedKeys, skippedKeys };
+  },
+});
+
+export const bulkUpdateMissionReviewStatus = mutation({
+  args: {
+    keys: v.array(v.string()),
+    reviewStatus: v.union(
+      v.literal("unreviewed"),
+      v.literal("needs_changes"),
+      v.literal("approved"),
+    ),
+    moderationNote: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (userId === null) {
+      throw new Error("Authentication required.");
+    }
+
+    const keys = normalizeUniqueKeys(args.keys, normalizeMissionKey);
+    const updatedKeys: string[] = [];
+    const skippedKeys: string[] = [];
+
+    for (const key of keys) {
+      const existing = await ctx.db
+        .query("sim_missions")
+        .withIndex("by_key", (q) => q.eq("key", key))
+        .unique();
+      if (existing === null) {
+        skippedKeys.push(key);
+        continue;
+      }
+
+      const currentStatus = resolvePublisherContentStatus({
+        status: existing.status,
+        published: existing.published,
+        defaultDraft: true,
+      });
+      if (isTerminalContentStatus(currentStatus)) {
+        skippedKeys.push(key);
+        continue;
+      }
+
+      if ((existing.source ?? "official") === "official" && args.reviewStatus !== "approved") {
+        skippedKeys.push(key);
+        continue;
+      }
+
+      await ctx.db.patch("sim_missions", existing._id, {
+        reviewStatus: args.reviewStatus,
+        updatedAt: Date.now(),
+      });
+      await recordModerationEvent(ctx, {
+        contentType: "mission",
+        contentKey: key,
+        actorUserId: userId,
+        action: "bulk_review_updated",
+        summary: `Bulk updated review state to ${args.reviewStatus}.`,
         note: args.moderationNote,
       });
       updatedKeys.push(key);

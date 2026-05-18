@@ -183,6 +183,7 @@ export default defineSchema({
       v.literal("created"),
       v.literal("updated"),
       v.literal("bulk_status_updated"),
+      v.literal("bulk_review_updated"),
       v.literal("bulk_owner_updated"),
       v.literal("bulk_source_updated"),
     ),
