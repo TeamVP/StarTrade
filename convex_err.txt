@@ -1,0 +1,33 @@
+- Preparing Convex functions...
+
+[36mA minor update is available for Convex[39m [2m(1.38.0 → 1.39.1)[22m
+[2mChangelog:[22m [4mhttps://github.com/get-convex/convex-js/blob/main/CHANGELOG.md#changelog[24m
+[32m✔[39m 19:14:11 Convex functions ready! (7.01s)
+- Preparing Convex functions...
+
+[32m✔[39m 19:45:25 Convex functions ready! (6.63s)
+- Preparing Convex functions...
+
+[32m✔[39m Added table indexes:
+  [+] admin_content_moderation_events.by_actorUserId_and_createdAt   actorUserId, createdAt, _creationTime
+  [+] admin_content_moderation_events.by_contentType_and_contentKey_and_createdAt   contentType, contentKey, createdAt, _creationTime
+✔ 19:46:37 Convex functions ready! (6.21s)
+- Preparing Convex functions...
+
+[32m✔[39m 19:46:55 Convex functions ready! (5.43s)
+- Preparing Convex functions...
+
+[32m✔[39m 19:47:17 Convex functions ready! (6.08s)
+- Preparing Convex functions...
+
+[32m✔[39m 19:48:55 Convex functions ready! (5.6s)
+- Preparing Convex functions...
+
+[32m✔[39m 19:49:13 Convex functions ready! (5.65s)
+Filesystem changed during push, retrying...
+- Preparing Convex functions...
+
+[32m✔[39m 19:49:18 Convex functions ready! (5.05s)
+- Preparing Convex functions...
+
+[32m✔[39m 21:03:58 Convex functions ready! (5.97s)

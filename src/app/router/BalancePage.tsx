@@ -63,7 +63,7 @@ export function BalancePage() {
             <span>· Turn {activeGame.currentTurn}</span>
           </div>
 
-          <BalancePanel gameId={activeGame._id} />
+          <BalancePanel gameId={activeGame._id} gameMode={activeGame.mode} />
         </>
       )}
     </div>

@@ -157,6 +157,34 @@ describe("soundscapeMapping", () => {
     expect(intent?.isListenerOwnedEvent).toBe(true);
   });
 
+  test("prefers actor ownership identity over empire fallback for V2 listener matching", () => {
+    const intent = toSoundscapeBellIntent({
+      event: {
+        _id: "evt-5",
+        eventType: "fleet_arrived",
+        payload: JSON.stringify({ systemId: "sys-a", fleetId: "fleet-v2" }),
+        turnNumber: 12,
+        actorType: "fleet",
+        actorId: "fleet-v2",
+      },
+      camera,
+      systemsById: {
+        "sys-a": { x: 120, y: 120 },
+      },
+      ownership: {
+        fleetEmpireById: { "fleet-v2": "emp-aurora" },
+        fleetActorById: { "fleet-v2": "actor-aurora" },
+      },
+      listenerActorId: "actor-aurora",
+      listenerEmpireId: "emp-aurora",
+    });
+
+    expect(intent?.ownerActorId).toBe("actor-aurora");
+    expect(intent?.listenerActorId).toBe("actor-aurora");
+    expect(intent?.sampleKey).toBe("player_exploration");
+    expect(intent?.isListenerOwnedEvent).toBe(true);
+  });
+
   test("drops events that cannot be located on the map", () => {
     const event: SoundscapeEventRow = {
       _id: "evt-2",

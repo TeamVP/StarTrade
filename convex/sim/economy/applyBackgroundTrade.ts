@@ -53,6 +53,10 @@ import {
   pickNpcIdentityForNewVoyage,
   refillActiveNpcIdentities,
 } from "./npcTraderRuntime";
+import {
+  TRADER_EVENT_DELIVERED,
+  TRADER_EVENT_DISPATCHED,
+} from "../eventTypePolicies";
 
 type DeliverTraderSettings = Pick<
   GameSettings,
@@ -345,7 +349,7 @@ async function settleFoodDeliveriesGroup(
     await ctx.db.insert("sim_events", {
       gameId: params.gameId,
       turnNumber: params.turnNumber,
-      eventType: "bg_trader_delivered",
+      eventType: TRADER_EVENT_DELIVERED,
       actorType: "trader",
       actorId: trader._id,
       targetType: "system",
@@ -477,7 +481,7 @@ async function deliverNonFoodTrader(
     await ctx.db.insert("sim_events", {
       gameId: params.gameId,
       turnNumber: params.turnNumber,
-      eventType: "bg_trader_delivered",
+      eventType: TRADER_EVENT_DELIVERED,
       actorType: "trader",
       actorId: trader._id,
       targetType: "system",
@@ -573,7 +577,7 @@ async function deliverNonFoodTrader(
     await ctx.db.insert("sim_events", {
       gameId: params.gameId,
       turnNumber: params.turnNumber,
-      eventType: "bg_trader_delivered",
+      eventType: TRADER_EVENT_DELIVERED,
       actorType: "trader",
       actorId: trader._id,
       targetType: "system",
@@ -978,7 +982,7 @@ async function spawnNewTraders(
     await ctx.db.insert("sim_events", {
       gameId: params.gameId,
       turnNumber: params.turnNumber,
-      eventType: "bg_trader_dispatched",
+      eventType: TRADER_EVENT_DISPATCHED,
       actorType: "trader",
       actorId: origin._id,
       targetType: "system",

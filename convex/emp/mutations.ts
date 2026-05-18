@@ -34,15 +34,52 @@ async function assertEmpireSeatForGame(
       q.eq("gameId", params.gameId).eq("userId", params.userId),
     )
     .unique();
-  if (
-    binding === null ||
-    !binding.isActive ||
-    binding.role !== "empire" ||
-    binding.empireId === null
-  ) {
+  if (binding === null || !binding.isActive || binding.role !== "empire") {
     throw new Error("You need an active empire seat in this game.");
   }
-  return binding.empireId;
+  if (binding.empireId !== null) {
+    return binding.empireId;
+  }
+
+  const game = await ctx.db.get("sim_games", params.gameId);
+  const runtimeVersion = game?.runtimeVersion ?? "v1_empire";
+  if (runtimeVersion === "v2_game_actor") {
+    const actor = await ctx.db
+      .query("sim_game_actors")
+      .withIndex("by_gameId_and_controllerUserId", (q) =>
+        q.eq("gameId", params.gameId).eq("controllerUserId", params.userId),
+      )
+      .unique();
+    if (actor?.legacyEmpireId !== null && actor?.legacyEmpireId !== undefined) {
+      return actor.legacyEmpireId;
+    }
+  }
+
+  throw new Error("You need an active empire seat in this game.");
+}
+
+async function resolveEmpireIdForMetaUpdate(
+  ctx: MutationCtx,
+  args: {
+    empireId?: Id<"emp_states">;
+    gameActorId?: Id<"sim_game_actors">;
+  },
+): Promise<Id<"emp_states">> {
+  if (args.empireId !== undefined) {
+    return args.empireId;
+  }
+  if (args.gameActorId === undefined) {
+    throw new Error("Empire target is required.");
+  }
+
+  const actor = await ctx.db.get("sim_game_actors", args.gameActorId);
+  if (actor === null) {
+    throw new Error("Game actor not found.");
+  }
+  if (actor.legacyEmpireId === null) {
+    throw new Error("This game actor is not linked to a legacy empire row.");
+  }
+  return actor.legacyEmpireId;
 }
 
 const HEX_COLOR_RE = /^#[0-9a-fA-F]{6}$/;
@@ -67,7 +104,8 @@ export const adjustTreasury = mutation({
 
 export const updateEmpireMeta = mutation({
   args: {
-    empireId: v.id("emp_states"),
+    empireId: v.optional(v.id("emp_states")),
+    gameActorId: v.optional(v.id("sim_game_actors")),
     name: v.optional(v.string()),
     colorHex: v.optional(v.string()),
     playerName: v.optional(v.string()),
@@ -76,7 +114,11 @@ export const updateEmpireMeta = mutation({
     strategyStartTurn: v.optional(v.union(v.number(), v.null())),
   },
   handler: async (ctx, args) => {
-    const empire = await ctx.db.get("emp_states", args.empireId);
+    const empireId = await resolveEmpireIdForMetaUpdate(ctx, {
+      empireId: args.empireId,
+      gameActorId: args.gameActorId,
+    });
+    const empire = await ctx.db.get("emp_states", empireId);
     if (empire === null) {
       throw new Error("Empire not found.");
     }
@@ -159,7 +201,7 @@ export const updateEmpireMeta = mutation({
       patch.strategyActivatedAtTurn = undefined;
     }
 
-    await ctx.db.patch("emp_states", args.empireId, patch);
+    await ctx.db.patch("emp_states", empireId, patch);
     if (
       args.strategyJson !== undefined ||
       args.strategyStartMode !== undefined ||
@@ -170,7 +212,7 @@ export const updateEmpireMeta = mutation({
     await touchGameMeaningfulActivity(ctx, empire.gameId, {
       humanAction: userId !== null,
     });
-    return args.empireId;
+    return empireId;
   },
 });
 
@@ -181,6 +223,7 @@ export const updateEmpireMeta = mutation({
 export const patchStrategicSlider = mutation({
   args: {
     gameId: v.id("sim_games"),
+    gameActorId: v.optional(v.id("sim_game_actors")),
     key: SLIDER_KEY,
     level: v.union(STRATEGIC_LEVEL, v.null()),
   },
@@ -201,6 +244,15 @@ export const patchStrategicSlider = mutation({
       gameId: args.gameId,
       userId,
     });
+    if (args.gameActorId !== undefined) {
+      const actor = await ctx.db.get("sim_game_actors", args.gameActorId);
+      if (actor === null || actor.gameId !== args.gameId) {
+        throw new Error("Game actor not found.");
+      }
+      if (actor.legacyEmpireId !== empireId) {
+        throw new Error("Game actor does not match your empire seat.");
+      }
+    }
     const empire = await ctx.db.get("emp_states", empireId);
     if (empire === null || empire.gameId !== args.gameId) {
       throw new Error("Empire not found.");

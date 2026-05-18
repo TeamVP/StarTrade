@@ -18,6 +18,10 @@ type RetentionClass = "discarded" | "official" | "archived_debug";
 
 type EmpireStanding = {
   empire: Doc<"emp_states">;
+  actorId: Id<"sim_game_actors"> | null;
+  actorSlotNumber: number | null;
+  actorLabel: string | null;
+  actorDisplayName: string | null;
   controllerKind: "human" | "npc";
   userId: Id<"users"> | null;
   npcPlayerKey: string | null;
@@ -93,7 +97,8 @@ async function loadEmpireStandings(
   ctx: MutationCtx,
   gameId: Id<"sim_games">,
 ): Promise<EmpireStanding[]> {
-  const [empires, systems, fleets, roles] = await Promise.all([
+  const [game, empires, systems, fleets, roles, actors] = await Promise.all([
+    ctx.db.get("sim_games", gameId),
     ctx.db.query("emp_states").withIndex("by_gameId", (q) => q.eq("gameId", gameId)).collect(),
     ctx.db.query("gal_systems").withIndex("by_gameId", (q) => q.eq("gameId", gameId)).take(512),
     ctx.db.query("flt_fleets").withIndex("by_gameId", (q) => q.eq("gameId", gameId)).take(512),
@@ -101,6 +106,7 @@ async function loadEmpireStandings(
       .query("usr_game_roles")
       .withIndex("by_gameId_and_role", (q) => q.eq("gameId", gameId).eq("role", "empire"))
       .collect(),
+    ctx.db.query("sim_game_actors").withIndex("by_gameId", (q) => q.eq("gameId", gameId)).collect(),
   ]);
 
   const starsByEmpire = new Map<string, number>();
@@ -121,31 +127,63 @@ async function loadEmpireStandings(
     });
   }
 
+  const controllerEmpireByUserId =
+    game?.runtimeVersion === "v2_game_actor"
+      ? new Map(
+          actors
+            .filter(
+              (actor) =>
+                actor.controllerUserId !== null && actor.legacyEmpireId !== null,
+            )
+            .map((actor) => [actor.controllerUserId!, actor.legacyEmpireId!] as const),
+        )
+      : new Map<Id<"users">, Id<"emp_states">>();
+  const actorByEmpireId =
+    game?.runtimeVersion === "v2_game_actor"
+      ? new Map(
+          actors
+            .filter((actor) => actor.legacyEmpireId !== null)
+            .map((actor) => [actor.legacyEmpireId!, actor] as const),
+        )
+      : new Map<Id<"emp_states">, Doc<"sim_game_actors">>();
+
   const humanUserByEmpire = new Map<string, Id<"users">>();
   for (const role of roles) {
-    if (role.empireId === null) {
+    const empireId = role.empireId ?? controllerEmpireByUserId.get(role.userId) ?? null;
+    if (empireId === null) {
       continue;
     }
-    const existingUserId = humanUserByEmpire.get(role.empireId);
+    const existingUserId = humanUserByEmpire.get(empireId);
     if (existingUserId === undefined || role.isActive) {
-      humanUserByEmpire.set(role.empireId, role.userId);
+      humanUserByEmpire.set(empireId, role.userId);
     }
   }
 
   return empires.map((empire) => {
+    const actor = actorByEmpireId.get(empire._id) ?? null;
     const starsControlled = starsByEmpire.get(empire._id) ?? 0;
     const fleetStats = fleetsByEmpire.get(empire._id) ?? { count: 0, strength: 0 };
-    const userId = humanUserByEmpire.get(empire._id) ?? null;
-    const controllerKind = empire.controller === "human" || userId !== null ? "human" : "npc";
+    const userId = actor?.controllerUserId ?? humanUserByEmpire.get(empire._id) ?? null;
+    const controllerKind =
+      actor?.controllerKind ??
+      (empire.controller === "human" || userId !== null ? "human" : "npc");
     const normalizedStrategy =
-      empire.strategyJson !== undefined ? canonicalizeStrategyJson(empire.strategyJson) : null;
+      actor?.strategyJsonSnapshot !== null && actor?.strategyJsonSnapshot !== undefined
+        ? canonicalizeStrategyJson(actor.strategyJsonSnapshot)
+        : empire.strategyJson !== undefined
+          ? canonicalizeStrategyJson(empire.strategyJson)
+          : null;
 
     return {
       empire,
+      actorId: actor?._id ?? null,
+      actorSlotNumber: actor?.slotNumber ?? null,
+      actorLabel: actor?.factionLabelSnapshot ?? null,
+      actorDisplayName: actor?.displayNameSnapshot ?? null,
       controllerKind,
       userId,
-      npcPlayerKey: empire.npcPlayerKey ?? null,
-      playerName: empire.playerName ?? null,
+      npcPlayerKey: actor?.npcPlayerKey ?? empire.npcPlayerKey ?? null,
+      playerName: actor?.displayNameSnapshot ?? empire.playerName ?? null,
       starsControlled,
       populationFinal: empire.population,
       fleetCountFinal: fleetStats.count,
@@ -161,12 +199,13 @@ async function loadEmpireStandings(
           ? null
           : JSON.stringify(summarizeAutomationStrategy(normalizedStrategy)),
       strategyFingerprint:
-        normalizedStrategy === null ? null : strategyFingerprint(normalizedStrategy),
+        actor?.strategyFingerprint ??
+        (normalizedStrategy === null ? null : strategyFingerprint(normalizedStrategy)),
       strategyLibraryKey: null,
       strategySourceKind:
         normalizedStrategy === null
           ? null
-          : controllerKind === "npc"
+          : actor?.controllerKind === "npc" || controllerKind === "npc"
             ? "npc_default"
             : "custom",
       isAlive: empire.resignedAt === undefined && (starsControlled > 0 || fleetStats.strength > 0),
@@ -191,6 +230,7 @@ async function upsertResultsForGame(
 
   const baseResult = {
     gameId: game._id,
+    urlCode: game.urlCode ?? null,
     name: game.name,
     mapKey: game.mapKey,
     missionKey: game.missionKey ?? game.lobbyScenarioKey,
@@ -252,7 +292,16 @@ async function upsertResultsForGame(
     const empResult = {
       gameResultId,
       gameId: game._id,
+      gameEndedAt: endedAt,
+      gameIsOfficial: retentionClass === "official",
+      gameMapKey: game.mapKey,
+      gameMissionKey: game.missionKey ?? game.lobbyScenarioKey,
+      gameLobbyScenarioKey: game.lobbyScenarioKey,
       empireId: row.empire._id,
+      actorId: row.actorId,
+      actorSlotNumber: row.actorSlotNumber,
+      actorLabel: row.actorLabel,
+      actorDisplayName: row.actorDisplayName,
       empireKey: row.empire.empireKey,
       empireName: row.empire.name,
       colorHex: row.empire.colorHex,
@@ -295,6 +344,100 @@ async function upsertResultsForGame(
   }
 
   await ctx.db.patch("sim_game_results", gameResultId, { winnerEmpireResultId });
+}
+
+export async function backfillDurableResultSnapshotsForGame(
+  ctx: MutationCtx,
+  gameId: Id<"sim_games">,
+): Promise<boolean> {
+  const game = await ctx.db.get(gameId);
+  if (game === null || game.status !== "finished") {
+    return false;
+  }
+
+  const gameResult = await ctx.db
+    .query("sim_game_results")
+    .withIndex("by_gameId", (q) => q.eq("gameId", gameId))
+    .unique();
+  if (gameResult === null) {
+    return false;
+  }
+
+  let changed = false;
+  if (gameResult.urlCode === undefined || gameResult.urlCode !== (game.urlCode ?? null)) {
+    await ctx.db.patch("sim_game_results", gameResult._id, {
+      urlCode: game.urlCode ?? null,
+    });
+    changed = true;
+  }
+
+  const actorByEmpireId =
+    game.runtimeVersion === "v2_game_actor"
+      ? new Map(
+          (
+            await ctx.db
+              .query("sim_game_actors")
+              .withIndex("by_gameId", (q) => q.eq("gameId", gameId))
+              .collect()
+          )
+            .filter((actor) => actor.legacyEmpireId !== null)
+            .map((actor) => [actor.legacyEmpireId!, actor] as const),
+        )
+      : new Map<Id<"emp_states">, Doc<"sim_game_actors">>();
+
+  const empResults = await ctx.db
+    .query("emp_results")
+    .withIndex("by_gameResultId", (q) => q.eq("gameResultId", gameResult._id))
+    .collect();
+
+  for (const row of empResults) {
+    const actor = row.empireId === null ? null : (actorByEmpireId.get(row.empireId) ?? null);
+    const patch: Partial<Doc<"emp_results">> = {};
+    if (row.gameEndedAt === undefined || row.gameEndedAt !== gameResult.endedAt) {
+      patch.gameEndedAt = gameResult.endedAt;
+    }
+    if (row.gameIsOfficial === undefined || row.gameIsOfficial !== gameResult.isOfficial) {
+      patch.gameIsOfficial = gameResult.isOfficial;
+    }
+    if (row.gameMapKey === undefined || row.gameMapKey !== gameResult.mapKey) {
+      patch.gameMapKey = gameResult.mapKey;
+    }
+    if (
+      row.gameMissionKey === undefined ||
+      row.gameMissionKey !== (gameResult.missionKey ?? null)
+    ) {
+      patch.gameMissionKey = gameResult.missionKey ?? null;
+    }
+    if (
+      row.gameLobbyScenarioKey === undefined ||
+      row.gameLobbyScenarioKey !== gameResult.lobbyScenarioKey
+    ) {
+      patch.gameLobbyScenarioKey = gameResult.lobbyScenarioKey;
+    }
+    if (actor !== null) {
+      if (row.actorId === undefined || row.actorId !== actor._id) {
+        patch.actorId = actor._id;
+      }
+      if (row.actorSlotNumber === undefined || row.actorSlotNumber !== actor.slotNumber) {
+        patch.actorSlotNumber = actor.slotNumber;
+      }
+      if (row.actorLabel === undefined || row.actorLabel !== actor.factionLabelSnapshot) {
+        patch.actorLabel = actor.factionLabelSnapshot;
+      }
+      if (
+        row.actorDisplayName === undefined ||
+        row.actorDisplayName !== actor.displayNameSnapshot
+      ) {
+        patch.actorDisplayName = actor.displayNameSnapshot;
+      }
+    }
+    if (Object.keys(patch).length > 0) {
+      await ctx.db.patch("emp_results", row._id, patch);
+      changed = true;
+    }
+  }
+
+  return changed;
 }
 
 export async function queueFinishedGameCleanup(

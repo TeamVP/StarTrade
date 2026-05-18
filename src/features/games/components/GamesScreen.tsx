@@ -35,23 +35,40 @@ function formatFinishReason(reason: string): string {
     .join(" ");
 }
 
+function formatDateTimeShort(value: number | null): string {
+  if (value === null) return "-";
+  return new Date(value).toLocaleTimeString();
+}
+
 function TurnProgressCell(props: {
   now: number;
   turnState: "open" | "resolving" | "preparing" | "prepared" | "resolved" | null;
   preparationState: "queued" | "preparing" | "prepared" | "committed" | "stale" | null;
   resolutionPhase: string | null;
+  turnWorkLabel: string | null;
   resolvingStartedAt: number | null;
   turnPausedUntilMs: number | undefined;
   simCronTurnsDisabled: boolean | undefined;
+  nextPreparationWakeAt: number | null;
+  nextBoundaryWakeAt: number | null;
+  schedulerGeneration: number | null;
+  lastWakeScheduledAt: number | null;
+  lastWakeObservedAt: number | null;
 }) {
   const {
     now,
     turnState,
     preparationState,
     resolutionPhase,
+    turnWorkLabel,
     resolvingStartedAt,
     turnPausedUntilMs,
     simCronTurnsDisabled,
+    nextPreparationWakeAt,
+    nextBoundaryWakeAt,
+    schedulerGeneration,
+    lastWakeScheduledAt,
+    lastWakeObservedAt,
   } = props;
 
   const autopilotOff = simCronTurnsDisabled === true;
@@ -83,7 +100,7 @@ function TurnProgressCell(props: {
     );
   } else if (turnState === "prepared") {
     body = (
-      <span className="text-sky-200/90">Prepared — waiting to commit</span>
+      <span className="text-sky-200/90">{turnWorkLabel ?? "Prepared"} — waiting to commit</span>
     );
   } else if (turnState === "resolved") {
     body = (
@@ -91,7 +108,7 @@ function TurnProgressCell(props: {
     );
   } else {
     const stateLabel = turnState === "preparing" ? "Preparing" : "Resolving";
-    const phaseLabel = resolutionPhase ?? "…";
+    const phaseLabel = turnWorkLabel ?? resolutionPhase ?? "…";
     if (resolvingStartedAt === null) {
       body = (
         <div>
@@ -137,6 +154,14 @@ function TurnProgressCell(props: {
         </div>
       ) : null}
       {body}
+      <div className="mt-2 space-y-0.5 text-xs text-st-muted">
+        <div>
+          Wake gen {schedulerGeneration ?? "-"} · prep {formatDateTimeShort(nextPreparationWakeAt)} · boundary {formatDateTimeShort(nextBoundaryWakeAt)}
+        </div>
+        <div>
+          Scheduled {formatDateTimeShort(lastWakeScheduledAt)} · observed {formatDateTimeShort(lastWakeObservedAt)}
+        </div>
+      </div>
     </div>
   );
 }
@@ -244,6 +269,8 @@ export function GamesScreen() {
                 <th className="border-b border-st-border px-3 py-2 font-medium">Name</th>
                 <th className="border-b border-st-border px-3 py-2 font-medium">Game URL</th>
                 <th className="border-b border-st-border px-3 py-2 font-medium">Map</th>
+                <th className="border-b border-st-border px-3 py-2 font-medium">Mode</th>
+                <th className="border-b border-st-border px-3 py-2 font-medium">Runtime</th>
                 <th className="border-b border-st-border px-3 py-2 font-medium">Turn</th>
                 <th className="border-b border-st-border px-3 py-2 font-medium">
                   Autopilot
@@ -283,6 +310,12 @@ export function GamesScreen() {
                     <td className="border-b border-st-border/60 px-3 py-2 font-mono text-xs text-st-fg">
                       {game.mapKey}
                     </td>
+                    <td className="border-b border-st-border/60 px-3 py-2 font-mono text-xs text-st-fg">
+                      {game.mode}
+                    </td>
+                    <td className="border-b border-st-border/60 px-3 py-2 font-mono text-xs text-st-fg">
+                      {game.runtimeVersion}
+                    </td>
                     <td className="border-b border-st-border/60 px-3 py-2 text-st-fg">
                       {game.currentTurn}
                     </td>
@@ -315,9 +348,15 @@ export function GamesScreen() {
                         turnState={game.turnState}
                         preparationState={game.preparationState}
                         resolutionPhase={game.resolutionPhase}
+                        turnWorkLabel={game.turnWorkLabel}
                         resolvingStartedAt={game.resolvingStartedAt}
                         turnPausedUntilMs={game.turnPausedUntilMs}
                         simCronTurnsDisabled={game.simCronTurnsDisabled}
+                        nextPreparationWakeAt={game.nextPreparationWakeAt}
+                        nextBoundaryWakeAt={game.nextBoundaryWakeAt}
+                        schedulerGeneration={game.schedulerGeneration}
+                        lastWakeScheduledAt={game.lastWakeScheduledAt}
+                        lastWakeObservedAt={game.lastWakeObservedAt}
                       />
                     </td>
                     <td className="border-b border-st-border/60 px-3 py-2 text-xs text-st-muted">
@@ -414,7 +453,7 @@ export function GamesScreen() {
                     <p className="mt-1 text-sm text-st-muted">
                       {result.winner === null
                         ? "No winner recorded"
-                        : `${result.winner.empireName} won${result.winner.playerName !== null ? ` as ${result.winner.playerName}` : ""}`}
+                        : `${result.winner.empireName} won as ${result.winner.controllerLabel}${result.winner.actorDisplayName !== null ? ` · ${result.winner.actorDisplayName}` : result.winner.actorLabel !== null ? ` · ${result.winner.actorLabel}` : ""}`}
                     </p>
                     <p className="mt-1 text-xs text-st-muted">
                       Ended {new Date(result.endedAt).toLocaleString()} · Score{" "}

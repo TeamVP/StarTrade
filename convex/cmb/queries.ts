@@ -2,19 +2,42 @@ import { query, type QueryCtx } from "../_generated/server";
 import type { Doc, Id } from "../_generated/dataModel";
 import { v } from "convex/values";
 
+function resolveGameRuntimeVersion(
+  runtimeVersion: "v1_empire" | "v2_game_actor" | null | undefined,
+): "v1_empire" | "v2_game_actor" {
+  return runtimeVersion ?? "v1_empire";
+}
+
 type BattleShipCounts = {
   attackerShipsAtStart: number | null;
   defenderShipsAtStart: number | null;
 };
 
 type ActiveBattleWithShipCounts = Doc<"cmb_battles"> & {
+  runtimeVersion: "v1_empire" | "v2_game_actor";
   attackerShips: number;
   defenderShips: number;
   attackerShipsAtStart: number;
   defenderShipsAtStart: number;
   attackerMotherships: number;
   defenderMotherships: number;
+  attackerActorId: Id<"sim_game_actors"> | null;
+  attackerActorSlotNumber: number | null;
+  attackerActorLabel: string | null;
+  attackerActorDisplayName: string | null;
+  attackerDisplayLabel: string;
+  defenderActorId: Id<"sim_game_actors"> | null;
+  defenderActorSlotNumber: number | null;
+  defenderActorLabel: string | null;
+  defenderActorDisplayName: string | null;
+  defenderDisplayLabel: string;
   latestRound: BattleRoundReplay | null;
+};
+
+type BattleSideCounts = {
+  ships: number;
+  empireIds: Id<"emp_states">[];
+  actorIds: Id<"sim_game_actors">[];
 };
 
 type MothershipDamageReplay = {
@@ -236,6 +259,26 @@ async function countIdleMotherships(
   return ships.filter((ship) => ship.empireId === empireId).length;
 }
 
+async function countIdleMothershipsForActors(
+  ctx: QueryCtx,
+  battle: Doc<"cmb_battles">,
+  actorIds: Id<"sim_game_actors">[],
+): Promise<number> {
+  const ships = await ctx.db
+    .query("col_colony_ships")
+    .withIndex("by_gameId_and_originSystemId_and_status", (q) =>
+      q
+        .eq("gameId", battle.gameId)
+        .eq("originSystemId", battle.systemId)
+        .eq("status", "idle"),
+    )
+    .take(32);
+  const actorIdSet = new Set(actorIds);
+  return ships.filter(
+    (ship) => ship.gameActorId !== undefined && actorIdSet.has(ship.gameActorId),
+  ).length;
+}
+
 async function countIdleMothershipsForEmpires(
   ctx: QueryCtx,
   battle: Doc<"cmb_battles">,
@@ -251,16 +294,39 @@ async function countIdleMothershipsForEmpires(
 async function sumFleetStrengths(
   ctx: QueryCtx,
   fleetIds: Id<"flt_fleets">[],
-): Promise<{ ships: number; empireIds: Id<"emp_states">[] }> {
+): Promise<BattleSideCounts> {
   let ships = 0;
   const empireIds: Id<"emp_states">[] = [];
+  const actorIds: Id<"sim_game_actors">[] = [];
   for (const fleetId of uniqueFleetIds(fleetIds)) {
     const fleet = await ctx.db.get("flt_fleets", fleetId);
     if (fleet === null) continue;
     ships += Math.max(0, Math.floor(fleet.strength));
     empireIds.push(fleet.empireId);
+    if (fleet.gameActorId !== undefined) {
+      actorIds.push(fleet.gameActorId);
+    }
   }
-  return { ships, empireIds };
+  return { ships, empireIds, actorIds };
+}
+
+function formatBattleSideLabel(params: {
+  runtimeVersion: "v1_empire" | "v2_game_actor";
+  empire: Doc<"emp_states"> | null;
+  actor: Doc<"sim_game_actors"> | null;
+}): string {
+  if (
+    params.runtimeVersion === "v2_game_actor" &&
+    params.actor !== null
+  ) {
+    const actorName =
+      params.actor.displayNameSnapshot ??
+      params.actor.factionLabelSnapshot ??
+      params.empire?.name ??
+      "";
+    return `Actor ${params.actor.slotNumber}${actorName.length > 0 ? ` · ${actorName}` : ""}`;
+  }
+  return params.empire?.name ?? "Empire";
 }
 
 async function loadLatestBattleRoundReplay(
@@ -291,12 +357,34 @@ async function loadLatestBattleRoundReplay(
 export const listActiveBattles = query({
   args: { gameId: v.id("sim_games"), limit: v.number() },
   handler: async (ctx, args) => {
+    const game = await ctx.db.get("sim_games", args.gameId);
+    const runtimeVersion = resolveGameRuntimeVersion(game?.runtimeVersion);
     const battles = await ctx.db
       .query("cmb_battles")
       .withIndex("by_gameId_and_status", (q) =>
         q.eq("gameId", args.gameId).eq("status", "active"),
       )
       .take(args.limit);
+
+    const [empires, actors] = await Promise.all([
+      ctx.db
+        .query("emp_states")
+        .withIndex("by_gameId", (q) => q.eq("gameId", args.gameId))
+        .collect(),
+      runtimeVersion === "v2_game_actor"
+        ? ctx.db
+            .query("sim_game_actors")
+            .withIndex("by_gameId", (q) => q.eq("gameId", args.gameId))
+            .collect()
+        : Promise.resolve([] as Doc<"sim_game_actors">[]),
+    ]);
+    const empireById = new Map(empires.map((empire) => [empire._id, empire] as const));
+    const actorById = new Map(actors.map((actor) => [actor._id, actor] as const));
+    const actorByLegacyEmpireId = new Map(
+      actors
+        .filter((actor) => actor.legacyEmpireId !== null)
+        .map((actor) => [actor.legacyEmpireId!, actor] as const),
+    );
 
     const result: ActiveBattleWithShipCounts[] = [];
     for (const battle of battles) {
@@ -312,23 +400,50 @@ export const listActiveBattles = query({
       );
       const attackerShips = attackerCounts.ships;
       const defenderShips = defenderCounts.ships;
+      const attackerActor =
+        (attackerCounts.actorIds[0] !== undefined
+          ? actorById.get(attackerCounts.actorIds[0])
+          : null) ?? actorByLegacyEmpireId.get(battle.attackerEmpireId) ?? null;
+      const defenderActor =
+        (defenderCounts.actorIds[0] !== undefined
+          ? actorById.get(defenderCounts.actorIds[0])
+          : null) ?? actorByLegacyEmpireId.get(battle.defenderEmpireId) ?? null;
+      const attackerEmpire = empireById.get(battle.attackerEmpireId) ?? null;
+      const defenderEmpire = empireById.get(battle.defenderEmpireId) ?? null;
 
       result.push({
         ...battle,
+        runtimeVersion,
         attackerShips,
         defenderShips,
         attackerShipsAtStart: startCounts.attackerShipsAtStart ?? attackerShips,
         defenderShipsAtStart: startCounts.defenderShipsAtStart ?? defenderShips,
-        attackerMotherships: await countIdleMothershipsForEmpires(
-          ctx,
-          battle,
-          attackerCounts.empireIds,
-        ),
-        defenderMotherships: await countIdleMothershipsForEmpires(
-          ctx,
-          battle,
-          defenderCounts.empireIds,
-        ),
+        attackerMotherships:
+          runtimeVersion === "v2_game_actor" && attackerCounts.actorIds.length > 0
+            ? await countIdleMothershipsForActors(ctx, battle, attackerCounts.actorIds)
+            : await countIdleMothershipsForEmpires(ctx, battle, attackerCounts.empireIds),
+        defenderMotherships:
+          runtimeVersion === "v2_game_actor" && defenderCounts.actorIds.length > 0
+            ? await countIdleMothershipsForActors(ctx, battle, defenderCounts.actorIds)
+            : await countIdleMothershipsForEmpires(ctx, battle, defenderCounts.empireIds),
+        attackerActorId: attackerActor?._id ?? null,
+        attackerActorSlotNumber: attackerActor?.slotNumber ?? null,
+        attackerActorLabel: attackerActor?.factionLabelSnapshot ?? null,
+        attackerActorDisplayName: attackerActor?.displayNameSnapshot ?? null,
+        attackerDisplayLabel: formatBattleSideLabel({
+          runtimeVersion,
+          empire: attackerEmpire,
+          actor: attackerActor,
+        }),
+        defenderActorId: defenderActor?._id ?? null,
+        defenderActorSlotNumber: defenderActor?.slotNumber ?? null,
+        defenderActorLabel: defenderActor?.factionLabelSnapshot ?? null,
+        defenderActorDisplayName: defenderActor?.displayNameSnapshot ?? null,
+        defenderDisplayLabel: formatBattleSideLabel({
+          runtimeVersion,
+          empire: defenderEmpire,
+          actor: defenderActor,
+        }),
         latestRound,
       });
     }

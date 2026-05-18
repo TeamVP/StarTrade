@@ -125,6 +125,17 @@ export async function wipeGamePhaseBatch(
       }
       return "done";
     }
+    case "sim_game_actors": {
+      const batch = await ctx.db
+        .query("sim_game_actors")
+        .withIndex("by_gameId", (q) => q.eq("gameId", gameId))
+        .take(n);
+      if (batch.length === 0) return "done";
+      for (const doc of batch) {
+        await ctx.db.delete("sim_game_actors", doc._id);
+      }
+      return batch.length === n ? "more" : "done";
+    }
     case "cmb_battles": {
       const batch = await ctx.db
         .query("cmb_battles")

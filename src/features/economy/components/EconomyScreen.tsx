@@ -5,6 +5,7 @@ import type { Id } from "../../../../convex/_generated/dataModel";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { useActiveGame } from "@/features/galaxy/hooks/useActiveGame";
+import { gameModeSupportsTraderGameplay } from "@/features/games/gameMode";
 import {
   formatPopulationPeople,
   formatPopulationPeopleOptional,
@@ -21,17 +22,34 @@ function fmtOptional(n: number | undefined): string {
 
 export function EconomyScreen(props: {
   playerEmpireId?: Id<"emp_states"> | null;
+  playerActorId?: Id<"sim_game_actors"> | null;
   hideGamePicker?: boolean;
 }) {
   const playerEmpireId = props.playerEmpireId ?? null;
+  const playerActorId = props.playerActorId ?? null;
   const hideGamePicker = props.hideGamePicker === true;
   const { games, activeGame, setSelectedGameId } = useActiveGame();
   const setEmpireTaxRate = useMutation(api.eco.mutations.setEmpireTaxRate);
-
-  const snapshot = useQuery(
-    api.eco.adminQueries.adminEconomySnapshot,
+  const traderEconomyEnabled = gameModeSupportsTraderGameplay(activeGame?.mode);
+  const playerScopedView = playerEmpireId !== null || playerActorId !== null;
+  const myMembershipQuery = useQuery(
+    api.usr.queries.getMyGameMembership,
     activeGame ? { gameId: activeGame._id } : "skip",
   );
+
+  const adminSnapshot = useQuery(
+    api.eco.adminQueries.adminEconomySnapshot,
+    !playerScopedView && activeGame && traderEconomyEnabled
+      ? { gameId: activeGame._id }
+      : "skip",
+  );
+  const playerSnapshot = useQuery(
+    api.eco.queries.getMyEconomySnapshot,
+    playerScopedView && activeGame && traderEconomyEnabled
+      ? { gameId: activeGame._id }
+      : "skip",
+  );
+  const snapshot = playerScopedView ? playerSnapshot : adminSnapshot;
 
   const empires = useMemo(
     () => (snapshot?.kind === "ok" ? snapshot.empires : []),
@@ -56,6 +74,12 @@ export function EconomyScreen(props: {
   const [taxSliderDraftPercent, setTaxSliderDraftPercent] = useState<number | null>(null);
 
   const focusEmpireId = useMemo((): Id<"emp_states"> | null => {
+    if (playerActorId !== null) {
+      const actorMatch = empires.find(
+        (empire) => empire.actorId === playerActorId,
+      );
+      if (actorMatch !== undefined) return actorMatch._id;
+    }
     if (playerEmpireId !== null) {
       if (empires.some((e) => e._id === playerEmpireId)) return playerEmpireId;
       return null;
@@ -68,7 +92,28 @@ export function EconomyScreen(props: {
       return selectedEmpireId;
     }
     return empires[0]._id;
-  }, [empires, selectedEmpireId, playerEmpireId]);
+  }, [empires, playerActorId, selectedEmpireId, playerEmpireId]);
+  const matchesFocusedOwnership = useMemo(
+    () =>
+      (system: {
+        ownerEmpireId: Id<"emp_states"> | null;
+        runtimeVersion?: "v1_empire" | "v2_game_actor";
+        ownerActorId?: Id<"sim_game_actors"> | null;
+      }) => {
+        if (
+          myMembershipQuery?.runtimeVersion === "v2_game_actor" &&
+          myMembershipQuery.actorId !== null &&
+          myMembershipQuery.actorId !== undefined &&
+          system.runtimeVersion === "v2_game_actor" &&
+          system.ownerActorId !== null &&
+          system.ownerActorId !== undefined
+        ) {
+          return system.ownerActorId === myMembershipQuery.actorId;
+        }
+        return focusEmpireId !== null && system.ownerEmpireId === focusEmpireId;
+      },
+    [focusEmpireId, myMembershipQuery?.actorId, myMembershipQuery?.runtimeVersion],
+  );
 
   const selectedEmpire = useMemo(
     () => (focusEmpireId === null ? null : empires.find((e) => e._id === focusEmpireId) ?? null),
@@ -90,17 +135,17 @@ export function EconomyScreen(props: {
   const effectiveSelectedSystemId = useMemo((): Id<"gal_systems"> | null => {
     if (selectedSystemId === null || focusEmpireId === null) return null;
     const row = systems.find((s) => s._id === selectedSystemId);
-    if (row === undefined || row.ownerEmpireId !== focusEmpireId) return null;
+    if (row === undefined || !matchesFocusedOwnership(row)) return null;
     return selectedSystemId;
-  }, [systems, selectedSystemId, focusEmpireId]);
+  }, [systems, selectedSystemId, focusEmpireId, matchesFocusedOwnership]);
 
   const empireSystems = useMemo(() => {
     if (focusEmpireId === null) return [];
     return systems
-      .filter((s) => s.ownerEmpireId === focusEmpireId)
+      .filter((s) => matchesFocusedOwnership(s))
       .slice()
       .sort((a, b) => a.name.localeCompare(b.name));
-  }, [systems, focusEmpireId]);
+  }, [systems, focusEmpireId, matchesFocusedOwnership]);
 
   const empireRollups = useMemo(() => {
     let population = 0;
@@ -138,16 +183,16 @@ export function EconomyScreen(props: {
       <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end sm:justify-between">
         <div>
           <h2 className="text-lg font-semibold text-st-fg">
-            {playerEmpireId !== null ? "Economy" : "Economy (admin)"}
+            {playerScopedView ? "Economy" : "Economy (admin)"}
           </h2>
           <p className="mt-1 max-w-xl text-sm text-st-muted">
-            {playerEmpireId !== null
+            {playerScopedView
               ? "Treasury, stockpiles, and production for your empire."
               : "Inspect treasury, stockpiles, and per-star production inputs for each empire. Only game admins see live data. Population is stored and summed as people (shown compactly as k / M / B); under 1,000 people after a turn abandons a colony."}
           </p>
         </div>
         {!hideGamePicker ? (
-        <label className="flex min-w-[200px] flex-col gap-1 text-xs text-st-muted">
+        <label className="flex min-w-50 flex-col gap-1 text-xs text-st-muted">
           Game
           <select
             className="rounded border border-st-border bg-st-bg px-3 py-2 text-sm text-st-fg"
@@ -186,6 +231,15 @@ export function EconomyScreen(props: {
         <Card>
           <p className="text-sm text-st-muted">Loading economy data…</p>
         </Card>
+      ) : !traderEconomyEnabled ? (
+        <Card>
+          <p className="text-sm text-st-muted text-center py-6">
+            Economy inspector is disabled for this game mode.
+          </p>
+          <p className="mt-1 text-xs text-st-muted text-center">
+            This game is running in <span className="font-mono text-st-fg">{activeGame.mode ?? "conquest_core"}</span>, so trader-market admin queries and controls are intentionally disabled.
+          </p>
+        </Card>
       ) : snapshot.kind === "unauthenticated" ? (
         <Card>
           <p className="text-sm text-st-muted">Sign in to view this page.</p>
@@ -193,13 +247,31 @@ export function EconomyScreen(props: {
       ) : snapshot.kind === "forbidden" ? (
         <Card className="border-amber-500/40">
           <p className="text-sm text-st-fg">
-            You need the <strong className="font-medium">admin</strong> role on this game to open the
-            economy inspector. Empire players should use the Galaxy sidebar for their own snapshot.
+            {playerScopedView ? (
+              <>
+                You need an active <strong className="font-medium">empire</strong> seat on this
+                game to open your economy view.
+              </>
+            ) : (
+              <>
+                You need the <strong className="font-medium">admin</strong> role on this game to open the
+                economy inspector. Empire players should use the Galaxy sidebar for their own snapshot.
+              </>
+            )}
           </p>
         </Card>
       ) : snapshot.kind === "not_found" ? (
         <Card>
           <p className="text-sm text-st-muted">Game not found.</p>
+        </Card>
+      ) : snapshot.kind === "disabled" ? (
+        <Card>
+          <p className="text-sm text-st-muted text-center py-6">
+            Economy inspector is disabled for this game mode.
+          </p>
+          <p className="mt-1 text-xs text-st-muted text-center">
+            This game is running in <span className="font-mono text-st-fg">{snapshot.game.mode}</span>, so trader-market admin queries and controls are intentionally disabled.
+          </p>
         </Card>
       ) : (
         <>
@@ -218,7 +290,7 @@ export function EconomyScreen(props: {
           </div>
 
           <Card>
-            {playerEmpireId !== null ? (
+            {playerScopedView ? (
               <p className="text-xs font-semibold uppercase tracking-wide text-st-muted">
                 Your empire
                 {selectedEmpire !== null ? (
@@ -321,6 +393,11 @@ export function EconomyScreen(props: {
                       void setEmpireTaxRate({
                         gameId: activeGame._id,
                         empireId: selectedEmpire._id,
+                        ...(myMembershipQuery?.empireId === selectedEmpire._id &&
+                        myMembershipQuery.actorId !== null &&
+                        myMembershipQuery.actorId !== undefined
+                          ? { gameActorId: myMembershipQuery.actorId }
+                          : {}),
                         taxPercent: taxSliderValue,
                       }).then(() => setTaxSliderDraftPercent(null));
                     }}
@@ -405,7 +482,7 @@ export function EconomyScreen(props: {
                 <p className="mt-3 text-sm text-st-muted">No systems owned by this empire.</p>
               ) : (
                 <div className="mt-3 overflow-x-auto">
-                  <table className="w-full min-w-[620px] border-collapse text-left text-sm">
+                  <table className="w-full min-w-155 border-collapse text-left text-sm">
                     <thead>
                       <tr className="border-b border-st-border text-xs uppercase text-st-muted">
                         <th className="py-2 pr-2 font-medium">System</th>
@@ -603,6 +680,12 @@ export function EconomyScreen(props: {
                     <div>
                       <dt className="text-xs text-st-muted">Holding (tax / production / unrest)</dt>
                       <dd className="mt-1 space-y-1 font-mono text-xs">
+                        {selectedSystem.holding.runtimeVersion === "v2_game_actor" && selectedSystem.holding.actorSlotNumber !== null ? (
+                          <p className="text-[10px] leading-snug text-st-muted">
+                            Holding actor: {`Actor ${selectedSystem.holding.actorSlotNumber}${selectedSystem.holding.actorDisplayName != null ? ` · ${selectedSystem.holding.actorDisplayName}` : ""}`}
+                            {selectedSystem.holding.actorLabel != null ? ` (${selectedSystem.holding.actorLabel})` : ""}
+                          </p>
+                        ) : null}
                         <p className="text-[10px] leading-snug text-st-muted">
                           Live tax is empire-wide (see slider above).{" "}
                           <span className="font-mono text-st-fg">

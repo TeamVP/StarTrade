@@ -11,6 +11,11 @@ type JoinedGameRole = "observer" | "empire" | "trader" | "admin" | null;
 
 export type PlayerGameMembership = {
   role: JoinedGameRole;
+  runtimeVersion: "v1_empire" | "v2_game_actor";
+  actorId: Id<"sim_game_actors"> | null;
+  actorSlotNumber: number | null;
+  actorLabel: string | null;
+  actorDisplayName: string | null;
   empireId: Id<"emp_states"> | null;
   empireName: string | null;
   isEmpirePlayer: boolean;
@@ -70,22 +75,38 @@ export function usePlayerGameMembership(): PlayerGameMembership {
   return useMemo(() => {
     if (resolveMembershipFromActiveGame) {
       const role = membershipQuery?.role ?? null;
+      const runtimeVersion = membershipQuery?.runtimeVersion ?? "v1_empire";
+      const actorId = membershipQuery?.actorId ?? null;
+      const actorSlotNumber = membershipQuery?.actorSlotNumber ?? null;
+      const actorLabel = membershipQuery?.actorLabel ?? null;
+      const actorDisplayName = membershipQuery?.actorDisplayName ?? null;
       const empireId = membershipQuery?.empireId ?? null;
       const empireName = membershipQuery?.empireName ?? null;
       const isEmpirePlayer = membershipQuery?.isEmpirePlayer ?? false;
       const isSpectator = membershipQuery?.isSpectator ?? true;
       return {
         role,
+        runtimeVersion,
+        actorId,
+        actorSlotNumber,
+        actorLabel,
+        actorDisplayName,
         empireId,
         empireName,
         isEmpirePlayer,
         isSpectator,
-        label: empireName ?? (isSpectator ? spectatorLabel : formatRoleLabel(role)),
+        label:
+          actorDisplayName ?? actorLabel ?? empireName ?? (isSpectator ? spectatorLabel : formatRoleLabel(role)),
       };
     }
 
     return {
       role: "empire",
+      runtimeVersion: "v1_empire",
+      actorId: null,
+      actorSlotNumber: null,
+      actorLabel: null,
+      actorDisplayName: null,
       empireId: previewEmpire?._id ?? null,
       empireName: configuredEmpireName,
       isEmpirePlayer: previewEmpire !== null,

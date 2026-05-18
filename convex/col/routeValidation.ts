@@ -1,6 +1,11 @@
 import type { Id } from "../_generated/dataModel";
 import { MAX_COLONY_ROUTE_HOPS_BEYOND_EMPIRE } from "./constants";
 
+type ColonyRouteOwner = {
+  ownerEmpireId: Id<"emp_states"> | null | undefined;
+  ownerActorId?: Id<"sim_game_actors"> | null | undefined;
+};
+
 /**
  * Validates ordered destination systems (not including homeworld).
  * Rule: a prefix of systems may be owned by `empireId`; after the first non-owned
@@ -8,10 +13,11 @@ import { MAX_COLONY_ROUTE_HOPS_BEYOND_EMPIRE } from "./constants";
  */
 export function validateColonyShipRouteDestinations(params: {
   routeSystemIds: readonly Id<"gal_systems">[];
-  empireId: Id<"emp_states">;
-  getOwner: (systemId: Id<"gal_systems">) => Id<"emp_states"> | null | undefined;
+  empireId?: Id<"emp_states"> | null | undefined;
+  actorId?: Id<"sim_game_actors"> | null | undefined;
+  getOwner: (systemId: Id<"gal_systems">) => ColonyRouteOwner;
 }): string | null {
-  const { routeSystemIds, empireId, getOwner } = params;
+  const { routeSystemIds, empireId, actorId, getOwner } = params;
   if (routeSystemIds.length === 0) {
     return "Route must include at least one destination system.";
   }
@@ -21,8 +27,23 @@ export function validateColonyShipRouteDestinations(params: {
   let k = 0;
   while (k < routeSystemIds.length) {
     const owner = getOwner(routeSystemIds[k]);
-    if (owner === empireId) k++;
-    else break;
+    if (
+      actorId !== null &&
+      actorId !== undefined &&
+      owner.ownerActorId !== null &&
+      owner.ownerActorId !== undefined
+    ) {
+      if (owner.ownerActorId === actorId) {
+        k++;
+        continue;
+      }
+      break;
+    }
+    if (empireId !== null && empireId !== undefined && owner.ownerEmpireId === empireId) {
+      k++;
+      continue;
+    }
+    break;
   }
   const tailLen = routeSystemIds.length - k;
   if (tailLen > MAX_COLONY_ROUTE_HOPS_BEYOND_EMPIRE) {

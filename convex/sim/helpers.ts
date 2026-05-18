@@ -75,6 +75,60 @@ export async function assertCanPauseOrResumeGame(
   }
 }
 
+async function resolveControlledEmpireAccess(
+  ctx: MutationCtx,
+  params: {
+    gameId: Id<"sim_games">;
+    userId: Id<"users">;
+  },
+): Promise<{
+  isAdmin: boolean;
+  controlledEmpireId: Id<"emp_states"> | null;
+  controlledGameActorId: Id<"sim_game_actors"> | null;
+}> {
+  const binding = await ctx.db
+    .query("usr_game_roles")
+    .withIndex("by_gameId_and_userId", (q) =>
+      q.eq("gameId", params.gameId).eq("userId", params.userId),
+    )
+    .unique();
+
+  if (binding === null || !binding.isActive) {
+    throw new Error("You are not an active member of this game.");
+  }
+  if (binding.role === "admin") {
+    return { isAdmin: true, controlledEmpireId: null, controlledGameActorId: null };
+  }
+  if (binding.role !== "empire") {
+    return { isAdmin: false, controlledEmpireId: null, controlledGameActorId: null };
+  }
+  if (binding.empireId !== null) {
+    return {
+      isAdmin: false,
+      controlledEmpireId: binding.empireId,
+      controlledGameActorId: null,
+    };
+  }
+
+  const game = await ctx.db.get("sim_games", params.gameId);
+  const runtimeVersion = game?.runtimeVersion ?? "v1_empire";
+  if (runtimeVersion !== "v2_game_actor") {
+    return { isAdmin: false, controlledEmpireId: null, controlledGameActorId: null };
+  }
+
+  const actor = await ctx.db
+    .query("sim_game_actors")
+    .withIndex("by_gameId_and_controllerUserId", (q) =>
+      q.eq("gameId", params.gameId).eq("controllerUserId", params.userId),
+    )
+    .unique();
+  return {
+    isAdmin: false,
+    controlledEmpireId: actor?.legacyEmpireId ?? null,
+    controlledGameActorId: actor?._id ?? null,
+  };
+}
+
 /** Same rules as fleet/system orders: active membership, running/paused game, admin or owning empire. */
 export async function assertMayAdjustGalaxySystemEmphasis(
   ctx: MutationCtx,
@@ -99,23 +153,16 @@ export async function assertMayAdjustGalaxySystemEmphasis(
     throw new Error("System not found in this game.");
   }
 
-  const binding = await ctx.db
-    .query("usr_game_roles")
-    .withIndex("by_gameId_and_userId", (q) =>
-      q.eq("gameId", params.gameId).eq("userId", params.userId),
-    )
-    .unique();
-
-  if (binding === null || !binding.isActive) {
-    throw new Error("You are not an active member of this game.");
-  }
-
-  const isAdmin = binding.role === "admin";
+  const { isAdmin, controlledEmpireId, controlledGameActorId } =
+    await resolveControlledEmpireAccess(ctx, {
+    gameId: params.gameId,
+    userId: params.userId,
+  });
   const isOwner =
-    binding.role === "empire" &&
-    system.ownerEmpireId !== null &&
-    binding.empireId !== null &&
-    binding.empireId === system.ownerEmpireId;
+    (system.ownerGameActorId !== undefined &&
+      controlledGameActorId !== null &&
+      system.ownerGameActorId === controlledGameActorId) ||
+    (system.ownerEmpireId !== null && controlledEmpireId === system.ownerEmpireId);
 
   if (!isAdmin && !isOwner) {
     if (system.ownerEmpireId === null) {
@@ -138,6 +185,7 @@ export async function assertMayAdjustEmpireEconomy(
     gameId: Id<"sim_games">;
     userId: Id<"users">;
     empireId: Id<"emp_states">;
+    gameActorId?: Id<"sim_game_actors">;
   },
 ): Promise<Doc<"emp_states">> {
   const game = await ctx.db.get("sim_games", params.gameId);
@@ -155,22 +203,24 @@ export async function assertMayAdjustEmpireEconomy(
     throw new Error("Empire not found in this game.");
   }
 
-  const binding = await ctx.db
-    .query("usr_game_roles")
-    .withIndex("by_gameId_and_userId", (q) =>
-      q.eq("gameId", params.gameId).eq("userId", params.userId),
-    )
-    .unique();
-
-  if (binding === null || !binding.isActive) {
-    throw new Error("You are not an active member of this game.");
+  if (params.gameActorId !== undefined) {
+    const actor = await ctx.db.get("sim_game_actors", params.gameActorId);
+    if (actor === null || actor.gameId !== params.gameId) {
+      throw new Error("Game actor not found in this game.");
+    }
+    if (actor.legacyEmpireId !== params.empireId) {
+      throw new Error("Game actor does not match the selected empire.");
+    }
   }
 
-  const isAdmin = binding.role === "admin";
+  const { isAdmin, controlledEmpireId, controlledGameActorId } =
+    await resolveControlledEmpireAccess(ctx, {
+    gameId: params.gameId,
+    userId: params.userId,
+  });
   const isOwner =
-    binding.role === "empire" &&
-    binding.empireId !== null &&
-    binding.empireId === params.empireId;
+    controlledEmpireId === params.empireId ||
+    (params.gameActorId !== undefined && controlledGameActorId === params.gameActorId);
 
   if (!isAdmin && !isOwner) {
     throw new Error(

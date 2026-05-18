@@ -14,6 +14,7 @@ export const runFullSpiralSeed = internalAction({
   args: {
     gameId: v.id("sim_games"),
     colorPrefsUserId: v.optional(v.id("users")),
+    seedTraders: v.boolean(),
   },
   handler: async (ctx, args) => {
     await ctx.runMutation(internal.seed.v1SpiralBulk.spiralPurgeGalaxyRows, {
@@ -39,9 +40,11 @@ export const runFullSpiralSeed = internalAction({
         linkEndIdx: Math.min(lo + LINK_BATCH, nl),
       });
     }
-    await ctx.runMutation(internal.seed.v1SpiralBulk.spiralSeedTraders, {
-      gameId: args.gameId,
-    });
+    if (args.seedTraders) {
+      await ctx.runMutation(internal.seed.v1SpiralBulk.spiralSeedTraders, {
+        gameId: args.gameId,
+      });
+    }
     return null;
   },
 });

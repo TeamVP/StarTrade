@@ -5,8 +5,9 @@ import { usePlayerEmpireId, usePlayerGameMembership } from "@/features/player/Pl
 export function PlayerCombatPage() {
   const empireId = usePlayerEmpireId();
   const membership = usePlayerGameMembership();
+  const hasPlayerPerspective = empireId !== null || membership.actorId !== null;
 
-  if (empireId === null) {
+  if (!hasPlayerPerspective) {
     return (
       <Card className="p-4">
         <p className="text-sm text-st-muted">
@@ -27,6 +28,12 @@ export function PlayerCombatPage() {
   }
 
   return (
-    <CombatScreen playerPerspective={{ empireId, label: membership.label }} />
+    <CombatScreen
+      playerPerspective={{
+        empireId,
+        actorId: membership.actorId,
+        label: membership.label,
+      }}
+    />
   );
 }

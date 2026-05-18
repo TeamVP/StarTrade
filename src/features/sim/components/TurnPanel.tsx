@@ -56,18 +56,16 @@ export function TurnPanel() {
     api.usr.queries.listMyRoles,
     gameId !== undefined ? { gameId } : "skip",
   );
-  const timeline = useQuery(
-    api.sim.queries.getTurnTimelineForGame,
+  const turnPresentationPackage = useQuery(
+    api.sim.queries.getTurnPresentationPackageForGame,
     gameId !== undefined ? { gameId } : "skip",
   );
+  const timeline = turnPresentationPackage?.timeline;
   const durableResult = useQuery(
     api.sim.queries.getDurableGameResult,
     gameId !== undefined && activeGame?.status === "finished" ? { gameId } : "skip",
   );
-  const turnBusy =
-    timeline?.turnState !== undefined &&
-    timeline.turnState !== null &&
-    timeline.turnState !== "open";
+  const turnBusy = timeline?.isTurnBusy ?? false;
   const turnGameStatus = timeline?.gameStatus ?? activeGame?.status ?? null;
   const { alignedNowMs, effectiveNowMs } = useTurnClock({
     gameStatus: turnGameStatus,
@@ -85,23 +83,22 @@ export function TurnPanel() {
     activeGame !== null && activeGame.status === "lobby" && gameId !== undefined;
   const canStep =
     activeGame !== null &&
-    activeGame.status === "running" &&
+    turnGameStatus === "running" &&
     gameId !== undefined &&
     !turnBusy;
   const canRebuildOrders =
     activeGame !== null &&
-    (activeGame.status === "running" || activeGame.status === "paused") &&
+    (timeline?.acceptingOrders ?? false) &&
     gameId !== undefined &&
-    !turnBusy;
+    true;
   const canScheduleNextTurnDelay =
     activeGame !== null &&
-    (activeGame.status === "running" || activeGame.status === "paused") &&
+    (timeline?.acceptingOrders ?? false) &&
     gameId !== undefined &&
-    !turnBusy;
+    true;
   const canPauseOrResume =
     activeGame !== null &&
-    ((activeGame.status === "running" && !turnBusy) ||
-      activeGame.status === "paused") &&
+    (timeline?.acceptingOrders ?? false) &&
     gameId !== undefined &&
     canPauseOrResumeClock;
 
@@ -268,7 +265,7 @@ export function TurnPanel() {
     }
   }
 
-  const turnOpen = timeline?.turnState === "open";
+  const turnOpen = turnGameStatus === "running" && (timeline?.acceptingOrders ?? false);
   const planDurationMs = Math.max(1, timeline?.turnDurationMs ?? DEFAULT_TURN_DURATION_MS);
   const planStartedAt = timeline?.turnStartedAt ?? null;
   const nowMs = effectiveNowMs;
@@ -358,9 +355,7 @@ export function TurnPanel() {
           <>
             <dt className="text-st-muted">Turn work</dt>
             <dd className="text-right capitalize">
-              {timeline?.turnState === "prepared"
-                ? "Prepared"
-                : timeline?.resolutionPhase ?? timeline?.turnState ?? "working"}
+              {timeline?.turnWorkLabel ?? "working"}
             </dd>
           </>
         ) : null}
@@ -442,11 +437,12 @@ export function TurnPanel() {
                         #{row.placement}
                       </span>
                       <span className="font-medium text-st-fg">{row.empireName}</span>
-                      <span className="text-xs text-st-muted">
-                        {row.controllerKind === "human"
-                          ? row.playerName ?? "Human"
-                          : row.playerName ?? row.npcPlayerKey ?? "NPC"}
-                      </span>
+                      {row.actorDisplayName !== null || row.actorLabel !== null ? (
+                        <span className="rounded-full border border-st-border px-2 py-0.5 text-xs font-medium text-st-muted">
+                          {row.actorDisplayName ?? row.actorLabel}
+                        </span>
+                      ) : null}
+                      <span className="text-xs text-st-muted">{row.controllerLabel}</span>
                       {row.isWinner ? (
                         <span className="rounded-full border border-emerald-500/40 bg-emerald-950/30 px-2 py-0.5 text-xs font-medium text-emerald-200">
                           Winner

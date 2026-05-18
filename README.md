@@ -1,4 +1,6 @@
-# Welcome to your Convex + React (Vite) + Convex Auth app
+# StarStrat
+
+Proprietary software. All rights reserved.
 
 This is a [Convex](https://convex.dev/) project created with [`npm create convex`](https://www.npmjs.com/package/create-convex).
 

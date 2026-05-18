@@ -62,6 +62,7 @@ export function useGalaxySoundscape(params: {
   recentEvents: SoundscapeEventRow[];
   systemsById: Readonly<Record<string, SoundscapeSystemPosition>>;
   ownership?: SoundscapeOwnershipContext;
+  listenerActorId?: string | null;
   listenerEmpireId?: string | null;
   timeline?: SoundscapeTimelineSnapshot | null;
 }) {
@@ -72,6 +73,7 @@ export function useGalaxySoundscape(params: {
     recentEvents,
     systemsById,
     ownership,
+    listenerActorId,
     listenerEmpireId,
     timeline,
   } = params;
@@ -127,9 +129,10 @@ export function useGalaxySoundscape(params: {
         camera,
         systemsById,
         ownership,
+        listenerActorId,
         listenerEmpireId,
       }),
-    [camera, systemsById, ownership, listenerEmpireId],
+    [camera, systemsById, ownership, listenerActorId, listenerEmpireId],
   );
 
   const disableSoundscape = useCallback(() => {

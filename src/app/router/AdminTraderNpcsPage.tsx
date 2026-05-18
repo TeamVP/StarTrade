@@ -1,6 +1,16 @@
+import { Navigate } from "react-router-dom";
 import { AdminCatalogPlaceholderPage } from "./AdminCatalogPlaceholderPage";
+import { useActiveGame } from "@/features/galaxy/hooks/useActiveGame";
+import { gameModeSupportsTraderGameplay } from "@/features/games/gameMode";
 
 export function AdminTraderNpcsPage() {
+  const { activeGame } = useActiveGame();
+  const traderGameplayEnabled = gameModeSupportsTraderGameplay(activeGame?.mode);
+
+  if (activeGame !== null && !traderGameplayEnabled) {
+    return <Navigate to="/admin" replace />;
+  }
+
   return (
     <AdminCatalogPlaceholderPage
       eyebrow="Admin"
@@ -13,11 +23,15 @@ export function AdminTraderNpcsPage() {
         "Add new trader NPC players to the roster used by trader identity seeding.",
       ]}
       relatedLinks={[
-        {
-          to: "/admin/traders",
-          label: "Traders",
-          description: "Live trader identity activity and background logistics diagnostics.",
-        },
+        ...(traderGameplayEnabled
+          ? [
+              {
+                to: "/admin/traders",
+                label: "Traders",
+                description: "Live trader identity activity and background logistics diagnostics.",
+              },
+            ]
+          : []),
         {
           to: "/admin/balance",
           label: "Balance",

@@ -17,6 +17,8 @@ type AdminUserRow = {
   phoneVerificationTime: number | null;
   isAnonymous: boolean;
   admin: boolean;
+  publisher: boolean;
+  plan: "free" | "pro";
   hasPasswordAccount: boolean;
 };
 
@@ -25,9 +27,11 @@ type AdminUserFormDefaults = {
   email: string;
   phone: string;
   image: string;
+  plan: "free" | "pro";
   password: string;
   isAnonymous: boolean;
   admin: boolean;
+  publisher: boolean;
   emailVerified: boolean;
   phoneVerified: boolean;
 };
@@ -37,8 +41,10 @@ type AdminUserMutationFields = {
   email: string | null;
   phone: string | null;
   image: string | null;
+  plan: "free" | "pro";
   isAnonymous: boolean;
   admin: boolean;
+  publisher: boolean;
   emailVerified: boolean;
   phoneVerified: boolean;
 };
@@ -79,8 +85,10 @@ function readAdminUserMutationFields(formData: FormData): AdminUserMutationField
     email: email.length > 0 ? email : null,
     phone: phone.length > 0 ? phone : null,
     image: image.length > 0 ? image : null,
+    plan: formData.get("plan") === "pro" ? "pro" : "free",
     isAnonymous: formData.get("isAnonymous") === "on",
     admin: formData.get("admin") === "on",
+    publisher: formData.get("publisher") === "on",
     emailVerified: formData.get("emailVerified") === "on",
     phoneVerified: formData.get("phoneVerified") === "on",
   };
@@ -92,9 +100,11 @@ function adminUserFormDefaultsFromUser(user: AdminUserRow): AdminUserFormDefault
     email: user.email ?? "",
     phone: user.phone ?? "",
     image: user.image ?? "",
+    plan: user.plan,
     password: "",
     isAnonymous: user.isAnonymous,
     admin: user.admin,
+    publisher: user.publisher,
     emailVerified: user.emailVerificationTime !== null,
     phoneVerified: user.phoneVerificationTime !== null,
   };
@@ -170,6 +180,17 @@ function AdminUserModal(props: {
                 className="w-full rounded border border-st-border bg-st-bg px-3 py-2 text-sm text-st-fg"
               />
             </label>
+            <label className="space-y-1 text-sm text-st-muted">
+              <span>Plan</span>
+              <select
+                name="plan"
+                defaultValue={props.defaults.plan}
+                className="w-full rounded border border-st-border bg-st-bg px-3 py-2 text-sm text-st-fg"
+              >
+                <option value="free">Free</option>
+                <option value="pro">Pro</option>
+              </select>
+            </label>
             {props.includePassword ? (
               <label className="space-y-1 text-sm text-st-muted md:col-span-2">
                 <span>Password</span>
@@ -183,7 +204,7 @@ function AdminUserModal(props: {
                 />
               </label>
             ) : null}
-            <div className="md:col-span-2 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+            <div className="md:col-span-2 grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
               <label className="flex items-center gap-2 rounded border border-st-border bg-st-bg px-3 py-2 text-sm text-st-muted">
                 <input
                   type="checkbox"
@@ -219,6 +240,15 @@ function AdminUserModal(props: {
                   className="accent-cyan-400"
                 />
                 <span>Admin?</span>
+              </label>
+              <label className="flex items-center gap-2 rounded border border-st-border bg-st-bg px-3 py-2 text-sm text-st-muted">
+                <input
+                  type="checkbox"
+                  name="publisher"
+                  defaultChecked={props.defaults.publisher}
+                  className="accent-cyan-400"
+                />
+                <span>Publisher?</span>
               </label>
             </div>
           </div>
@@ -449,9 +479,11 @@ export function AdminUsersPage() {
             email: "",
             phone: "",
             image: "",
+            plan: "free",
             password: "",
             isAnonymous: false,
             admin: false,
+            publisher: false,
             emailVerified: false,
             phoneVerified: false,
           }}
@@ -595,6 +627,7 @@ export function AdminUsersPage() {
                   <th className="border-b border-st-border px-3 py-2 font-medium">Email Verified</th>
                   <th className="border-b border-st-border px-3 py-2 font-medium">Phone Verified</th>
                   <th className="border-b border-st-border px-3 py-2 font-medium">Pwd Sign-In</th>
+                  <th className="border-b border-st-border px-3 py-2 font-medium">Plan</th>
                   <th className="border-b border-st-border px-3 py-2 font-medium">Anon</th>
                   <th className="border-b border-st-border px-3 py-2 font-medium">Admin</th>
                   <th className="border-b border-st-border px-3 py-2 font-medium">Image</th>
@@ -636,6 +669,9 @@ export function AdminUsersPage() {
                     </td>
                     <td className="border-b border-st-border/60 px-3 py-2 text-st-fg">
                       {user.hasPasswordAccount ? "Yes" : "No"}
+                    </td>
+                    <td className="border-b border-st-border/60 px-3 py-2 text-st-fg">
+                      {user.plan === "pro" ? "Pro" : "Free"}
                     </td>
                     <td className="border-b border-st-border/60 px-3 py-2 text-st-fg">
                       {user.isAnonymous ? "Yes" : "No"}

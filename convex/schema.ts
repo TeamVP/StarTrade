@@ -16,12 +16,20 @@ export default defineSchema({
     phoneVerificationTime: v.optional(v.number()),
     isAnonymous: v.optional(v.boolean()),
     admin: v.optional(v.boolean()),
+    publisher: v.optional(v.boolean()),
+    plan: v.optional(v.union(v.literal("free"), v.literal("pro"))),
   })
     .index("email", ["email"])
     .index("phone", ["phone"]),
   sim_games: defineTable({
     name: v.string(),
     urlCode: v.optional(v.string()),
+    runtimeVersion: v.optional(
+      v.union(
+        v.literal("v1_empire"),
+        v.literal("v2_game_actor"),
+      ),
+    ),
     status: v.union(
       v.literal("lobby"),
       v.literal("running"),
@@ -29,6 +37,13 @@ export default defineSchema({
       v.literal("finished"),
     ),
     mapKey: v.string(),
+    mode: v.optional(
+      v.union(
+        v.literal("conquest_core"),
+        v.literal("conquest_plus"),
+        v.literal("trader_economy"),
+      ),
+    ),
     turnDurationMs: v.number(),
     currentTurn: v.number(),
     seed: v.string(),
@@ -76,6 +91,16 @@ export default defineSchema({
     turnPausedAtMs: v.optional(v.number()),
     /** Global turn timer pause (real-time ms); cron skips resolve while Date.now() < this. */
     turnPausedUntilMs: v.optional(v.number()),
+    /** Planned wake-up for pre-boundary preparation on the current open turn. */
+    nextPreparationWakeAt: v.optional(v.number()),
+    /** Planned wake-up for the current open turn's boundary commit attempt. */
+    nextBoundaryWakeAt: v.optional(v.number()),
+    /** Monotonic token carried by scheduled wake jobs so stale jobs can no-op safely. */
+    schedulerGeneration: v.optional(v.number()),
+    /** Last time the current turn's wake-ups were scheduled. */
+    lastWakeScheduledAt: v.optional(v.number()),
+    /** Last time a generation-matching wake-up was observed. */
+    lastWakeObservedAt: v.optional(v.number()),
     /**
     * When true, the StarStrat cron does not auto-start turn resolution for this game.
      * Status stays `running`; manual “Step turn” still works. Use to isolate a broken sim.
@@ -104,6 +129,25 @@ export default defineSchema({
     name: v.string(),
     description: v.string(),
     mapKey: v.string(),
+    ownerUserId: v.optional(v.union(v.id("users"), v.null())),
+    source: v.optional(v.union(v.literal("official"), v.literal("community"))),
+    status: v.optional(
+      v.union(
+        v.literal("draft"),
+        v.literal("published"),
+        v.literal("archived"),
+        v.literal("deleted"),
+        v.literal("admin_deleted"),
+      ),
+    ),
+    mode: v.optional(
+      v.union(
+        v.literal("conquest_core"),
+        v.literal("conquest_plus"),
+        v.literal("trader_economy"),
+      ),
+    ),
+    requiredTier: v.optional(v.union(v.literal("free"), v.literal("pro"))),
     level: v.number(),
     requiredWins: v.number(),
     prerequisiteMissionKeys: v.array(v.string()),
@@ -119,11 +163,32 @@ export default defineSchema({
     updatedAt: v.number(),
   })
     .index("by_key", ["key"])
+    .index("by_ownerUserId", ["ownerUserId"])
     .index("by_published_and_sortOrder", ["published", "sortOrder"])
+    .index("by_source_and_status_and_sortOrder", ["source", "status", "sortOrder"])
     .index("by_level_and_sortOrder", ["level", "sortOrder"]),
+
+  admin_content_moderation_events: defineTable({
+    contentType: v.union(v.literal("mission"), v.literal("strategy")),
+    contentKey: v.string(),
+    actorUserId: v.id("users"),
+    action: v.union(
+      v.literal("created"),
+      v.literal("updated"),
+      v.literal("bulk_status_updated"),
+      v.literal("bulk_owner_updated"),
+      v.literal("bulk_source_updated"),
+    ),
+    summary: v.string(),
+    note: v.optional(v.string()),
+    createdAt: v.number(),
+  })
+    .index("by_contentType_and_contentKey_and_createdAt", ["contentType", "contentKey", "createdAt"])
+    .index("by_actorUserId_and_createdAt", ["actorUserId", "createdAt"]),
 
   sim_game_results: defineTable({
     gameId: v.id("sim_games"),
+    urlCode: v.optional(v.union(v.string(), v.null())),
     name: v.string(),
     mapKey: v.string(),
     missionKey: v.optional(v.union(v.string(), v.null())),
@@ -169,7 +234,16 @@ export default defineSchema({
   emp_results: defineTable({
     gameResultId: v.id("sim_game_results"),
     gameId: v.id("sim_games"),
+    gameEndedAt: v.optional(v.number()),
+    gameIsOfficial: v.optional(v.boolean()),
+    gameMapKey: v.optional(v.string()),
+    gameMissionKey: v.optional(v.union(v.string(), v.null())),
+    gameLobbyScenarioKey: v.optional(v.union(v.string(), v.null())),
     empireId: v.union(v.id("emp_states"), v.null()),
+    actorId: v.optional(v.union(v.id("sim_game_actors"), v.null())),
+    actorSlotNumber: v.optional(v.union(v.number(), v.null())),
+    actorLabel: v.optional(v.union(v.string(), v.null())),
+    actorDisplayName: v.optional(v.union(v.string(), v.null())),
     empireKey: v.string(),
     empireName: v.string(),
     colorHex: v.string(),
@@ -211,10 +285,42 @@ export default defineSchema({
   })
     .index("by_gameResultId", ["gameResultId"])
     .index("by_gameId", ["gameId"])
+    .index("by_gameId_and_isWinner", ["gameId", "isWinner"])
+    .index("by_gameId_and_empireKey", ["gameId", "empireKey"])
+    .index("by_gameIsOfficial", ["gameIsOfficial"])
+    .index("by_userId_and_gameIsOfficial_and_isWinner", ["userId", "gameIsOfficial", "isWinner"])
     .index("by_userId_and_isWinner", ["userId", "isWinner"])
     .index("by_npcPlayerKey_and_isWinner", ["npcPlayerKey", "isWinner"])
     .index("by_strategyFingerprint_and_isWinner", ["strategyFingerprint", "isWinner"])
     .index("by_strategyLibraryKey_and_isWinner", ["strategyLibraryKey", "isWinner"]),
+
+  sim_game_actors: defineTable({
+    gameId: v.id("sim_games"),
+    slotNumber: v.number(),
+    actorKind: v.union(v.literal("empire"), v.literal("trader")),
+    controllerKind: v.union(v.literal("human"), v.literal("npc")),
+    controllerUserId: v.union(v.id("users"), v.null()),
+    npcPlayerKey: v.union(v.string(), v.null()),
+    legacyEmpireId: v.union(v.id("emp_states"), v.null()),
+    displayNameSnapshot: v.string(),
+    factionLabelSnapshot: v.string(),
+    colorHex: v.string(),
+    strategyJsonSnapshot: v.union(v.string(), v.null()),
+    strategyFingerprint: v.union(v.string(), v.null()),
+    status: v.union(
+      v.literal("active"),
+      v.literal("eliminated"),
+      v.literal("resigned"),
+    ),
+    eliminatedAtTurn: v.union(v.number(), v.null()),
+    homeSystemId: v.union(v.id("gal_systems"), v.null()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_gameId", ["gameId"])
+    .index("by_gameId_and_slotNumber", ["gameId", "slotNumber"])
+    .index("by_gameId_and_legacyEmpireId", ["gameId", "legacyEmpireId"])
+    .index("by_gameId_and_controllerUserId", ["gameId", "controllerUserId"]),
 
   sim_turns: defineTable({
     gameId: v.id("sim_games"),
@@ -376,13 +482,26 @@ export default defineSchema({
     description: v.string(),
     tags: v.array(v.string()),
     strategyJson: v.string(),
+    ownerUserId: v.optional(v.union(v.id("users"), v.null())),
+    source: v.optional(v.union(v.literal("official"), v.literal("community"))),
+    status: v.optional(
+      v.union(
+        v.literal("draft"),
+        v.literal("published"),
+        v.literal("archived"),
+        v.literal("deleted"),
+        v.literal("admin_deleted"),
+      ),
+    ),
     availableForHumans: v.boolean(),
     availableForNpcs: v.boolean(),
     createdAt: v.number(),
     updatedAt: v.number(),
   })
     .index("by_key", ["key"])
+    .index("by_ownerUserId", ["ownerUserId"])
     .index("by_availableForHumans", ["availableForHumans"])
+    .index("by_source_and_status", ["source", "status"])
     .index("by_availableForNpcs", ["availableForNpcs"]),
 
   /** Shared empire NPC catalog used by admin tooling and game seeding. */
@@ -441,6 +560,7 @@ export default defineSchema({
     baseProductivity: v.optional(v.number()),
     isHomeworld: v.boolean(),
     ownerEmpireId: v.union(v.id("emp_states"), v.null()),
+    ownerGameActorId: v.optional(v.id("sim_game_actors")),
     stockFood: v.optional(v.number()),
     stockWeapons: v.optional(v.number()),
     stockResearch: v.optional(v.number()),
@@ -510,6 +630,7 @@ export default defineSchema({
   col_colony_ships: defineTable({
     gameId: v.id("sim_games"),
     empireId: v.id("emp_states"),
+    gameActorId: v.optional(v.id("sim_game_actors")),
     name: v.string(),
     originSystemId: v.id("gal_systems"),
     destinationSystemId: v.union(v.id("gal_systems"), v.null()),
@@ -646,6 +767,7 @@ export default defineSchema({
   emp_system_holdings: defineTable({
     gameId: v.id("sim_games"),
     empireId: v.id("emp_states"),
+    gameActorId: v.optional(v.id("sim_game_actors")),
     systemId: v.id("gal_systems"),
     taxRate: v.number(),
     productionModifier: v.number(),
@@ -658,6 +780,7 @@ export default defineSchema({
   emp_priority_stars: defineTable({
     gameId: v.id("sim_games"),
     empireId: v.id("emp_states"),
+    gameActorId: v.optional(v.id("sim_game_actors")),
     systemId: v.id("gal_systems"),
     createdByUserId: v.id("users"),
     createdAt: v.number(),
@@ -669,6 +792,7 @@ export default defineSchema({
   flt_fleets: defineTable({
     gameId: v.id("sim_games"),
     empireId: v.id("emp_states"),
+    gameActorId: v.optional(v.id("sim_game_actors")),
     fleetKey: v.string(),
     name: v.string(),
     /** Ships in this fleet (also used as combat strength for now). */
@@ -697,6 +821,7 @@ export default defineSchema({
 
   flt_orders: defineTable({
     gameId: v.id("sim_games"),
+    gameActorId: v.optional(v.id("sim_game_actors")),
     fleetId: v.id("flt_fleets"),
     issuedByUserId: v.id("users"),
     turnNumber: v.number(),
@@ -715,6 +840,7 @@ export default defineSchema({
   flt_garrison_routes: defineTable({
     gameId: v.id("sim_games"),
     empireId: v.id("emp_states"),
+    gameActorId: v.optional(v.id("sim_game_actors")),
     originSystemId: v.id("gal_systems"),
     destinationSystemId: v.id("gal_systems"),
     /** 1–100: share of combined idle garrison at origin to send toward destination. */

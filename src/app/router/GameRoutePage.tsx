@@ -100,7 +100,14 @@ export function GameRoutePage() {
             {winner !== null ? (
               <div>
                 <dt className="text-xs uppercase tracking-wide">Winner</dt>
-                <dd className="mt-1 text-st-fg">{winner.empireName}</dd>
+                <dd className="mt-1 text-st-fg">
+                  {winner.empireName}
+                  {winner.actorDisplayName !== null
+                    ? ` (${winner.actorDisplayName}${winner.actorLabel !== null ? ` · ${winner.actorLabel}` : ""})`
+                    : winner.actorLabel !== null
+                      ? ` (${winner.actorLabel})`
+                      : ""}
+                </dd>
               </div>
             ) : null}
           </dl>

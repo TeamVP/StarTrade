@@ -1,20 +1,26 @@
 import { internalMutation } from "../_generated/server";
 import { v } from "convex/values";
 import { internal } from "../_generated/api";
-import { evaluateGameFinalization } from "./finalization";
-import { turnDurationHasElapsed } from "./turnTiming";
+import { backfillDurableResultSnapshotsForGame, evaluateGameFinalization } from "./finalization";
+import {
+  scheduledNextTurnStartedAt,
+  scheduledTurnPreparationAt,
+  turnDurationHasElapsed,
+} from "./turnTiming";
 
-/** Advances every running game whose pause window has expired (spec §6 cron driver). */
+const WAKE_RECOVERY_GRACE_MS = 5_000;
+
+/** Recovery-only sweep for games whose owned wake-ups were missed or stalled. */
 export const tickRunningGames = internalMutation({
   args: v.object({}),
-  handler: async (ctx): Promise<{ stepped: number }> => {
+  handler: async (ctx): Promise<{ recovered: number }> => {
     const games = await ctx.db
       .query("sim_games")
       .withIndex("by_status", (q) => q.eq("status", "running"))
       .take(32);
 
     const now = Date.now();
-    let stepped = 0;
+    let recovered = 0;
 
     for (const game of games) {
       if (game.simCronTurnsDisabled === true) {
@@ -24,13 +30,57 @@ export const tickRunningGames = internalMutation({
         continue;
       }
 
+      const turnRow = await ctx.db
+        .query("sim_turns")
+        .withIndex("by_gameId_and_turnNumber", (q) =>
+          q.eq("gameId", game._id).eq("turnNumber", game.currentTurn),
+        )
+        .unique();
+      if (turnRow === null) {
+        continue;
+      }
+      const preparationRow = await ctx.db
+        .query("sim_turn_preparations")
+        .withIndex("by_gameId_and_turnNumber", (q) =>
+          q.eq("gameId", game._id).eq("turnNumber", game.currentTurn),
+        )
+        .unique();
+
+      const expectedPreparationWakeAt =
+        game.nextPreparationWakeAt ??
+        scheduledTurnPreparationAt({
+          turnStartedAtMs: turnRow.startedAt,
+          turnDurationMs: game.turnDurationMs,
+        });
+      const expectedBoundaryWakeAt =
+        game.nextBoundaryWakeAt ??
+        scheduledNextTurnStartedAt({
+          turnStartedAtMs: turnRow.startedAt,
+          turnDurationMs: game.turnDurationMs,
+        });
+      const wakeMissing =
+        turnRow.state === "open" &&
+        (game.nextPreparationWakeAt === undefined || game.nextBoundaryWakeAt === undefined);
+      const preparationOverdue =
+        turnRow.state === "open" &&
+        now >= expectedPreparationWakeAt + WAKE_RECOVERY_GRACE_MS &&
+        preparationRow?.state !== "prepared";
+      const boundaryOverdue = now >= expectedBoundaryWakeAt + WAKE_RECOVERY_GRACE_MS;
+      const preparedButMissedBoundary =
+        (turnRow.state === "prepared" || preparationRow?.state === "prepared") &&
+        boundaryOverdue;
+
+      if (!wakeMissing && !preparationOverdue && !boundaryOverdue && !preparedButMissedBoundary) {
+        continue;
+      }
+
       try {
         const commit = await ctx.runMutation(internal.sim.internal.commitPreparedTurn, {
           gameId: game._id,
           turnNumber: game.currentTurn,
         });
         if (commit.committed) {
-          stepped += 1;
+          recovered += 1;
           continue;
         }
         const begin: {
@@ -41,18 +91,6 @@ export const tickRunningGames = internalMutation({
           gameId: game._id,
         });
         if (!begin.started) {
-          const turnRow = await ctx.db
-            .query("sim_turns")
-            .withIndex("by_gameId_and_turnNumber", (q) =>
-              q.eq("gameId", game._id).eq("turnNumber", game.currentTurn),
-            )
-            .unique();
-          const preparationRow = await ctx.db
-            .query("sim_turn_preparations")
-            .withIndex("by_gameId_and_turnNumber", (q) =>
-              q.eq("gameId", game._id).eq("turnNumber", game.currentTurn),
-            )
-            .unique();
           const stalePreparedTurn =
             turnRow !== null &&
             (turnRow.state === "prepared" || preparationRow?.state === "prepared") &&
@@ -77,7 +115,7 @@ export const tickRunningGames = internalMutation({
                 gameId: game._id,
                 turnNumber: retried.turnNumber,
               });
-              stepped += 1;
+              recovered += 1;
               continue;
             }
           }
@@ -89,17 +127,17 @@ export const tickRunningGames = internalMutation({
           gameId: game._id,
           turnNumber: begin.turnNumber,
         });
-        stepped += 1;
+        recovered += 1;
       } catch (error) {
         console.error(
-          "tickRunningGames: skipped game after error",
+          "tickRunningGames: recovery skipped game after error",
           game._id,
           error,
         );
       }
     }
 
-    return { stepped };
+    return { recovered };
   },
 });
 
@@ -141,6 +179,7 @@ export const sweepInactiveGames = internalMutation({
       .withIndex("by_status", (q) => q.eq("status", "finished"))
       .take(32);
     for (const game of finishedGames) {
+      await backfillDurableResultSnapshotsForGame(ctx, game._id);
       if (
         game.finalizationState === "pending_cleanup" ||
         game.finalizationState === "cleaned" ||

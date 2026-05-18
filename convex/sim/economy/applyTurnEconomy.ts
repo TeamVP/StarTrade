@@ -32,6 +32,8 @@ import {
 import { type GameSettings, loadGameSettings } from "./gameSettings";
 import { computeSystemFoodPrice } from "./foodPricing";
 import { insertSimEvent } from "../eventLog";
+import { gameUsesTraderEconomy } from "../gameMode";
+import { resolveGameActorIdForEmpire } from "../systemHoldings";
 
 const STARVING_SHIP_EFFORT_CREDITS_PER_SHIP_POINT = 100;
 
@@ -107,6 +109,7 @@ async function abandonUnderpopulatedColony(
   await ctx.db.patch("gal_systems", params.system._id, {
     population: 0,
     ownerEmpireId: null,
+    ownerGameActorId: undefined,
     underAttack: false,
     foodShortageTurns: 0,
     lastFoodShortageTurn: undefined,
@@ -174,6 +177,7 @@ async function collapseEmpire(
 
     await ctx.db.patch("gal_systems", sys._id, {
       ownerEmpireId: null,
+      ownerGameActorId: undefined,
       localTreasury: STAR_SYSTEM_STARTING_TREASURY,
       underAttack: false,
       taxBlockedUntilTurn: undefined,
@@ -196,16 +200,24 @@ async function collapseEmpire(
     treasury: Math.max(0, empire.treasury),
   });
 
+  const empireGameActorId = await resolveGameActorIdForEmpire(ctx, {
+    gameId: params.gameId,
+    empireId: empire._id,
+  });
+
   await ctx.db.insert("sim_events", {
     gameId: params.gameId,
     turnNumber: params.turnNumber,
     eventType: "empire_collapse_started",
-    actorType: "empire",
-    actorId: empire._id,
+    actorType: empireGameActorId !== null ? "game_actor" : "empire",
+    actorId: empireGameActorId ?? empire._id,
     targetType: null,
     targetId: null,
     summary: `${empire.name} collapsed — homeworld only retained`,
-    payload: JSON.stringify({ empireId: empire._id }),
+    payload: JSON.stringify({
+      empireId: empire._id,
+      ...(empireGameActorId !== null ? { gameActorId: empireGameActorId } : {}),
+    }),
   });
 }
 
@@ -234,6 +246,8 @@ export async function applyTurnEconomy(
   },
 ): Promise<void> {
   const settings = params.settings ?? (await loadGameSettings(ctx, params.gameId));
+  const game = await ctx.db.get("sim_games", params.gameId);
+  const persistEconomyHistory = game !== null && gameUsesTraderEconomy(game);
 
   const empires = await ctx.db
     .query("emp_states")
@@ -247,6 +261,18 @@ export async function applyTurnEconomy(
 
   const holdingBySystem = await loadHoldingsBySystem(ctx, params.gameId, empires);
   const empireById = new Map(empires.map((e) => [e._id, e]));
+  const actorIdByLegacyEmpireId = new Map<Id<"emp_states">, Id<"sim_game_actors">>();
+  if ((game?.runtimeVersion ?? "v1_empire") === "v2_game_actor") {
+    const actors = await ctx.db
+      .query("sim_game_actors")
+      .withIndex("by_gameId", (q) => q.eq("gameId", params.gameId))
+      .collect();
+    for (const actor of actors) {
+      if (actor.legacyEmpireId !== null) {
+        actorIdByLegacyEmpireId.set(actor.legacyEmpireId, actor._id);
+      }
+    }
+  }
 
   const taxIncomeByEmpire = new Map<Id<"emp_states">, number>();
   const researchByEmpire = new Map<Id<"emp_states">, number>();
@@ -466,9 +492,11 @@ export async function applyTurnEconomy(
         const newProgress = progress0 + divert;
         garrisonShips = shipsProduced - divert;
         if (newProgress >= cost) {
+          const ownerGameActorId = actorIdByLegacyEmpireId.get(ownerId) ?? null;
           await ctx.db.insert("col_colony_ships", {
             gameId: params.gameId,
             empireId: ownerId,
+            ...(ownerGameActorId !== null ? { gameActorId: ownerGameActorId } : {}),
             name: `${system.name} colony ship`,
             originSystemId: system._id,
             destinationSystemId: null,
@@ -484,8 +512,8 @@ export async function applyTurnEconomy(
             eventType: "colony_ship_completed",
             actorType: "system",
             actorId: system._id,
-            targetType: "empire",
-            targetId: ownerId,
+            targetType: ownerGameActorId !== null ? "game_actor" : "empire",
+            targetId: ownerGameActorId ?? ownerId,
             summary: `${system.name}: colony ship ready for launch`,
             payload: { systemId: system._id, empireId: ownerId },
           });
@@ -577,30 +605,32 @@ export async function applyTurnEconomy(
     empireOwnedPop.set(ownerId, (empireOwnedPop.get(ownerId) ?? 0) + newPop);
     empireOwnedFood.set(ownerId, (empireOwnedFood.get(ownerId) ?? 0) + newFoodStock);
 
-    await ctx.db.insert("eco_system_outputs", {
-      gameId: params.gameId,
-      systemId: system._id,
-      turnNumber: params.turnNumber,
-      commodity: "food",
-      produced: foodProducedTotal,
-      consumed: foodDemand,
-    });
-    await ctx.db.insert("eco_system_outputs", {
-      gameId: params.gameId,
-      systemId: system._id,
-      turnNumber: params.turnNumber,
-      commodity: "ships",
-      produced: shipsProduced,
-      consumed: garrisonShips > 0 ? Math.ceil(garrisonShips * WEAPONS_CONSUMPTION_RATE) : 0,
-    });
-    await ctx.db.insert("eco_system_outputs", {
-      gameId: params.gameId,
-      systemId: system._id,
-      turnNumber: params.turnNumber,
-      commodity: "research",
-      produced: researchProduced,
-      consumed: 0,
-    });
+    if (persistEconomyHistory) {
+      await ctx.db.insert("eco_system_outputs", {
+        gameId: params.gameId,
+        systemId: system._id,
+        turnNumber: params.turnNumber,
+        commodity: "food",
+        produced: foodProducedTotal,
+        consumed: foodDemand,
+      });
+      await ctx.db.insert("eco_system_outputs", {
+        gameId: params.gameId,
+        systemId: system._id,
+        turnNumber: params.turnNumber,
+        commodity: "ships",
+        produced: shipsProduced,
+        consumed: garrisonShips > 0 ? Math.ceil(garrisonShips * WEAPONS_CONSUMPTION_RATE) : 0,
+      });
+      await ctx.db.insert("eco_system_outputs", {
+        gameId: params.gameId,
+        systemId: system._id,
+        turnNumber: params.turnNumber,
+        commodity: "research",
+        produced: researchProduced,
+        consumed: 0,
+      });
+    }
 
     nOwnedSystems += 1;
     aggFoodPressure +=
@@ -648,7 +678,7 @@ export async function applyTurnEconomy(
     }
   }
 
-  if (nOwnedSystems > 0) {
+  if (persistEconomyHistory && nOwnedSystems > 0) {
     const fMean = aggFoodPressure / nOwnedSystems;
     const wMean = aggWeaponsPressure / nOwnedSystems;
     const hMean = aggHeavyPressure / nOwnedSystems;

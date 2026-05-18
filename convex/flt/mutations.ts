@@ -7,6 +7,57 @@ import { findLinkBetweenSystems } from "../gal/linkUtils";
 import { gameAllowsPlayerActions, touchGameMeaningfulActivity } from "../sim/helpers";
 import { invalidateOpenTurnPreparation } from "../sim/turnPreparationInvalidation";
 
+async function resolveControlledAccessForUser(
+  ctx: MutationCtx,
+  params: {
+    gameId: Id<"sim_games">;
+    userId: Id<"users">;
+  },
+): Promise<{
+  isAdmin: boolean;
+  controlledEmpireId: Id<"emp_states"> | null;
+  controlledGameActorId: Id<"sim_game_actors"> | null;
+}> {
+  const binding = await ctx.db
+    .query("usr_game_roles")
+    .withIndex("by_gameId_and_userId", (q) =>
+      q.eq("gameId", params.gameId).eq("userId", params.userId),
+    )
+    .unique();
+
+  if (binding === null || !binding.isActive) {
+    throw new Error("You are not a member of this game.");
+  }
+  if (binding.role === "admin") {
+    return { isAdmin: true, controlledEmpireId: null, controlledGameActorId: null };
+  }
+  if (binding.role !== "empire") {
+    throw new Error("You do not control that system.");
+  }
+
+  const game = await ctx.db.get("sim_games", params.gameId);
+  const runtimeVersion = game?.runtimeVersion ?? "v1_empire";
+  if (runtimeVersion !== "v2_game_actor") {
+    return {
+      isAdmin: false,
+      controlledEmpireId: binding.empireId,
+      controlledGameActorId: null,
+    };
+  }
+
+  const actor = await ctx.db
+    .query("sim_game_actors")
+    .withIndex("by_gameId_and_controllerUserId", (q) =>
+      q.eq("gameId", params.gameId).eq("controllerUserId", params.userId),
+    )
+    .unique();
+  return {
+    isAdmin: false,
+    controlledEmpireId: binding.empireId ?? actor?.legacyEmpireId ?? null,
+    controlledGameActorId: actor?._id ?? null,
+  };
+}
+
 async function assertEmpireAccessToOwnedSystem(
   ctx: MutationCtx,
   params: {
@@ -23,22 +74,14 @@ async function assertEmpireAccessToOwnedSystem(
     throw new Error("That system has no empire owner.");
   }
 
-  const binding = await ctx.db
-    .query("usr_game_roles")
-    .withIndex("by_gameId_and_userId", (q) =>
-      q.eq("gameId", params.gameId).eq("userId", params.userId),
-    )
-    .unique();
-
-  if (binding === null || !binding.isActive) {
-    throw new Error("You are not a member of this game.");
-  }
-
-  const isAdmin = binding.role === "admin";
+  const { isAdmin, controlledEmpireId, controlledGameActorId } = await resolveControlledAccessForUser(ctx, {
+    gameId: params.gameId,
+    userId: params.userId,
+  });
   const ownsSystem =
-    binding.role === "empire" &&
-    binding.empireId !== null &&
-    binding.empireId === system.ownerEmpireId;
+    controlledGameActorId !== null && system.ownerGameActorId !== undefined
+      ? controlledGameActorId === system.ownerGameActorId
+      : controlledEmpireId === system.ownerEmpireId;
 
   if (!isAdmin && !ownsSystem) {
     throw new Error("You do not control that system.");
@@ -61,25 +104,41 @@ async function assertCanIssueFleetOrder(
     throw new Error("Fleet not found in this game.");
   }
 
-  const binding = await ctx.db
-    .query("usr_game_roles")
-    .withIndex("by_gameId_and_userId", (q) =>
-      q.eq("gameId", args.gameId).eq("userId", args.userId),
-    )
-    .unique();
+  const { isAdmin, controlledEmpireId, controlledGameActorId } = await resolveControlledAccessForUser(ctx, {
+    gameId: args.gameId,
+    userId: args.userId,
+  });
+  const ownsFleet =
+    controlledGameActorId !== null && fleet.gameActorId !== undefined
+      ? controlledGameActorId === fleet.gameActorId
+      : controlledEmpireId === fleet.empireId;
 
-  if (binding === null || !binding.isActive) {
-    throw new Error("You are not a member of this game.");
+  if (!isAdmin && !ownsFleet) {
+    throw new Error("You cannot issue orders for this fleet.");
   }
 
-  const isAdmin = binding.role === "admin";
-  const ownsEmpire =
-    binding.role === "empire" &&
-    binding.empireId !== null &&
-    binding.empireId === fleet.empireId;
+  return {
+    fleet,
+    isAdmin,
+    controlledEmpireId,
+    controlledGameActorId,
+  };
+}
 
-  if (!isAdmin && !ownsEmpire) {
-    throw new Error("You cannot issue orders for this fleet.");
+async function assertGameActorMatchesEmpire(
+  ctx: MutationCtx,
+  params: {
+    gameId: Id<"sim_games">;
+    gameActorId: Id<"sim_game_actors">;
+    empireId: Id<"emp_states">;
+  },
+): Promise<void> {
+  const actor = await ctx.db.get("sim_game_actors", params.gameActorId);
+  if (actor === null || actor.gameId !== params.gameId) {
+    throw new Error("Game actor not found.");
+  }
+  if (actor.legacyEmpireId !== params.empireId) {
+    throw new Error("Game actor does not match the controlled empire.");
   }
 }
 
@@ -88,6 +147,7 @@ async function replaceManualGarrisonRoute(
   params: {
     gameId: Id<"sim_games">;
     empireId: Id<"emp_states">;
+    gameActorId?: Id<"sim_game_actors">;
     originSystemId: Id<"gal_systems">;
     destinationSystemId: Id<"gal_systems">;
     dispatchPct: number;
@@ -103,10 +163,16 @@ async function replaceManualGarrisonRoute(
   }
 
   const origin = await ctx.db.get("gal_systems", params.originSystemId);
+  const originOwnedByIssuer =
+    origin !== null &&
+    origin.gameId === params.gameId &&
+    ((params.gameActorId !== undefined && origin.ownerGameActorId !== undefined
+      ? origin.ownerGameActorId === params.gameActorId
+      : false) || origin.ownerEmpireId === params.empireId);
   if (
     origin === null ||
     origin.gameId !== params.gameId ||
-    origin.ownerEmpireId !== params.empireId
+    !originOwnedByIssuer
   ) {
     throw new Error("Standing routes must start from a system owned by the issuing empire.");
   }
@@ -142,6 +208,7 @@ async function replaceManualGarrisonRoute(
   return await ctx.db.insert("flt_garrison_routes", {
     gameId: params.gameId,
     empireId: params.empireId,
+    ...(params.gameActorId !== undefined ? { gameActorId: params.gameActorId } : {}),
     originSystemId: params.originSystemId,
     destinationSystemId: params.destinationSystemId,
     dispatchPct: pct,
@@ -153,6 +220,7 @@ async function replaceManualGarrisonRoute(
 export const issueFleetOrder = mutation({
   args: {
     gameId: v.id("sim_games"),
+    gameActorId: v.optional(v.id("sim_game_actors")),
     fleetId: v.id("flt_fleets"),
     /** Deprecated client hint; orders are stamped with the authoritative server-side current turn. */
     turnNumber: v.optional(v.number()),
@@ -167,15 +235,19 @@ export const issueFleetOrder = mutation({
       throw new Error("Authentication required.");
     }
 
-    await assertCanIssueFleetOrder(ctx, {
+    const access = await assertCanIssueFleetOrder(ctx, {
       gameId: args.gameId,
       fleetId: args.fleetId,
       userId,
     });
 
-    const fleet = await ctx.db.get("flt_fleets", args.fleetId);
-    if (fleet === null) {
-      throw new Error("Fleet not found.");
+    const fleet = access.fleet;
+    if (args.gameActorId !== undefined) {
+      await assertGameActorMatchesEmpire(ctx, {
+        gameId: args.gameId,
+        gameActorId: args.gameActorId,
+        empireId: fleet.empireId,
+      });
     }
 
     const game = await ctx.db.get("sim_games", args.gameId);
@@ -241,8 +313,14 @@ export const issueFleetOrder = mutation({
       }
     }
 
+    const resolvedOrderGameActorId =
+      args.gameActorId ?? access.controlledGameActorId ?? fleet.gameActorId;
+
     const orderId = await ctx.db.insert("flt_orders", {
       gameId: args.gameId,
+      ...(resolvedOrderGameActorId !== null && resolvedOrderGameActorId !== undefined
+        ? { gameActorId: resolvedOrderGameActorId }
+        : {}),
       fleetId: args.fleetId,
       issuedByUserId: userId,
       turnNumber: game.currentTurn,
@@ -259,6 +337,9 @@ export const issueFleetOrder = mutation({
       await replaceManualGarrisonRoute(ctx, {
         gameId: args.gameId,
         empireId: fleet.empireId,
+        ...(resolvedOrderGameActorId !== null && resolvedOrderGameActorId !== undefined
+          ? { gameActorId: resolvedOrderGameActorId }
+          : {}),
         originSystemId: fleet.originSystemId,
         destinationSystemId: args.targetSystemId,
         dispatchPct: args.standingRouteDispatchPct,
@@ -276,6 +357,7 @@ export const issueFleetOrder = mutation({
 export const setGarrisonRoute = mutation({
   args: {
     gameId: v.id("sim_games"),
+    gameActorId: v.optional(v.id("sim_game_actors")),
     originSystemId: v.id("gal_systems"),
     destinationSystemId: v.union(v.id("gal_systems"), v.null()),
     dispatchPct: v.number(),
@@ -300,6 +382,17 @@ export const setGarrisonRoute = mutation({
       userId,
       originSystemId: args.originSystemId,
     });
+    const access = await resolveControlledAccessForUser(ctx, {
+      gameId: args.gameId,
+      userId,
+    });
+    if (args.gameActorId !== undefined) {
+      await assertGameActorMatchesEmpire(ctx, {
+        gameId: args.gameId,
+        gameActorId: args.gameActorId,
+        empireId,
+      });
+    }
 
     const pct = Math.round(args.dispatchPct);
     if (!Number.isInteger(pct) || pct < 0 || pct > 100) {
@@ -325,9 +418,14 @@ export const setGarrisonRoute = mutation({
       return null;
     }
 
+    const resolvedRouteGameActorId = args.gameActorId ?? access.controlledGameActorId;
+
     const routeId = await replaceManualGarrisonRoute(ctx, {
       gameId: args.gameId,
       empireId,
+      ...(resolvedRouteGameActorId !== null && resolvedRouteGameActorId !== undefined
+        ? { gameActorId: resolvedRouteGameActorId }
+        : {}),
       originSystemId: args.originSystemId,
       destinationSystemId: args.destinationSystemId,
       dispatchPct: pct,

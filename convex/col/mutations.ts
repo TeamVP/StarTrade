@@ -26,16 +26,14 @@ import {
 import { validateColonyShipRouteDestinations } from "./routeValidation";
 import { invalidateOpenTurnPreparation } from "../sim/turnPreparationInvalidation";
 
-async function assertGameAndMembership(
+async function resolveControlledAccess(
   ctx: MutationCtx,
   params: { gameId: Id<"sim_games">; userId: Id<"users"> },
-): Promise<Doc<"sim_games">> {
-  const game = await ctx.db.get("sim_games", params.gameId);
-  if (game === null) throw new Error("Game not found.");
-  if (!gameAllowsPlayerActions(game.status)) {
-    throw new Error("Game must be running or paused.");
-  }
-
+): Promise<{
+  isAdmin: boolean;
+  controlledEmpireId: Id<"emp_states"> | null;
+  controlledGameActorId: Id<"sim_game_actors"> | null;
+}> {
   const binding = await ctx.db
     .query("usr_game_roles")
     .withIndex("by_gameId_and_userId", (q) =>
@@ -49,6 +47,47 @@ async function assertGameAndMembership(
   if (binding.role === "observer" || binding.role === "trader") {
     throw new Error("Only empire players or admins can use colony ships.");
   }
+  if (binding.role === "admin") {
+    return { isAdmin: true, controlledEmpireId: null, controlledGameActorId: null };
+  }
+
+  const game = await ctx.db.get("sim_games", params.gameId);
+  if (game === null) {
+    throw new Error("Game not found.");
+  }
+  const runtimeVersion = game.runtimeVersion ?? "v1_empire";
+  if (runtimeVersion !== "v2_game_actor") {
+    return {
+      isAdmin: false,
+      controlledEmpireId: binding.empireId,
+      controlledGameActorId: null,
+    };
+  }
+
+  const actor = await ctx.db
+    .query("sim_game_actors")
+    .withIndex("by_gameId_and_controllerUserId", (q) =>
+      q.eq("gameId", params.gameId).eq("controllerUserId", params.userId),
+    )
+    .unique();
+  return {
+    isAdmin: false,
+    controlledEmpireId: binding.empireId ?? actor?.legacyEmpireId ?? null,
+    controlledGameActorId: actor?._id ?? null,
+  };
+}
+
+async function assertGameAndMembership(
+  ctx: MutationCtx,
+  params: { gameId: Id<"sim_games">; userId: Id<"users"> },
+): Promise<Doc<"sim_games">> {
+  const game = await ctx.db.get("sim_games", params.gameId);
+  if (game === null) throw new Error("Game not found.");
+  if (!gameAllowsPlayerActions(game.status)) {
+    throw new Error("Game must be running or paused.");
+  }
+
+  await resolveControlledAccess(ctx, params);
   return game;
 }
 
@@ -59,7 +98,15 @@ async function assertEmpireControlsHomeworld(
     userId: Id<"users">;
     systemId: Id<"gal_systems">;
   },
-): Promise<{ system: Doc<"gal_systems">; empire: Doc<"emp_states"> }> {
+): Promise<{
+  system: Doc<"gal_systems">;
+  empire: Doc<"emp_states">;
+  access: {
+    isAdmin: boolean;
+    controlledEmpireId: Id<"emp_states"> | null;
+    controlledGameActorId: Id<"sim_game_actors"> | null;
+  };
+}> {
   const game = await assertGameAndMembership(ctx, {
     gameId: params.gameId,
     userId: params.userId,
@@ -74,24 +121,18 @@ async function assertEmpireControlsHomeworld(
     throw new Error("That system has no empire owner.");
   }
 
-  const binding = await ctx.db
-    .query("usr_game_roles")
-    .withIndex("by_gameId_and_userId", (q) =>
-      q.eq("gameId", params.gameId).eq("userId", params.userId),
-    )
-    .unique();
-
-  if (binding === null || !binding.isActive) {
-    throw new Error("You are not a member of this game.");
-  }
-
-  const isAdmin = binding.role === "admin";
+  const access = await resolveControlledAccess(ctx, {
+    gameId: params.gameId,
+    userId: params.userId,
+  });
   const ownsSystem =
-    binding.role === "empire" &&
-    binding.empireId !== null &&
-    binding.empireId === system.ownerEmpireId;
+    access.controlledGameActorId !== null &&
+    system.ownerGameActorId !== undefined &&
+    system.ownerGameActorId !== null
+      ? access.controlledGameActorId === system.ownerGameActorId
+      : access.controlledEmpireId === system.ownerEmpireId;
 
-  if (!isAdmin && !ownsSystem) {
+  if (!access.isAdmin && !ownsSystem) {
     throw new Error("You do not control that system.");
   }
 
@@ -106,7 +147,7 @@ async function assertEmpireControlsHomeworld(
     throw new Error("Colony ships can only be built at a homeworld.");
   }
 
-  return { system, empire };
+  return { system, empire, access };
 }
 
 async function assertControlsColonyShip(
@@ -116,7 +157,14 @@ async function assertControlsColonyShip(
     userId: Id<"users">;
     colonyShipId: Id<"col_colony_ships">;
   },
-): Promise<Doc<"col_colony_ships">> {
+): Promise<{
+  ship: Doc<"col_colony_ships">;
+  access: {
+    isAdmin: boolean;
+    controlledEmpireId: Id<"emp_states"> | null;
+    controlledGameActorId: Id<"sim_game_actors"> | null;
+  };
+}> {
   await assertGameAndMembership(ctx, {
     gameId: params.gameId,
     userId: params.userId,
@@ -127,33 +175,45 @@ async function assertControlsColonyShip(
     throw new Error("Colony ship not found.");
   }
 
-  const binding = await ctx.db
-    .query("usr_game_roles")
-    .withIndex("by_gameId_and_userId", (q) =>
-      q.eq("gameId", params.gameId).eq("userId", params.userId),
-    )
-    .unique();
+  const access = await resolveControlledAccess(ctx, {
+    gameId: params.gameId,
+    userId: params.userId,
+  });
+  const ownsShip =
+    access.controlledGameActorId !== null &&
+    ship.gameActorId !== undefined &&
+    ship.gameActorId !== null
+      ? access.controlledGameActorId === ship.gameActorId
+      : access.controlledEmpireId === ship.empireId;
 
-  if (binding === null || !binding.isActive) {
-    throw new Error("You are not a member of this game.");
-  }
-
-  const isAdmin = binding.role === "admin";
-  const ownsEmpire =
-    binding.role === "empire" &&
-    binding.empireId !== null &&
-    binding.empireId === ship.empireId;
-
-  if (!isAdmin && !ownsEmpire) {
+  if (!access.isAdmin && !ownsShip) {
     throw new Error("You cannot command this colony ship.");
   }
 
-  return ship;
+  return { ship, access };
+}
+
+async function assertGameActorMatchesEmpire(
+  ctx: MutationCtx,
+  params: {
+    gameId: Id<"sim_games">;
+    gameActorId: Id<"sim_game_actors">;
+    empireId: Id<"emp_states">;
+  },
+): Promise<void> {
+  const actor = await ctx.db.get("sim_game_actors", params.gameActorId);
+  if (actor === null || actor.gameId !== params.gameId) {
+    throw new Error("Game actor not found.");
+  }
+  if (actor.legacyEmpireId !== params.empireId) {
+    throw new Error("Game actor does not match the controlled empire.");
+  }
 }
 
 export const startColonyShipBuild = mutation({
   args: {
     gameId: v.id("sim_games"),
+    gameActorId: v.optional(v.id("sim_game_actors")),
     systemId: v.id("gal_systems"),
   },
   returns: v.null(),
@@ -166,6 +226,13 @@ export const startColonyShipBuild = mutation({
       userId,
       systemId: args.systemId,
     });
+    if (args.gameActorId !== undefined) {
+      await assertGameActorMatchesEmpire(ctx, {
+        gameId: args.gameId,
+        gameActorId: args.gameActorId,
+        empireId: empire._id,
+      });
+    }
 
     const idleHere = await ctx.db
       .query("col_colony_ships")
@@ -231,6 +298,7 @@ export const startColonyShipBuild = mutation({
 export const cancelColonyShipBuild = mutation({
   args: {
     gameId: v.id("sim_games"),
+    gameActorId: v.optional(v.id("sim_game_actors")),
     systemId: v.id("gal_systems"),
   },
   returns: v.null(),
@@ -243,6 +311,13 @@ export const cancelColonyShipBuild = mutation({
       userId,
       systemId: args.systemId,
     });
+    if (args.gameActorId !== undefined && system.ownerEmpireId !== null) {
+      await assertGameActorMatchesEmpire(ctx, {
+        gameId: args.gameId,
+        gameActorId: args.gameActorId,
+        empireId: system.ownerEmpireId,
+      });
+    }
 
     await ctx.db.patch("gal_systems", system._id, {
       colonyShipBuildEnabled: false,
@@ -257,6 +332,7 @@ export const cancelColonyShipBuild = mutation({
 export const dispatchColonyShip = mutation({
   args: {
     gameId: v.id("sim_games"),
+    gameActorId: v.optional(v.id("sim_game_actors")),
     colonyShipId: v.id("col_colony_ships"),
     /** Ordered hyperspace hops from the ship's current system; first id is the first destination. */
     routeSystemIds: v.array(v.id("gal_systems")),
@@ -266,11 +342,18 @@ export const dispatchColonyShip = mutation({
     const userId = await getAuthUserId(ctx);
     if (userId === null) throw new Error("Authentication required.");
 
-    const ship = await assertControlsColonyShip(ctx, {
+    const { ship, access } = await assertControlsColonyShip(ctx, {
       gameId: args.gameId,
       userId,
       colonyShipId: args.colonyShipId,
     });
+    if (args.gameActorId !== undefined) {
+      await assertGameActorMatchesEmpire(ctx, {
+        gameId: args.gameId,
+        gameActorId: args.gameActorId,
+        empireId: ship.empireId,
+      });
+    }
 
     if (ship.status !== "idle") {
       throw new Error("Colony ship must be idle to dispatch.");
@@ -289,7 +372,14 @@ export const dispatchColonyShip = mutation({
     if (originSystem === null) throw new Error("Origin system missing.");
     const empire = await ctx.db.get("emp_states", ship.empireId);
     if (empire === null) throw new Error("Empire missing.");
-    if (originSystem.ownerEmpireId !== ship.empireId) {
+    const originOwnedByShipActor =
+      ship.gameActorId !== undefined &&
+      ship.gameActorId !== null &&
+      originSystem.ownerGameActorId !== undefined &&
+      originSystem.ownerGameActorId !== null
+        ? originSystem.ownerGameActorId === ship.gameActorId
+        : originSystem.ownerEmpireId === ship.empireId;
+    if (!originOwnedByShipActor) {
       throw new Error("Colony ships may only depart from worlds your empire controls.");
     }
 
@@ -305,7 +395,14 @@ export const dispatchColonyShip = mutation({
     const routeErr = validateColonyShipRouteDestinations({
       routeSystemIds: route,
       empireId: ship.empireId,
-      getOwner: (id) => systemsById.get(id)?.ownerEmpireId ?? null,
+      actorId: ship.gameActorId ?? null,
+      getOwner: (id) => {
+        const system = systemsById.get(id);
+        return {
+          ownerEmpireId: system?.ownerEmpireId ?? null,
+          ownerActorId: system?.ownerGameActorId ?? null,
+        };
+      },
     });
     if (routeErr !== null) throw new Error(routeErr);
 
@@ -348,7 +445,11 @@ export const dispatchColonyShip = mutation({
       });
     }
 
+    const resolvedShipGameActorId =
+      ship.gameActorId ?? access.controlledGameActorId ?? null;
+
     await ctx.db.patch("col_colony_ships", ship._id, {
+      ...(resolvedShipGameActorId !== null ? { gameActorId: resolvedShipGameActorId } : {}),
       destinationSystemId: firstDest,
       etaTurn,
       status: "enRoute",
@@ -388,6 +489,7 @@ export const dispatchColonyShip = mutation({
 export const colonize = mutation({
   args: {
     gameId: v.id("sim_games"),
+    gameActorId: v.optional(v.id("sim_game_actors")),
     colonyShipId: v.id("col_colony_ships"),
   },
   returns: v.null(),
@@ -395,11 +497,19 @@ export const colonize = mutation({
     const userId = await getAuthUserId(ctx);
     if (userId === null) throw new Error("Authentication required.");
 
-    const ship = await assertControlsColonyShip(ctx, {
+    const { ship, access } = await assertControlsColonyShip(ctx, {
       gameId: args.gameId,
       userId,
       colonyShipId: args.colonyShipId,
     });
+    const resolvedShipGameActorId = ship.gameActorId ?? access.controlledGameActorId ?? null;
+    if (args.gameActorId !== undefined) {
+      await assertGameActorMatchesEmpire(ctx, {
+        gameId: args.gameId,
+        gameActorId: args.gameActorId,
+        empireId: ship.empireId,
+      });
+    }
 
     if (ship.status !== "idle") {
       throw new Error("Colony ship must be idle at the target system to colonize.");
@@ -424,14 +534,20 @@ export const colonize = mutation({
     const game = await ctx.db.get("sim_games", args.gameId);
     if (game === null) throw new Error("Game not found.");
 
+    const resolvedWinnerGameActorId = args.gameActorId ?? resolvedShipGameActorId;
+
     await reconcileSystemHolding(ctx, {
       gameId: args.gameId,
       systemId: target._id,
       winnerEmpireId: ship.empireId,
+      ...(resolvedWinnerGameActorId !== null && resolvedWinnerGameActorId !== undefined
+        ? { winnerGameActorId: resolvedWinnerGameActorId }
+        : {}),
     });
 
     await ctx.db.patch("gal_systems", target._id, {
       ownerEmpireId: ship.empireId,
+      ownerGameActorId: resolvedWinnerGameActorId ?? undefined,
       population: COLONY_SHIP_POP_CARGO_PEOPLE,
       colonyFoodBonusPerTurn: COLONY_NEW_WORLD_FOOD_BONUS_PER_TURN,
       stockFood: Math.max(COLONY_NEW_WORLD_STARTER_FOOD, target.stockFood ?? 0),

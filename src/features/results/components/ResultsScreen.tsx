@@ -19,6 +19,20 @@ function parseStrategySummary(summaryJson: string | null): string | null {
   }
 }
 
+function formatActorSnapshot(
+  slotNumber: number | null | undefined,
+  actorLabel: string | null | undefined,
+  actorDisplayName: string | null | undefined,
+): string | null {
+  if (slotNumber === null || slotNumber === undefined) {
+    return actorDisplayName ?? actorLabel ?? null;
+  }
+  const actorName = actorDisplayName ?? actorLabel ?? null;
+  return actorName !== null && actorName !== undefined
+    ? `Actor ${slotNumber} · ${actorName}`
+    : `Actor ${slotNumber}`;
+}
+
 export function ResultsScreen(props: { playerView?: boolean }) {
   const playerView = props.playerView === true;
   const recentResults = useQuery(api.usr.queries.listRecentOfficialEmpireResults, { limit: 12 });
@@ -89,7 +103,7 @@ export function ResultsScreen(props: { playerView?: boolean }) {
                 <p className="mt-1 text-sm text-st-muted">
                   {result.winner === null
                     ? "No winner recorded"
-                    : `${result.winner.empireName} won${result.winner.playerName !== null ? ` as ${result.winner.playerName}` : ""}`}
+                    : `${result.winner.empireName} won as ${result.winner.controllerLabel}${result.winner.actorDisplayName !== null ? ` · ${result.winner.actorDisplayName}` : result.winner.actorLabel !== null ? ` · ${result.winner.actorLabel}` : ""}`}
                 </p>
                 <p className="mt-1 text-xs text-st-muted">
                   Ended {new Date(result.endedAt).toLocaleString()} · Score {result.winner?.scoreFinal ?? "-"}
@@ -125,6 +139,11 @@ export function ResultsScreen(props: { playerView?: boolean }) {
                   <div className="min-w-0">
                     <div className="font-medium text-st-fg">#{index + 1} {row.displayName ?? row.userId}</div>
                     <div className="text-xs text-st-muted">{row.games} games · {row.top3} top 3s</div>
+                    {formatActorSnapshot(row.latestActorSlotNumber, row.latestActorLabel, row.latestActorDisplayName) !== null ? (
+                      <div className="text-xs text-st-muted">
+                        Latest faction: {formatActorSnapshot(row.latestActorSlotNumber, row.latestActorLabel, row.latestActorDisplayName)}
+                      </div>
+                    ) : null}
                   </div>
                   <div className="text-right text-xs text-st-muted">
                     <div>{row.wins} wins</div>
@@ -154,6 +173,11 @@ export function ResultsScreen(props: { playerView?: boolean }) {
                   <div className="min-w-0">
                     <div className="font-medium text-st-fg">#{index + 1} {row.latestPlayerName ?? row.npcPlayerKey}</div>
                     <div className="text-xs text-st-muted">{row.games} games · {row.top3} top 3s</div>
+                    {formatActorSnapshot(row.latestActorSlotNumber, row.latestActorLabel, row.latestActorDisplayName) !== null ? (
+                      <div className="text-xs text-st-muted">
+                        Latest faction: {formatActorSnapshot(row.latestActorSlotNumber, row.latestActorLabel, row.latestActorDisplayName)}
+                      </div>
+                    ) : null}
                   </div>
                   <div className="text-right text-xs text-st-muted">
                     <div>{row.wins} wins</div>
@@ -188,6 +212,13 @@ export function ResultsScreen(props: { playerView?: boolean }) {
                     </div>
                   </div>
                   <div className="mt-1 text-xs text-st-muted">{row.games} games · {row.top3} top 3s</div>
+                  {formatActorSnapshot(row.latestActorSlotNumber, row.latestActorLabel, row.latestActorDisplayName) !== null || row.latestControllerLabel !== null ? (
+                    <div className="mt-1 text-xs text-st-muted">
+                      Latest run: {[formatActorSnapshot(row.latestActorSlotNumber, row.latestActorLabel, row.latestActorDisplayName), row.latestControllerLabel]
+                        .filter((value): value is string => value !== null)
+                        .join(" · ")}
+                    </div>
+                  ) : null}
                   {row.sampleStrategySummaryJson !== null ? (
                     <p className="mt-1 text-xs text-st-muted">
                       {parseStrategySummary(row.sampleStrategySummaryJson) ?? "Recorded strategy summary"}

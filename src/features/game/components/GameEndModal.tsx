@@ -9,6 +9,24 @@ import { getGamePath } from "@/features/games/gameRoutes";
 import { useGalaxyData } from "@/features/galaxy/hooks/useGalaxyData";
 import { usePlayerEmpireId, usePlayerGameMembership } from "@/features/player/PlayerPreviewContext";
 
+function formatActorAwareEndLabel(params: {
+  runtimeVersion?: "v1_empire" | "v2_game_actor";
+  actorSlotNumber?: number | null;
+  actorLabel?: string | null;
+  actorDisplayName?: string | null;
+  empireName?: string | null;
+}): string | null {
+  if (
+    params.runtimeVersion === "v2_game_actor" &&
+    params.actorSlotNumber !== null &&
+    params.actorSlotNumber !== undefined
+  ) {
+    const actorName = params.actorDisplayName ?? params.actorLabel ?? params.empireName ?? null;
+    return `Actor ${params.actorSlotNumber}${actorName !== null && actorName.length > 0 ? ` · ${actorName}` : ""}`;
+  }
+  return params.empireName ?? null;
+}
+
 // ── Victory ──────────────────────────────────────────────────────────────────
 
 function VictoryModal({
@@ -219,7 +237,15 @@ export function GameEndModal() {
   const [dismissed, setDismissed] = useState(false);
   const [lastKnownEmpireId, setLastKnownEmpireId] = useState<typeof empireId>(empireId);
   const [lastKnownEmpireKey, setLastKnownEmpireKey] = useState<string | null>(null);
-  const [lastKnownEmpireName, setLastKnownEmpireName] = useState<string | null>(membership.empireName);
+  const [lastKnownEmpireName, setLastKnownEmpireName] = useState<string | null>(
+    formatActorAwareEndLabel({
+      runtimeVersion: membership.runtimeVersion,
+      actorSlotNumber: membership.actorSlotNumber,
+      actorLabel: membership.actorLabel,
+      actorDisplayName: membership.actorDisplayName,
+      empireName: membership.empireName,
+    }),
+  );
   // Latched once resigned; persists even if the empire record disappears after cleanup
   const [lastKnownResigned, setLastKnownResigned] = useState(false);
 
@@ -236,13 +262,27 @@ export function GameEndModal() {
     if (playerEmpire?.empireKey !== undefined) {
       setLastKnownEmpireKey(playerEmpire.empireKey);
     }
-    if ((membership.empireName ?? playerEmpire?.name) !== undefined) {
-      setLastKnownEmpireName(membership.empireName ?? playerEmpire?.name ?? null);
+    const displayName = formatActorAwareEndLabel({
+      runtimeVersion: membership.runtimeVersion ?? playerEmpire?.runtimeVersion,
+      actorSlotNumber: membership.actorSlotNumber ?? playerEmpire?.actorSlotNumber ?? null,
+      actorLabel: membership.actorLabel ?? playerEmpire?.actorLabel ?? null,
+      actorDisplayName: membership.actorDisplayName ?? playerEmpire?.actorDisplayName ?? null,
+      empireName: membership.empireName ?? playerEmpire?.name ?? null,
+    });
+    if (displayName !== undefined) {
+      setLastKnownEmpireName(displayName);
     }
     if (playerEmpire?.resignedAt !== undefined) {
       setLastKnownResigned(true);
     }
-  }, [membership.empireName, playerEmpire]);
+  }, [
+    membership.actorLabel,
+    membership.actorDisplayName,
+    membership.actorSlotNumber,
+    membership.empireName,
+    membership.runtimeVersion,
+    playerEmpire,
+  ]);
 
   const playerEmpireKey = playerEmpire?.empireKey ?? lastKnownEmpireKey;
   const playerPlacement =
@@ -285,7 +325,14 @@ export function GameEndModal() {
     setDismissed(true);
   }
 
-  const empireName = membership.empireName ?? playerEmpire?.name ?? lastKnownEmpireName;
+  const empireName =
+    formatActorAwareEndLabel({
+      runtimeVersion: membership.runtimeVersion ?? playerEmpire?.runtimeVersion,
+      actorSlotNumber: membership.actorSlotNumber ?? playerEmpire?.actorSlotNumber ?? null,
+      actorLabel: membership.actorLabel ?? playerEmpire?.actorLabel ?? null,
+      actorDisplayName: membership.actorDisplayName ?? playerEmpire?.actorDisplayName ?? null,
+      empireName: membership.empireName ?? playerEmpire?.name ?? lastKnownEmpireName,
+    }) ?? lastKnownEmpireName;
 
   if (modalKind === "victory")
     return <VictoryModal empireName={empireName} missionKey={activeMissionKey} />;

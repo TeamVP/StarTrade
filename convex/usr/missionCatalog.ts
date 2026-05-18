@@ -1,5 +1,15 @@
-import type { Doc } from "../_generated/dataModel";
+import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
+import {
+  isPublishedContentStatus,
+  resolvePublisherContentSource,
+  resolvePublisherContentStatus,
+  type PublisherContentSource,
+  type PublisherContentStatus,
+} from "./publisherAccess";
+
+export type AccessTier = "free" | "pro";
+export type MissionMode = "conquest_core" | "conquest_plus" | "trader_economy";
 
 type JsonPrimitive = string | number | boolean | null;
 type JsonValue = JsonPrimitive | JsonObject | JsonValue[];
@@ -38,6 +48,11 @@ export type MissionCatalogRow = {
   name: string;
   description: string;
   mapKey: string;
+  ownerUserId: Id<"users"> | null;
+  source: PublisherContentSource;
+  status: PublisherContentStatus;
+  mode: MissionMode;
+  requiredTier: AccessTier;
   mapTier: MapTier;
   level: number;
   requiredWins: number;
@@ -62,6 +77,25 @@ export type MissionCatalogSeedRow = Omit<
   MissionCatalogRow,
   "mapTier" | "scenario" | "preview"
 >;
+
+export function missionIsAvailableForTier(
+  mission: Pick<MissionCatalogRow, "requiredTier">,
+  tier: AccessTier,
+): boolean {
+  return tier === "pro" || mission.requiredTier === "free";
+}
+
+function resolveMissionMode(
+  mode: MissionCatalogRecord["mode"] | MissionMode | undefined,
+): MissionMode {
+  return mode ?? "conquest_core";
+}
+
+function resolveRequiredTier(
+  tier: MissionCatalogRecord["requiredTier"] | AccessTier | undefined,
+): AccessTier {
+  return tier ?? "free";
+}
 
 type DbCtx = { db: QueryCtx["db"] | MutationCtx["db"] };
 
@@ -283,16 +317,26 @@ export function summarizeMissionScenario(scenario: MissionScenario) {
 
 export function toMissionCatalogRow(record: MissionCatalogRecord): MissionCatalogRow {
   const scenario = parseMissionScenarioJson(record.scenarioJson);
+  const status = resolvePublisherContentStatus({
+    status: record.status,
+    published: record.published,
+    defaultDraft: false,
+  });
   return {
     key: record.key,
     name: record.name,
     description: record.description,
     mapKey: record.mapKey,
+    ownerUserId: record.ownerUserId ?? null,
+    source: resolvePublisherContentSource(record.source),
+    status,
+    mode: resolveMissionMode(record.mode),
+    requiredTier: resolveRequiredTier(record.requiredTier),
     mapTier: mapTierFromMapKey(record.mapKey),
     level: record.level,
     requiredWins: record.requiredWins,
     prerequisiteMissionKeys: record.prerequisiteMissionKeys,
-    published: record.published,
+    published: isPublishedContentStatus(status),
     sortOrder: record.sortOrder,
     retentionClass: record.retentionClass,
     scenarioJson: record.scenarioJson,
@@ -308,6 +352,8 @@ const BUILT_IN_MISSION_SOURCE: Array<{
   name: string;
   description: string;
   mapKey: string;
+  mode: MissionMode;
+  requiredTier: AccessTier;
   level: number;
   requiredWins: number;
   prerequisiteMissionKeys: string[];
@@ -321,6 +367,8 @@ const BUILT_IN_MISSION_SOURCE: Array<{
     name: "Mission 1",
     description: "Command Aurora in a first duel against Iron while the enemy automation waits until turn three.",
     mapKey: "v1-twenty",
+    mode: "conquest_core",
+    requiredTier: "free",
     level: 1,
     requiredWins: 1,
     prerequisiteMissionKeys: [],
@@ -372,6 +420,8 @@ const BUILT_IN_MISSION_SOURCE: Array<{
     name: "Mission 2",
     description: "Another small-map engagement where Iron is fully active from the opening turn.",
     mapKey: "v1-twenty",
+    mode: "conquest_core",
+    requiredTier: "free",
     level: 2,
     requiredWins: 1,
     prerequisiteMissionKeys: ["starter-small-1"],
@@ -423,6 +473,8 @@ const BUILT_IN_MISSION_SOURCE: Array<{
     name: "Mission 3",
     description: "Move to a medium map and face both Iron and Maia Solenne with a modest handicap on the extra enemy empire.",
     mapKey: "v1-medium",
+    mode: "conquest_core",
+    requiredTier: "free",
     level: 3,
     requiredWins: 1,
     prerequisiteMissionKeys: ["starter-small-2"],
@@ -493,6 +545,11 @@ export const BUILT_IN_MISSION_SEED_ROWS: MissionCatalogSeedRow[] = BUILT_IN_MISS
     name: mission.name,
     description: mission.description,
     mapKey: mission.mapKey,
+    ownerUserId: null,
+    source: "official",
+    status: mission.published ? "published" : "draft",
+    mode: mission.mode,
+    requiredTier: mission.requiredTier,
     level: mission.level,
     requiredWins: mission.requiredWins,
     prerequisiteMissionKeys: mission.prerequisiteMissionKeys,
@@ -517,6 +574,11 @@ export function getBuiltInMissionByKey(key: string): MissionCatalogRow | null {
   const scenario = parseMissionScenarioJson(record.scenarioJson);
   return {
     ...record,
+    ownerUserId: record.ownerUserId,
+    source: record.source,
+    status: record.status,
+    mode: resolveMissionMode(record.mode),
+    requiredTier: resolveRequiredTier(record.requiredTier),
     mapTier: mapTierFromMapKey(record.mapKey),
     scenario,
     preview: summarizeMissionScenario(scenario),
@@ -536,7 +598,13 @@ export async function getMissionByKey(ctx: DbCtx, key: string): Promise<MissionC
 
 export async function listMissions(
   ctx: DbCtx,
-  args?: { publishedOnly?: boolean; fallbackToBuiltIns?: boolean },
+  args?: {
+    publishedOnly?: boolean;
+    fallbackToBuiltIns?: boolean;
+    includeUnpublishedModes?: boolean;
+    includeCommunity?: boolean;
+    allowedTier?: AccessTier;
+  },
 ): Promise<MissionCatalogRow[]> {
   const rows = await ctx.db.query("sim_missions").collect();
   const missions =
@@ -545,6 +613,8 @@ export async function listMissions(
           const scenario = parseMissionScenarioJson(mission.scenarioJson);
           return {
             ...mission,
+            mode: resolveMissionMode(mission.mode),
+            requiredTier: resolveRequiredTier(mission.requiredTier),
             mapTier: mapTierFromMapKey(mission.mapKey),
             scenario,
             preview: summarizeMissionScenario(scenario),
@@ -552,6 +622,13 @@ export async function listMissions(
         })
       : rows.map((row) => toMissionCatalogRow(row));
   return missions
-    .filter((mission) => (args?.publishedOnly === true ? mission.published : true))
+    .filter((mission) => (args?.includeCommunity === true ? true : mission.source === "official"))
+    .filter((mission) => (args?.publishedOnly === true ? mission.status === "published" : true))
+    .filter((mission) =>
+      args?.includeUnpublishedModes === true ? true : mission.mode !== "conquest_plus",
+    )
+    .filter((mission) =>
+      args?.allowedTier === undefined ? true : missionIsAvailableForTier(mission, args.allowedTier),
+    )
     .sort((left, right) => left.sortOrder - right.sortOrder || left.name.localeCompare(right.name));
 }

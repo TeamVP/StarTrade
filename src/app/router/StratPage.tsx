@@ -18,6 +18,7 @@ type PublicAutomationStrategyRow = {
   description: string;
   tags: string[];
   strategyJson: string;
+  source: "official" | "community";
   preview: StrategyPreview;
 };
 
@@ -102,9 +103,14 @@ function LibraryRosterCard(props: {
           <p className="mt-1 text-sm text-st-muted">{props.strategy.description}</p>
           <p className="mt-2 text-xs text-st-muted">{formatPreview(props.strategy.preview)}</p>
         </div>
-        <span className="rounded border border-st-border px-2 py-1 text-xs text-st-muted">
-          {props.rosterCount} in roster
-        </span>
+        <div className="flex flex-col items-end gap-2">
+          <span className={`rounded border px-2 py-1 text-xs ${props.strategy.source === "community" ? "border-sky-500/40 bg-sky-950/30 text-sky-200" : "border-st-border text-st-muted"}`}>
+            {props.strategy.source === "community" ? "Community" : "Official"}
+          </span>
+          <span className="rounded border border-st-border px-2 py-1 text-xs text-st-muted">
+            {props.rosterCount} in roster
+          </span>
+        </div>
       </div>
       <div className="flex flex-wrap gap-2 text-xs text-st-muted">
         {props.strategy.tags.map((tag) => (

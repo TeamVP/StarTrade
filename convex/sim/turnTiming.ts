@@ -1,6 +1,6 @@
 export const DEFAULT_TURN_DURATION_SECONDS = 10;
 export const DEFAULT_TURN_DURATION_MS = DEFAULT_TURN_DURATION_SECONDS * 1000;
-export const TURN_RESOLUTION_POLL_INTERVAL_SECONDS = 1;
+export const TURN_RECOVERY_SWEEP_INTERVAL_SECONDS = 20;
 
 function clampPauseDurationMs(pausedAtMs: number, resumedAtMs: number): number {
   return Math.max(0, resumedAtMs - pausedAtMs);

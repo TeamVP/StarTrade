@@ -16,6 +16,7 @@ import { api } from "../../../../convex/_generated/api";
 import type { Id } from "../../../../convex/_generated/dataModel";
 import { useOptionalPlayerTopNavControlSetter } from "@/app/layout/PlayerTopNavControls";
 import { useGalaxySoundscape } from "@/features/audio/hooks/useGalaxySoundscape";
+import { gameModeSupportsTraderGameplay } from "@/features/games/gameMode";
 import { playUiSound } from "@/lib/audio/uiSounds";
 import { getTurnEffectiveNowMs, getTurnElapsedFraction } from "@/lib/time/turnClock";
 import { useTurnClock } from "@/lib/time/useTurnClock";
@@ -323,6 +324,7 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
   const setMobileTopNavControl = useOptionalPlayerTopNavControlSetter() ?? null;
   const navigate = useNavigate();
   const activeGameId = activeGame?._id ?? null;
+  const traderGameplayEnabled = gameModeSupportsTraderGameplay(activeGame?.mode);
 
   const simAllowsPlayerOrders = gameAllowsOrders(activeGame?.status);
 
@@ -349,6 +351,11 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
     activeGame ? { gameId: activeGame._id } : "skip",
   );
   const myRoles = useMemo(() => myRolesQuery ?? [], [myRolesQuery]);
+  const myMembershipQuery = useQuery(
+    api.usr.queries.getMyGameMembership,
+    activeGame ? { gameId: activeGame._id } : "skip",
+  );
+  const myGameActorId = myMembershipQuery?.actorId ?? null;
 
   const garrisonRoutesQuery = useQuery(
     api.flt.queries.listMyGarrisonRoutes,
@@ -358,7 +365,7 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
 
   const activeTradersQuery = useQuery(
     api.eco.queries.listActiveTraders,
-    activeGame ? { gameId: activeGame._id } : "skip",
+    activeGame && traderGameplayEnabled ? { gameId: activeGame._id } : "skip",
   );
   const activeTraders = useMemo(() => activeTradersQuery ?? [], [activeTradersQuery]);
 
@@ -373,32 +380,18 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
     activeGame ? { gameId: activeGame._id, limit: 64 } : "skip",
   );
   const activeBattles = useMemo(() => activeBattlesQuery ?? [], [activeBattlesQuery]);
-  const previousTurnCombatEventsQuery = useQuery(
-    api.sim.queries.listEventsByTurn,
-    activeGame && activeGame.currentTurn > 0
-      ? {
-          gameId: activeGame._id,
-          turnNumber: activeGame.currentTurn - 1,
-          limit: 256,
-        }
-      : "skip",
+  const turnPresentationPackageQuery = useQuery(
+    api.sim.queries.getTurnPresentationPackageForGame,
+    activeGame ? { gameId: activeGame._id } : "skip",
   );
+  const turnTimelineQuery = turnPresentationPackageQuery?.timeline ?? null;
   const previousTurnCombatEvents = useMemo(
-    () => previousTurnCombatEventsQuery ?? [],
-    [previousTurnCombatEventsQuery],
-  );
-  const recentSoundscapeEventsQuery = useQuery(
-    api.sim.queries.listRecentEvents,
-    activeGame ? { gameId: activeGame._id, limit: 24 } : "skip",
+    () => turnPresentationPackageQuery?.presentation.previousTurnCombatEvents ?? [],
+    [turnPresentationPackageQuery],
   );
   const recentSoundscapeEvents = useMemo(
-    () => recentSoundscapeEventsQuery ?? [],
-    [recentSoundscapeEventsQuery],
-  );
-
-  const turnTimelineQuery = useQuery(
-    api.sim.queries.getTurnTimelineForGame,
-    activeGame ? { gameId: activeGame._id } : "skip",
+    () => turnPresentationPackageQuery?.presentation.recentSoundscapeEvents ?? [],
+    [turnPresentationPackageQuery],
   );
   const queueMyEmpireStandingOrdersRefresh = useMutation(
     api.usr.mutations.queueMyEmpireStandingOrdersRefresh,
@@ -413,7 +406,7 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
     serverNowMs: turnTimelineQuery?.serverNowMs,
   });
   const turnTimeline = useMemo((): TurnTimelineModel | null => {
-    if (turnTimelineQuery === undefined || turnTimelineQuery === null) return null;
+    if (turnTimelineQuery === null) return null;
     return {
       gameStatus: turnTimelineQuery.gameStatus,
       currentTurn: turnTimelineQuery.currentTurn,
@@ -643,6 +636,18 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
     () => Object.fromEntries(empires.map((e) => [e._id, e.name])),
     [empires],
   );
+  const ownerLabels = useMemo(
+    () =>
+      Object.fromEntries(
+        empires.map((empire) => [
+          empire._id,
+          empire.runtimeVersion === "v2_game_actor" && empire.actorSlotNumber !== null
+            ? `Actor ${empire.actorSlotNumber}${empire.actorDisplayName !== null ? ` · ${empire.actorDisplayName}` : ""}`
+            : empire.name,
+        ]),
+      ),
+    [empires],
+  );
 
   const isAdmin = useMemo(() => myRoles.some((r) => r.role === "admin"), [myRoles]);
 
@@ -676,6 +681,11 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
         id: fleet._id,
         name: normalizeFleetDetachmentDisplayName(fleet.name),
         empireId: fleet.empireId,
+        runtimeVersion: fleet.runtimeVersion,
+        actorId: fleet.actorId ?? null,
+        actorSlotNumber: fleet.actorSlotNumber ?? null,
+        actorLabel: fleet.actorLabel ?? null,
+        actorDisplayName: fleet.actorDisplayName ?? null,
         strength: fleet.strength,
         status: fleet.status,
       }))
@@ -690,6 +700,11 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
         id: ship._id,
         name: ship.name,
         empireId: ship.empireId,
+        runtimeVersion: ship.runtimeVersion,
+        actorId: ship.actorId ?? null,
+        actorSlotNumber: ship.actorSlotNumber ?? null,
+        actorLabel: ship.actorLabel ?? null,
+        actorDisplayName: ship.actorDisplayName ?? null,
         status: ship.status,
         mothershipDefenseDamage: ship.mothershipDefenseDamage,
       }))
@@ -704,17 +719,42 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
     );
   }, [gameSettingsQuery?.combatDefenderAdvantage, selectedSystem?.isHomeworld]);
 
+  const myEmpireIdFromRole = useMemo(() => {
+    const role = myRoles.find((r) => r.role === "empire");
+    return role?.empireId ?? null;
+  }, [myRoles]);
+  const myEmpireId = playerEmpireIdProp ?? myEmpireIdFromRole;
+  const hasPlayerOwnershipContext = myEmpireId !== null || myGameActorId !== null;
+  const matchesPlayerOwnership = useCallback(
+    (owner: {
+      ownerEmpireId: string | null;
+      runtimeVersion?: "v1_empire" | "v2_game_actor";
+      ownerActorId?: string | null;
+    }) => {
+      if (
+        myMembershipQuery?.runtimeVersion === "v2_game_actor" &&
+        myGameActorId !== null &&
+        owner.runtimeVersion === "v2_game_actor" &&
+        owner.ownerActorId !== null &&
+        owner.ownerActorId !== undefined
+      ) {
+        return owner.ownerActorId === myGameActorId;
+      }
+      return myEmpireId !== null && owner.ownerEmpireId === myEmpireId;
+    },
+    [myEmpireId, myGameActorId, myMembershipQuery?.runtimeVersion],
+  );
+
   const canEditEmphasis = useMemo(() => {
     if (!simAllowsPlayerOrders || selectedSystem === null) return false;
     if (isAdmin) return true;
     if (selectedSystem.ownerEmpireId === null) return false;
-    return myRoles.some(
-      (r) =>
-        r.role === "empire" &&
-        r.empireId !== null &&
-        r.empireId === selectedSystem.ownerEmpireId,
-    );
-  }, [simAllowsPlayerOrders, selectedSystem, isAdmin, myRoles]);
+    return matchesPlayerOwnership({
+      ownerEmpireId: selectedSystem.ownerEmpireId,
+      runtimeVersion: selectedSystem.runtimeVersion,
+      ownerActorId: selectedSystem.ownerActorId ?? null,
+    });
+  }, [simAllowsPlayerOrders, selectedSystem, isAdmin, matchesPlayerOwnership]);
 
   const emphasisSliderHint = useMemo(() => {
     if (selectedSystem === null) return null;
@@ -725,76 +765,133 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
     if (selectedSystem.ownerEmpireId === null) {
       return "No colony yet — only a game admin can preset sliders until this world is claimed.";
     }
-    const empireRole = myRoles.find((r) => r.role === "empire");
-    if (!empireRole?.empireId) {
+    if (!hasPlayerOwnershipContext) {
       if (myRoles.some((r) => r.role === "trader")) {
         return "Trader accounts cannot change colony production.";
       }
       if (myRoles.some((r) => r.role === "observer")) {
         return "Observers cannot change colony production.";
       }
-      return "Join this game with an empire seat to manage colony sliders.";
+      return "Join this game with an empire-controlled faction to manage colony sliders.";
     }
-    if (empireRole.empireId !== selectedSystem.ownerEmpireId) {
-      const name = empireNames[selectedSystem.ownerEmpireId] ?? "another faction";
+    if (
+      !matchesPlayerOwnership({
+        ownerEmpireId: selectedSystem.ownerEmpireId,
+        runtimeVersion: selectedSystem.runtimeVersion,
+        ownerActorId: selectedSystem.ownerActorId ?? null,
+      })
+    ) {
+      const name = ownerLabels[selectedSystem.ownerEmpireId] ?? "another faction";
       return `This colony belongs to ${name}. Only they — or a game admin — can change sliders here.`;
     }
     return null;
-  }, [selectedSystem, simAllowsPlayerOrders, isAdmin, myRoles, empireNames]);
+  }, [
+    selectedSystem,
+    simAllowsPlayerOrders,
+    isAdmin,
+    hasPlayerOwnershipContext,
+    myRoles,
+    ownerLabels,
+    matchesPlayerOwnership,
+  ]);
 
-  const myEmpireIdFromRole = useMemo(() => {
-    const role = myRoles.find((r) => r.role === "empire");
-    return role?.empireId ?? null;
-  }, [myRoles]);
-  const myEmpireId = playerEmpireIdProp ?? myEmpireIdFromRole;
-
-  const fleetSelectionAllowed = useCallback(
-    (fleetEmpireId: string) => {
+  const fleetOwnedByPlayer = useCallback(
+    (fleet: {
+      empireId: string;
+      runtimeVersion?: "v1_empire" | "v2_game_actor";
+      actorId?: string | null;
+    }) => {
       if (isAdmin) return true;
-      return myEmpireId !== null && fleetEmpireId === myEmpireId;
+      return matchesPlayerOwnership({
+        ownerEmpireId: fleet.empireId,
+        runtimeVersion: fleet.runtimeVersion,
+        ownerActorId: fleet.actorId ?? null,
+      });
     },
-    [isAdmin, myEmpireId],
+    [isAdmin, matchesPlayerOwnership],
+  );
+  const fleetSelectionAllowed = useCallback(
+    (fleet: {
+      empireId: string;
+      runtimeVersion?: "v1_empire" | "v2_game_actor";
+      actorId?: string | null;
+    }) => {
+      if (isAdmin) return true;
+      return matchesPlayerOwnership({
+        ownerEmpireId: fleet.empireId,
+        runtimeVersion: fleet.runtimeVersion,
+        ownerActorId: fleet.actorId ?? null,
+      });
+    },
+    [isAdmin, matchesPlayerOwnership],
+  );
+  const routeOwnedByPlayer = useCallback(
+    (route: {
+      empireId: string;
+      runtimeVersion?: "v1_empire" | "v2_game_actor";
+      actorId?: string | null;
+    }) => {
+      if (isAdmin) return true;
+      return matchesPlayerOwnership({
+        ownerEmpireId: route.empireId,
+        runtimeVersion: route.runtimeVersion,
+        ownerActorId: route.actorId ?? null,
+      });
+    },
+    [isAdmin, matchesPlayerOwnership],
   );
 
-  /** Player empire-only colony UI (production, food/fleet intel tabs). Admins with no empire seat still see full detail. */
+  /** Player-owned colony UI (production, food/fleet intel tabs). Admins without a faction seat still see full detail. */
   const showColonyOperationalIntel = useMemo(() => {
     if (selectedSystem === null) return true;
-    if (myEmpireId === null) return true;
-    return selectedSystem.ownerEmpireId === myEmpireId;
-  }, [selectedSystem, myEmpireId]);
+    if (!hasPlayerOwnershipContext) return true;
+    return matchesPlayerOwnership({
+      ownerEmpireId: selectedSystem.ownerEmpireId,
+      runtimeVersion: selectedSystem.runtimeVersion,
+      ownerActorId: selectedSystem.ownerActorId ?? null,
+    });
+  }, [selectedSystem, hasPlayerOwnershipContext, matchesPlayerOwnership]);
 
   const priorityEmpireOptions = useMemo(
     () => empires.filter((empire) => !empire.isCollapsed),
     [empires],
   );
+  const playerPriorityEmpireId = useMemo(() => {
+    if (myEmpireId !== null) return myEmpireId;
+    if (myGameActorId === null) return null;
+    return (
+      empires.find(
+        (empire) =>
+          empire.actorId !== null &&
+          empire.actorId !== undefined &&
+          empire.actorId === myGameActorId,
+      )?._id ?? null
+    );
+  }, [empires, myEmpireId, myGameActorId]);
   const activeAdminPriorityEmpireId =
     adminPriorityEmpireId !== null &&
     priorityEmpireOptions.some((empire) => empire._id === adminPriorityEmpireId)
       ? adminPriorityEmpireId
       : (priorityEmpireOptions[0]?._id ?? null);
   const priorityEmpireId =
-    myEmpireId ??
+    playerPriorityEmpireId ??
     (playerEmpireIdProp === null && isAdmin && activeGameId !== null
       ? activeAdminPriorityEmpireId
       : null);
   const canUseColonyShips =
-    simAllowsPlayerOrders && (isAdmin || myEmpireId !== null);
+    simAllowsPlayerOrders && (isAdmin || hasPlayerOwnershipContext);
   const canMarkPriorityStars = simAllowsPlayerOrders && priorityEmpireId !== null;
   const canPauseOrResumeClock = useMemo(
     () => myRoles.some((role) => role.role === "admin" || role.role === "empire"),
     [myRoles],
   );
-  const turnBusy =
-    turnTimelineQuery?.turnState !== undefined &&
-    turnTimelineQuery?.turnState !== null &&
-    turnTimelineQuery.turnState !== "open";
   const canMapPauseOrResume =
     activeGame !== null &&
-    ((activeGame.status === "running" && !turnBusy) || activeGame.status === "paused") &&
+    (turnTimelineQuery?.acceptingOrders ?? false) &&
     canPauseOrResumeClock;
   const mapTurnElapsedFrac = useMemo(() => {
     const gameStatus = turnTimelineQuery?.gameStatus ?? activeGame?.status ?? null;
-    if (gameStatus !== "running" && gameStatus !== "paused") return null;
+    if (!(turnTimelineQuery?.isTurnClockActive ?? false)) return null;
     return getTurnElapsedFraction({
       turnStartedAtMs: turnTimelineQuery?.turnStartedAt ?? null,
       turnDurationMs: turnTimelineQuery?.turnDurationMs ?? null,
@@ -806,32 +903,60 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
     activeGame?.status,
     turnClock.alignedNowMs,
     turnTimelineQuery?.gameStatus,
+    turnTimelineQuery?.isTurnClockActive,
     turnTimelineQuery?.turnDurationMs,
     turnTimelineQuery?.turnPausedAtMs,
     turnTimelineQuery?.turnStartedAt,
   ]);
   const myOwnedSystemsCount = useMemo(
     () =>
-      myEmpireId === null
+      !hasPlayerOwnershipContext
         ? 0
-        : systems.filter((system) => system.ownerEmpireId === myEmpireId).length,
-    [myEmpireId, systems],
+        : systems.filter((system) =>
+            matchesPlayerOwnership({
+              ownerEmpireId: system.ownerEmpireId,
+              runtimeVersion: system.runtimeVersion,
+              ownerActorId: system.ownerActorId ?? null,
+            }),
+          ).length,
+    [hasPlayerOwnershipContext, systems, matchesPlayerOwnership],
   );
   const myFleetCount = useMemo(
     () =>
-      myEmpireId === null ? 0 : fleets.filter((fleet) => fleet.empireId === myEmpireId).length,
-    [fleets, myEmpireId],
+      !hasPlayerOwnershipContext
+        ? 0
+        : fleets.filter((fleet) =>
+            matchesPlayerOwnership({
+              ownerEmpireId: fleet.empireId,
+              runtimeVersion: fleet.runtimeVersion,
+              ownerActorId: fleet.actorId ?? null,
+            }),
+          ).length,
+    [fleets, hasPlayerOwnershipContext, matchesPlayerOwnership],
   );
+  const myOwnerLabel = useMemo(() => {
+    if (myMembershipQuery?.runtimeVersion === "v2_game_actor" && myMembershipQuery.actorSlotNumber !== null) {
+      const actorName = myMembershipQuery.actorDisplayName ?? myMembershipQuery.actorLabel;
+      return `Actor ${myMembershipQuery.actorSlotNumber}${actorName !== null ? ` · ${actorName}` : ""}`;
+    }
+    return myMembershipQuery?.empireName ?? "your empire";
+  }, [myMembershipQuery]);
+  const myOwnershipSummary = useMemo(() => {
+    if (!hasPlayerOwnershipContext) {
+      return null;
+    }
+    return `${myOwnerLabel} · ${myOwnedSystemsCount} systems · ${myFleetCount} fleets`;
+  }, [hasPlayerOwnershipContext, myOwnerLabel, myOwnedSystemsCount, myFleetCount]);
   const showMapResignButton =
     playerHomeMapLayout &&
     activeGame !== null &&
     activeGame.status !== "finished" &&
-    myEmpireId !== null &&
+    hasPlayerOwnershipContext &&
     (myOwnedSystemsCount === 0 || myFleetCount === 0);
   const showPlayerStartOverlay =
     playerHomeMapLayout &&
     activeGame?.status === "lobby" &&
-    myRoles.some((role) => role.role === "empire" && role.isActive);
+    hasPlayerOwnershipContext;
   const mapControlsVisible = activeGame !== null && activeGame.status !== "lobby";
   const mobileMapControlsVisible = mapControlsVisible;
 
@@ -954,6 +1079,9 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
           gameId: activeGame._id,
           systemId,
           empireId: priorityEmpireId,
+          ...(myGameActorId !== null && myEmpireId === priorityEmpireId
+            ? { gameActorId: myGameActorId }
+            : {}),
           enabled,
         });
       } catch (e) {
@@ -973,24 +1101,34 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
         );
       }
     },
-    [activeGame, canMarkPriorityStars, priorityEmpireId, setPriorityStar],
+    [activeGame, canMarkPriorityStars, priorityEmpireId, setPriorityStar, myGameActorId, myEmpireId],
   );
 
   const systemOwnerById = useMemo(
     () => Object.fromEntries(systems.map((s) => [s._id, s.ownerEmpireId])),
     [systems],
   );
+  const systemOwnerActorById = useMemo(
+    () => Object.fromEntries(systems.map((s) => [s._id, s.ownerActorId ?? null])),
+    [systems],
+  );
 
   const validateColonyShipRouteForMap = useCallback(
     (routeSystemIds: string[]): string | null => {
-      if (myEmpireId === null) return "You need an empire seat to plot colony routes.";
+      if (!hasPlayerOwnershipContext) {
+        return "You need an empire-controlled faction to plot colony routes.";
+      }
       return validateColonyShipRouteDestinations({
         routeSystemIds: routeSystemIds as Id<"gal_systems">[],
         empireId: myEmpireId,
-        getOwner: (id) => systemOwnerById[id] ?? null,
+        actorId: myGameActorId,
+        getOwner: (id) => ({
+          ownerEmpireId: systemOwnerById[id] ?? null,
+          ownerActorId: systemOwnerActorById[id] ?? null,
+        }),
       });
     },
-    [myEmpireId, systemOwnerById],
+    [hasPlayerOwnershipContext, myEmpireId, myGameActorId, systemOwnerById, systemOwnerActorById],
   );
 
   const handleColonyShipRouteCommit = useCallback(
@@ -1000,6 +1138,7 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
       try {
         await dispatchColonyShip({
           gameId: activeGame._id,
+          ...(myGameActorId !== null ? { gameActorId: myGameActorId } : {}),
           colonyShipId: payload.colonyShipId as Id<"col_colony_ships">,
           routeSystemIds: payload.routeSystemIds as Id<"gal_systems">[],
         });
@@ -1009,7 +1148,7 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
         );
       }
     },
-    [activeGame, dispatchColonyShip],
+    [activeGame, dispatchColonyShip, myGameActorId],
   );
 
   const priorityStarDisabledReason = useMemo(() => {
@@ -1024,18 +1163,22 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
     if (myRoles.some((r) => r.role === "observer")) {
       return "Observers cannot mark empire Priority stars.";
     }
-    return "Join this game with an empire seat to mark Priority stars.";
+    return "Join this game with an empire-controlled faction to mark Priority stars.";
   }, [simAllowsPlayerOrders, priorityEmpireId, isAdmin, myRoles]);
 
   const myIdleColonyShipsHere = useMemo(() => {
-    if (selectedSystem === null || myEmpireId === null) return [];
+    if (selectedSystem === null || !hasPlayerOwnershipContext) return [];
     return colonyShips.filter(
       (s) =>
         s.status === "idle" &&
         s.originSystemId === selectedSystem._id &&
-        s.empireId === myEmpireId,
+        matchesPlayerOwnership({
+          ownerEmpireId: s.empireId,
+          runtimeVersion: s.runtimeVersion,
+          ownerActorId: s.actorId ?? null,
+        }),
     );
-  }, [selectedSystem, myEmpireId, colonyShips]);
+  }, [selectedSystem, hasPlayerOwnershipContext, colonyShips, matchesPlayerOwnership]);
 
   const canColonizeHere =
     canUseColonyShips &&
@@ -1052,6 +1195,7 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
     try {
       await startColonyShipBuild({
         gameId: activeGame._id,
+        ...(myGameActorId !== null ? { gameActorId: myGameActorId } : {}),
         systemId: selectedSystem._id,
       });
     } catch (e) {
@@ -1059,7 +1203,7 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
         e instanceof Error ? e.message : "Could not start colony ship build.",
       );
     }
-  }, [activeGame, selectedSystem, startColonyShipBuild]);
+  }, [activeGame, selectedSystem, startColonyShipBuild, myGameActorId]);
 
   const handleStarPanelCancelColonyBuild = useCallback(async () => {
     if (!activeGame || selectedSystem === null) return;
@@ -1067,6 +1211,7 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
     try {
       await cancelColonyShipBuild({
         gameId: activeGame._id,
+        ...(myGameActorId !== null ? { gameActorId: myGameActorId } : {}),
         systemId: selectedSystem._id,
       });
     } catch (e) {
@@ -1074,7 +1219,7 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
         e instanceof Error ? e.message : "Could not cancel colony ship build.",
       );
     }
-  }, [activeGame, selectedSystem, cancelColonyShipBuild]);
+  }, [activeGame, selectedSystem, cancelColonyShipBuild, myGameActorId]);
 
   const handleStarPanelDispatchColony = useCallback(
     async (toSystemId: string) => {
@@ -1084,6 +1229,7 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
       try {
         await dispatchColonyShip({
           gameId: activeGame._id,
+          ...(myGameActorId !== null ? { gameActorId: myGameActorId } : {}),
           colonyShipId: idleColonyShipIdAtSelection,
           routeSystemIds: [toSystemId as Id<"gal_systems">],
         });
@@ -1093,7 +1239,7 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
         );
       }
     },
-    [activeGame, selectedSystem, idleColonyShipIdAtSelection, dispatchColonyShip],
+    [activeGame, selectedSystem, idleColonyShipIdAtSelection, dispatchColonyShip, myGameActorId],
   );
 
   const handleStarPanelColonize = useCallback(async () => {
@@ -1102,6 +1248,7 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
     try {
       await colonizeWithColonyShip({
         gameId: activeGame._id,
+        ...(myGameActorId !== null ? { gameActorId: myGameActorId } : {}),
         colonyShipId: idleColonyShipIdAtSelection,
       });
     } catch (e) {
@@ -1109,7 +1256,7 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
         e instanceof Error ? e.message : "Could not colonize this system.",
       );
     }
-  }, [activeGame, idleColonyShipIdAtSelection, colonizeWithColonyShip]);
+  }, [activeGame, idleColonyShipIdAtSelection, colonizeWithColonyShip, myGameActorId]);
 
   const dismissStarPanel = useCallback(() => {
     setSelectedSystemId(null);
@@ -1153,7 +1300,7 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
     (fleetId: string | null) => {
       if (fleetId !== null) {
         const fleet = fleets.find((f) => f._id === fleetId);
-        if (fleet !== undefined && !fleetSelectionAllowed(fleet.empireId)) {
+        if (fleet !== undefined && !fleetOwnedByPlayer(fleet)) {
           return;
         }
       }
@@ -1173,7 +1320,7 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
         setShipsToDispatch(Math.min(mid, fleet.strength));
       }
     },
-    [fleets, selectedFleetId, fleetSelectionAllowed],
+    [fleets, selectedFleetId, fleetOwnedByPlayer],
   );
 
   const handleStageBackgroundTap = useCallback(() => {
@@ -1192,6 +1339,7 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
     (routeId: string) => {
       const route = garrisonRoutes.find((r) => r._id === routeId);
       if (route === undefined) return;
+      if (!routeOwnedByPlayer(route)) return;
       setRouteEditorRouteId(routeId);
       setRouteEditorPct(route.dispatchPct);
       setRouteEditorEnabled(route.enabled);
@@ -1200,7 +1348,7 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
       setSelectedColonyShipId(null);
       setSelectedSystemId(null);
     },
-    [garrisonRoutes],
+    [garrisonRoutes, routeOwnedByPlayer],
   );
 
   const nodeMap = useMemo<Record<string, GalaxyNode>>(() => {
@@ -1230,14 +1378,23 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
     () => Object.fromEntries(fleets.map((fleet) => [fleet._id, fleet.empireId])),
     [fleets],
   );
+  const soundscapeFleetActorById = useMemo(
+    () => Object.fromEntries(fleets.map((fleet) => [fleet._id, fleet.actorId ?? null])),
+    [fleets],
+  );
   const soundscapeColonyShipEmpireById = useMemo(
     () => Object.fromEntries(colonyShips.map((ship) => [ship._id, ship.empireId])),
+    [colonyShips],
+  );
+  const soundscapeColonyShipActorById = useMemo(
+    () => Object.fromEntries(colonyShips.map((ship) => [ship._id, ship.actorId ?? null])),
     [colonyShips],
   );
   const soundscapeSystemOwnerById = useMemo(
     () => Object.fromEntries(systems.map((system) => [system._id, system.ownerEmpireId])),
     [systems],
   );
+  const soundscapeSystemOwnerActorById = systemOwnerActorById;
   const soundscapeCanAutoStart = (turnTimeline?.gameStatus ?? activeGame?.status ?? null) === "running";
   const {
     soundscapeEnabled,
@@ -1258,9 +1415,13 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
     systemsById: soundscapeSystemsById,
     ownership: {
       fleetEmpireById: soundscapeFleetEmpireById,
+      fleetActorById: soundscapeFleetActorById,
       colonyShipEmpireById: soundscapeColonyShipEmpireById,
+      colonyShipActorById: soundscapeColonyShipActorById,
       systemOwnerById: soundscapeSystemOwnerById,
+      systemOwnerActorById: soundscapeSystemOwnerActorById,
     },
+    listenerActorId: myGameActorId,
     listenerEmpireId: myEmpireId,
     timeline:
       turnTimeline === null
@@ -1278,15 +1439,29 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
       const empire = empires.find((e) => e._id === empireId);
       if (empire === undefined) return;
 
+      const matchesEmpireOwnership = (system: (typeof systems)[number]) => {
+        if (
+          empire.runtimeVersion === "v2_game_actor" &&
+          empire.actorId !== null &&
+          empire.actorId !== undefined &&
+          system.runtimeVersion === "v2_game_actor" &&
+          system.ownerActorId !== null &&
+          system.ownerActorId !== undefined
+        ) {
+          return system.ownerActorId === empire.actorId;
+        }
+        return system.ownerEmpireId === empireId;
+      };
+
       let systemId: string | null = empire.homeSystemId;
       if (systemId === null) {
         const homeworldSystem = systems.find(
-          (s) => s.ownerEmpireId === empireId && s.isHomeworld,
+          (s) => matchesEmpireOwnership(s) && s.isHomeworld,
         );
         systemId = homeworldSystem?._id ?? null;
       }
       if (systemId === null) {
-        const anyOwned = systems.find((s) => s.ownerEmpireId === empireId);
+        const anyOwned = systems.find((s) => matchesEmpireOwnership(s));
         systemId = anyOwned?._id ?? null;
       }
       if (systemId === null) return;
@@ -1400,7 +1575,7 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
       autoSelectedHomeworldGameRef.current = null;
       return;
     }
-    if (!playerHomeMapLayout || initialFocusFleetId !== null || myEmpireId === null) {
+    if (!playerHomeMapLayout || initialFocusFleetId !== null || !hasPlayerOwnershipContext) {
       return;
     }
     if (activeGame?.status === "lobby") {
@@ -1409,9 +1584,14 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
     if (autoSelectedHomeworldGameRef.current === activeGameId) {
       return;
     }
-
     const homeworldSystem = systems.find(
-      (system) => system.ownerEmpireId === myEmpireId && system.isHomeworld,
+      (system) =>
+        system.isHomeworld &&
+        matchesPlayerOwnership({
+          ownerEmpireId: system.ownerEmpireId,
+          runtimeVersion: system.runtimeVersion,
+          ownerActorId: system.ownerActorId ?? null,
+        }),
     );
     const homeworldSystemId = homeworldSystem?._id ?? null;
     if (homeworldSystemId === null || nodeMap[homeworldSystemId] === undefined) {
@@ -1429,9 +1609,10 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
   }, [
     activeGame?.status,
     activeGameId,
+    hasPlayerOwnershipContext,
     handleStarTap,
     initialFocusFleetId,
-    myEmpireId,
+    matchesPlayerOwnership,
     nodeMap,
     playerHomeMapLayout,
     systems,
@@ -1615,6 +1796,8 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
         markers.push({
           fleetId: fleet._id,
           empireId: fleet.empireId,
+          runtimeVersion: fleet.runtimeVersion,
+          actorId: fleet.actorId ?? null,
           originSystemId: systemId,
           x: node.x + Math.cos(angle) * FLEET_ORBIT_RADIUS,
           y: node.y + Math.sin(angle) * FLEET_ORBIT_RADIUS,
@@ -1830,14 +2013,14 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
     if (focusedInitialFleetRef.current === initialFocusFleetId) return;
     const fleet = fleets.find((f) => f._id === initialFocusFleetId);
     if (fleet === undefined) return;
-    if (!fleetSelectionAllowed(fleet.empireId)) return;
+    if (!fleetOwnedByPlayer(fleet)) return;
     const id = window.setTimeout(() => {
       if (focusFleetOnMap(initialFocusFleetId, MAP_FLEET_LINK_FOCUS_SCALE)) {
         focusedInitialFleetRef.current = initialFocusFleetId;
       }
     }, 0);
     return () => window.clearTimeout(id);
-  }, [initialFocusFleetId, fleets, fleetSelectionAllowed, focusFleetOnMap]);
+  }, [initialFocusFleetId, fleets, fleetOwnedByPlayer, focusFleetOnMap]);
 
   const fleetById = useMemo(() => {
     return new Map(fleets.map((fleet) => [fleet._id, fleet]));
@@ -1997,10 +2180,18 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
         const angle =
           (i / n) * Math.PI * 2 - Math.PI / 2 + COLONY_ORBIT_ANGLE_OFFSET_RAD;
         const ownerAtOrigin = systemOwnerById[ship.originSystemId] ?? null;
+        const ownerActorAtOrigin = systemOwnerActorById[ship.originSystemId] ?? null;
         const canDragDispatchRoute =
-          myEmpireId !== null &&
-          ship.empireId === myEmpireId &&
-          ownerAtOrigin === ship.empireId;
+          matchesPlayerOwnership({
+            ownerEmpireId: ship.empireId,
+            runtimeVersion: ship.runtimeVersion,
+            ownerActorId: ship.actorId ?? null,
+          }) &&
+          matchesPlayerOwnership({
+            ownerEmpireId: ownerAtOrigin,
+            ownerActorId: ownerActorAtOrigin,
+            runtimeVersion: ship.runtimeVersion,
+          });
         markers.push({
           colonyShipId: ship._id,
           originSystemId: systemId,
@@ -2012,7 +2203,7 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
       });
     }
     return markers;
-  }, [simAllowsPlayerOrders, colonyShips, nodeMap, empireColors, myEmpireId, systemOwnerById]);
+  }, [simAllowsPlayerOrders, colonyShips, nodeMap, empireColors, systemOwnerById, systemOwnerActorById, matchesPlayerOwnership]);
 
   const foodAlerts = useMemo<FoodAlertNode[]>(() => {
     const alerts: FoodAlertNode[] = [];
@@ -2070,10 +2261,10 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
   const selectedFleet = useMemo(() => {
     if (selectedFleetId === null) return undefined;
     const fleet = fleets.find((f) => f._id === selectedFleetId);
-    return fleet !== undefined && fleetSelectionAllowed(fleet.empireId)
+    return fleet !== undefined && fleetOwnedByPlayer(fleet)
       ? fleet
       : undefined;
-  }, [fleets, selectedFleetId, fleetSelectionAllowed]);
+  }, [fleets, selectedFleetId, fleetOwnedByPlayer]);
 
   const selectedTrader = useMemo(() => {
     if (selectedTraderId === null) return undefined;
@@ -2082,8 +2273,17 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
 
   const selectedColonyShip = useMemo(() => {
     if (selectedColonyShipId === null) return undefined;
-    return colonyShips.find((s) => s._id === selectedColonyShipId);
-  }, [colonyShips, selectedColonyShipId]);
+    const ship = colonyShips.find((s) => s._id === selectedColonyShipId);
+    if (ship === undefined) return undefined;
+    if (isAdmin) return ship;
+    return matchesPlayerOwnership({
+      ownerEmpireId: ship.empireId,
+      runtimeVersion: ship.runtimeVersion,
+      ownerActorId: ship.actorId ?? null,
+    })
+      ? ship
+      : undefined;
+  }, [colonyShips, selectedColonyShipId, isAdmin, matchesPlayerOwnership]);
 
   const selectedNeighbors = useMemo(() => {
     if (selectedSystem === null) return [];
@@ -2113,13 +2313,17 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
     }) => {
       if (!activeGame || !simAllowsPlayerOrders) return;
       const fleet = fleets.find((f) => f._id === payload.fleetId);
-      if (fleet === undefined || !fleetSelectionAllowed(fleet.empireId)) return;
+      if (fleet === undefined || !fleetOwnedByPlayer(fleet)) return;
       const strength = fleet.strength;
       const originSystem = systems.find((s) => s._id === payload.originSystemId);
       const canEstablishRecurring =
         payload.establishRecurring &&
-        originSystem?.ownerEmpireId !== null &&
-        originSystem?.ownerEmpireId !== undefined;
+        originSystem !== undefined &&
+        matchesPlayerOwnership({
+          ownerEmpireId: originSystem.ownerEmpireId,
+          runtimeVersion: originSystem.runtimeVersion,
+          ownerActorId: originSystem.ownerActorId ?? null,
+        });
       const standingRouteDispatchPct = canEstablishRecurring
         ? Math.max(
             1,
@@ -2128,6 +2332,7 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
         : undefined;
       await issueFleetOrder({
         gameId: activeGame._id,
+        ...(myGameActorId !== null ? { gameActorId: myGameActorId } : {}),
         fleetId: payload.fleetId as Id<"flt_fleets">,
         orderType: "move",
         targetSystemId: payload.targetSystemId as Id<"gal_systems">,
@@ -2135,7 +2340,16 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
         ...(standingRouteDispatchPct !== undefined ? { standingRouteDispatchPct } : {}),
       });
     },
-    [activeGame, simAllowsPlayerOrders, issueFleetOrder, fleets, systems, fleetSelectionAllowed],
+    [
+      activeGame,
+      simAllowsPlayerOrders,
+      issueFleetOrder,
+      fleets,
+      systems,
+      fleetOwnedByPlayer,
+      myGameActorId,
+      matchesPlayerOwnership,
+    ],
   );
 
   const editingRoute = useMemo(
@@ -2149,12 +2363,13 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
   const showRouteEditor =
     editingRoute !== null &&
     simAllowsPlayerOrders &&
-    (isAdmin || editingRoute.empireId === myEmpireId);
+    routeOwnedByPlayer(editingRoute);
 
   async function saveRouteEditor() {
     if (!activeGame || editingRoute === null) return;
     await setGarrisonRoute({
       gameId: activeGame._id,
+      ...(myGameActorId !== null ? { gameActorId: myGameActorId } : {}),
       originSystemId: editingRoute.originSystemId,
       destinationSystemId: editingRoute.destinationSystemId,
       dispatchPct: routeEditorPct,
@@ -2166,6 +2381,7 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
     if (!activeGame || editingRoute === null) return;
     await setGarrisonRoute({
       gameId: activeGame._id,
+      ...(myGameActorId !== null ? { gameActorId: myGameActorId } : {}),
       originSystemId: editingRoute.originSystemId,
       destinationSystemId: null,
       dispatchPct: 0,
@@ -2290,6 +2506,7 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
           key={`${selectedSystem._id}:${showColonyOperationalIntel ? "food" : "routes"}`}
           system={selectedSystem}
           empireNames={empireNames}
+          ownerLabels={ownerLabels}
           selectedNeighbors={selectedNeighbors}
           showColonyOperationalIntel={showColonyOperationalIntel}
           fleetSelectionAllowed={fleetSelectionAllowed}
@@ -2888,6 +3105,9 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
                         <p className="text-sm text-st-muted">
                           Choose your standing-order strategy for this game.
                         </p>
+                        {myOwnershipSummary !== null ? (
+                          <p className="text-xs text-st-muted">{myOwnershipSummary}</p>
+                        ) : null}
                         <label className="w-full max-w-xs space-y-1 text-left">
                           <span className="block text-xs font-semibold uppercase tracking-wide text-st-muted">
                             Step 1 of 2 — Strategy
@@ -2916,8 +3136,11 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
                     ) : (
                       <>
                         <p className="text-sm text-st-muted">
-                          Start the match to open turn 1 and begin empire play for this scenario.
+                          Start the match to open turn 1 and begin play for {myOwnerLabel} in this scenario.
                         </p>
+                        {myOwnershipSummary !== null ? (
+                          <p className="text-xs text-st-muted">{myOwnershipSummary}</p>
+                        ) : null}
                         <p className="text-xs text-st-muted">
                           <span className="font-medium text-st-fg">Strategy: </span>
                           {startStrategyValue === "manual"
@@ -2974,6 +3197,11 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
                     >
                       {mapResignBusy ? "Resigning..." : "Resign"}
                     </Button>
+                    {myOwnershipSummary !== null ? (
+                      <p className="max-w-72 rounded bg-st-bg/90 px-2 py-1 text-center text-[11px] text-st-muted shadow-md ring-1 ring-st-border/60 backdrop-blur-sm">
+                        {myOwnershipSummary}
+                      </p>
+                    ) : null}
                     {mapResignError !== null ? (
                       <p className="max-w-64 rounded bg-red-950/85 px-2 py-1 text-center text-[11px] text-red-200 shadow-md">
                         {mapResignError}
@@ -3131,6 +3359,7 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
             try {
               await dispatchColonyShip({
                 gameId: activeGame._id,
+                ...(myGameActorId !== null ? { gameActorId: myGameActorId } : {}),
                 colonyShipId: selectedColonyShip._id,
                 routeSystemIds: [toSystemId as Id<"gal_systems">],
               });
@@ -3145,6 +3374,7 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
             try {
               await colonizeWithColonyShip({
                 gameId: activeGame._id,
+                ...(myGameActorId !== null ? { gameActorId: myGameActorId } : {}),
                 colonyShipId: selectedColonyShip._id,
               });
               handleSelectedColonyShipChange(null);
@@ -3227,6 +3457,8 @@ type ColonyShipRow = {
   _id: string;
   name: string;
   empireId: string;
+  runtimeVersion?: "v1_empire" | "v2_game_actor";
+  actorId?: string | null;
   originSystemId: string;
   status: "idle" | "enRoute";
   destinationSystemId?: string | null;
@@ -3251,7 +3483,14 @@ function ColonyShipFloatingPanel({
 }: {
   ship: ColonyShipRow;
   currentTurn: number;
-  systems: { _id: string; name: string; ownerEmpireId: string | null; population?: number }[];
+  systems: {
+    _id: string;
+    name: string;
+    ownerEmpireId: string | null;
+    runtimeVersion?: "v1_empire" | "v2_game_actor";
+    ownerActorId?: string | null;
+    population?: number;
+  }[];
   links: { fromSystemId: string; toSystemId: string }[];
   empires: EmpireRow[];
   minInhabitedPopulation: number;
@@ -3269,7 +3508,15 @@ function ColonyShipFloatingPanel({
   const originSystem = systems.find((s) => s._id === ship.originSystemId);
   const originName = originSystem?.name ?? "Unknown";
   const atOwnEmpireWorld =
-    originSystem !== undefined && originSystem.ownerEmpireId === ship.empireId;
+    originSystem !== undefined &&
+    ((ship.runtimeVersion === "v2_game_actor" &&
+      ship.actorId !== null &&
+      ship.actorId !== undefined &&
+      originSystem.runtimeVersion === "v2_game_actor" &&
+      originSystem.ownerActorId !== null &&
+      originSystem.ownerActorId !== undefined
+      ? originSystem.ownerActorId === ship.actorId
+      : originSystem.ownerEmpireId === ship.empireId));
 
   const neighborIds = new Set<string>();
   for (const link of links) {
@@ -3414,6 +3661,11 @@ type FleetAtSystemInfo = {
   id: string;
   name: string;
   empireId: string;
+  runtimeVersion?: "v1_empire" | "v2_game_actor";
+  actorId?: string | null;
+  actorSlotNumber?: number | null;
+  actorLabel?: string | null;
+  actorDisplayName?: string | null;
   strength: number;
   status: "idle" | "engaged" | "enRoute";
 };
@@ -3422,6 +3674,11 @@ type ColonyShipAtSystemInfo = {
   id: string;
   name: string;
   empireId: string;
+  runtimeVersion?: "v1_empire" | "v2_game_actor";
+  actorId?: string | null;
+  actorSlotNumber?: number | null;
+  actorLabel?: string | null;
+  actorDisplayName?: string | null;
   status: "idle" | "enRoute";
   mothershipDefenseDamage?: number;
 };
@@ -3436,6 +3693,11 @@ type SystemDoc = {
   baseProductivity?: number;
   isHomeworld: boolean;
   ownerEmpireId: string | null;
+  runtimeVersion?: "v1_empire" | "v2_game_actor";
+  ownerActorId?: string | null;
+  ownerActorSlotNumber?: number | null;
+  ownerActorLabel?: string | null;
+  ownerActorDisplayName?: string | null;
   population?: number;
   stockFood?: number;
   emphasisFood?: number;
@@ -3468,6 +3730,23 @@ function formatFoodStockpileCompact(n: number): string {
     return `${simplified} mill food`;
   }
   return `${Math.round(x / 1_000_000_000)} bill food`;
+}
+
+function formatSystemOwnerLabel(
+  system: Pick<
+    SystemDoc,
+    "ownerEmpireId" | "runtimeVersion" | "ownerActorSlotNumber" | "ownerActorLabel" | "ownerActorDisplayName"
+  >,
+  ownerLabels: Record<string, string>,
+): string {
+  if (system.ownerEmpireId === null) {
+    return "Independent";
+  }
+  if (system.runtimeVersion === "v2_game_actor" && system.ownerActorSlotNumber !== null) {
+    const actorName = system.ownerActorDisplayName ?? system.ownerActorLabel;
+    return `Actor ${system.ownerActorSlotNumber}${actorName !== null ? ` · ${actorName}` : ""}`;
+  }
+  return ownerLabels[system.ownerEmpireId] ?? "Unknown";
 }
 
 function PlanetInfoRow({
@@ -3504,6 +3783,7 @@ function PlanetInfoEmptyPanel() {
 function StarSystemPanel({
   system,
   empireNames,
+  ownerLabels,
   selectedNeighbors,
   showColonyOperationalIntel,
   fleetSelectionAllowed,
@@ -3549,9 +3829,14 @@ function StarSystemPanel({
 }: {
   system: SystemDoc;
   empireNames: Record<string, string>;
+  ownerLabels: Record<string, string>;
   selectedNeighbors: { id: string; name: string }[];
   showColonyOperationalIntel: boolean;
-  fleetSelectionAllowed: (fleetEmpireId: string) => boolean;
+  fleetSelectionAllowed: (fleet: {
+    empireId: string;
+    runtimeVersion?: "v1_empire" | "v2_game_actor";
+    actorId?: string | null;
+  }) => boolean;
   canEdit: boolean;
   emphasisHint: string | null;
   emphasisSaveError: string | null;
@@ -3881,11 +4166,7 @@ function StarSystemPanel({
       <dl className="mt-3 grid gap-x-5 gap-y-2 text-xs sm:grid-cols-2 xl:grid-cols-3">
         <PlanetInfoRow
           label="Owner"
-          value={
-            system.ownerEmpireId === null
-              ? "Independent"
-              : (empireNames[system.ownerEmpireId] ?? "Unknown")
-          }
+          value={formatSystemOwnerLabel(system, ownerLabels)}
         />
         <PlanetInfoRow
           label="Resource richness"
@@ -4180,7 +4461,12 @@ function StarSystemPanel({
                   <ul className="mt-1 space-y-1">
                     {fleetsAtSystem.map((fleet) => {
                       const maySelectFleet =
-                        onFleetCardTap !== undefined && fleetSelectionAllowed(fleet.empireId);
+                        onFleetCardTap !== undefined &&
+                        fleetSelectionAllowed({
+                          empireId: fleet.empireId,
+                          runtimeVersion: fleet.runtimeVersion,
+                          actorId: fleet.actorId ?? null,
+                        });
                       return (
                       <li key={fleet.id}>
                         <button
@@ -4202,10 +4488,15 @@ function StarSystemPanel({
                           </div>
                           <div className="mt-0.5 flex justify-between gap-2 text-[10px] text-st-muted">
                             <span className="truncate">
-                              {empireNames[fleet.empireId] ?? "Unknown empire"}
+                              {fleet.runtimeVersion === "v2_game_actor" && fleet.actorSlotNumber !== null
+                                ? `Actor ${fleet.actorSlotNumber}${fleet.actorDisplayName !== null ? ` · ${fleet.actorDisplayName}` : ""}`
+                                : empireNames[fleet.empireId] ?? "Unknown empire"}
                             </span>
                             <span className="capitalize">{fleet.status}</span>
                           </div>
+                          {fleet.runtimeVersion === "v2_game_actor" && fleet.actorLabel !== null ? (
+                            <div className="mt-0.5 text-[10px] text-st-muted">{fleet.actorLabel}</div>
+                          ) : null}
                         </button>
                       </li>
                       );
@@ -4229,12 +4520,17 @@ function StarSystemPanel({
                         </div>
                         <div className="mt-0.5 flex justify-between gap-2 text-[10px] text-st-muted">
                           <span className="truncate">
-                            {empireNames[ship.empireId] ?? "Unknown empire"}
+                            {ship.runtimeVersion === "v2_game_actor" && ship.actorSlotNumber !== null
+                              ? `Actor ${ship.actorSlotNumber}${ship.actorDisplayName !== null ? ` · ${ship.actorDisplayName}` : ""}`
+                              : empireNames[ship.empireId] ?? "Unknown empire"}
                           </span>
                           <span>
                             Damage {formatWhole(ship.mothershipDefenseDamage ?? 0)}
                           </span>
                         </div>
+                        {ship.runtimeVersion === "v2_game_actor" && ship.actorLabel !== null ? (
+                          <div className="mt-0.5 text-[10px] text-st-muted">{ship.actorLabel}</div>
+                        ) : null}
                       </li>
                     ))}
                   </ul>

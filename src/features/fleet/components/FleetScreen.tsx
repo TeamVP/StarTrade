@@ -9,6 +9,32 @@ import { useGalaxyData } from "@/features/galaxy/hooks/useGalaxyData";
 import { gameAllowsPlayerOrders } from "@/features/sim/gameStatus";
 import { normalizeFleetDetachmentDisplayName } from "@/lib/fleetDisplayName";
 
+type FleetSystemInfo = {
+  _id: Id<"gal_systems">;
+  name: string;
+  ownerEmpireId: Id<"emp_states"> | null;
+  runtimeVersion?: "v1_empire" | "v2_game_actor";
+  ownerActorId?: Id<"sim_game_actors"> | null;
+  ownerActorSlotNumber?: number | null;
+  ownerActorLabel?: string | null;
+  ownerActorDisplayName?: string | null;
+};
+
+function formatFleetSystemOwnerLabel(system: FleetSystemInfo): string {
+  if (system.ownerEmpireId === null) {
+    return "Independent";
+  }
+  if (system.runtimeVersion === "v2_game_actor" && system.ownerActorSlotNumber !== null) {
+    const actorName = system.ownerActorDisplayName ?? system.ownerActorLabel;
+    return `Actor ${system.ownerActorSlotNumber}${actorName !== null ? ` · ${actorName}` : ""}`;
+  }
+  return "Owned";
+}
+
+function formatFleetSystemOptionLabel(system: FleetSystemInfo): string {
+  return `${system.name} · ${formatFleetSystemOwnerLabel(system)}`;
+}
+
 export function FleetScreen(props: {
   playerEmpireId?: Id<"emp_states"> | null;
   galaxyPath?: string;
@@ -31,6 +57,10 @@ export function FleetScreen(props: {
     api.usr.queries.listMyRoles,
     gameId ? { gameId } : "skip",
   );
+  const myMembershipQuery = useQuery(
+    api.usr.queries.getMyGameMembership,
+    gameId ? { gameId } : "skip",
+  );
   const garrisonRoutesQuery = useQuery(
     api.flt.queries.listMyGarrisonRoutes,
     gameId ? { gameId } : "skip",
@@ -39,6 +69,7 @@ export function FleetScreen(props: {
   const fleets = useMemo(() => fleetsQuery ?? [], [fleetsQuery]);
   const systems = useMemo(() => systemsQuery ?? [], [systemsQuery]);
   const myRoles = useMemo(() => myRolesQuery ?? [], [myRolesQuery]);
+  const myGameActorId = myMembershipQuery?.actorId ?? null;
   const garrisonRoutes = useMemo(() => garrisonRoutesQuery ?? [], [garrisonRoutesQuery]);
 
   const issueFleetOrder = useMutation(api.flt.mutations.issueFleetOrder);
@@ -54,20 +85,59 @@ export function FleetScreen(props: {
     if (role === undefined || role.empireId === null) return null;
     return role.empireId;
   }, [myRoles, playerEmpireId]);
+  const hasPlayerOwnershipContext = myEmpireId !== null || myGameActorId !== null;
+  const matchesPlayerOwnership = useMemo(
+    () =>
+      (owner: {
+        ownerEmpireId: Id<"emp_states"> | null;
+        runtimeVersion?: "v1_empire" | "v2_game_actor";
+        ownerActorId?: Id<"sim_game_actors"> | null;
+      }) => {
+        if (
+          myMembershipQuery?.runtimeVersion === "v2_game_actor" &&
+          myGameActorId !== null &&
+          owner.runtimeVersion === "v2_game_actor" &&
+          owner.ownerActorId !== null &&
+          owner.ownerActorId !== undefined
+        ) {
+          return owner.ownerActorId === myGameActorId;
+        }
+        return myEmpireId !== null && owner.ownerEmpireId === myEmpireId;
+      },
+    [myEmpireId, myGameActorId, myMembershipQuery?.runtimeVersion],
+  );
 
   const fleetsVisible = useMemo(() => {
-    if (myEmpireId === null) return fleets;
-    return fleets.filter((f) => f.empireId === myEmpireId);
-  }, [fleets, myEmpireId]);
+    if (!hasPlayerOwnershipContext) return fleets;
+    return fleets.filter((f) =>
+      matchesPlayerOwnership({
+        ownerEmpireId: f.empireId,
+        runtimeVersion: f.runtimeVersion,
+        ownerActorId: f.actorId ?? null,
+      }),
+    );
+  }, [fleets, hasPlayerOwnershipContext, matchesPlayerOwnership]);
 
   const garrisonRoutesVisible = useMemo(() => {
-    if (myEmpireId === null) return garrisonRoutes;
-    return garrisonRoutes.filter((r) => r.empireId === myEmpireId);
-  }, [garrisonRoutes, myEmpireId]);
+    if (!hasPlayerOwnershipContext) return garrisonRoutes;
+    return garrisonRoutes.filter((r) =>
+      matchesPlayerOwnership({
+        ownerEmpireId: r.empireId,
+        runtimeVersion: r.runtimeVersion,
+        ownerActorId: r.actorId ?? null,
+      }),
+    );
+  }, [garrisonRoutes, hasPlayerOwnershipContext, matchesPlayerOwnership]);
   const ownedSystems = useMemo(() => {
-    if (myEmpireId === null) return [];
-    return systems.filter((s) => s.ownerEmpireId === myEmpireId);
-  }, [systems, myEmpireId]);
+    if (!hasPlayerOwnershipContext) return [];
+    return systems.filter((s) =>
+      matchesPlayerOwnership({
+        ownerEmpireId: s.ownerEmpireId,
+        runtimeVersion: s.runtimeVersion,
+        ownerActorId: s.ownerActorId ?? null,
+      }),
+    );
+  }, [systems, hasPlayerOwnershipContext, matchesPlayerOwnership]);
 
   const [routeOriginId, setRouteOriginId] = useState<Id<"gal_systems"> | "">("");
   const [routeTargetId, setRouteTargetId] = useState<Id<"gal_systems"> | "">("");
@@ -116,6 +186,7 @@ export function FleetScreen(props: {
     try {
       await setGarrisonRoute({
         gameId,
+        ...(myGameActorId !== null ? { gameActorId: myGameActorId } : {}),
         originSystemId: routeOriginId,
         destinationSystemId: routeTargetId,
         dispatchPct: routePct,
@@ -132,6 +203,7 @@ export function FleetScreen(props: {
     try {
       await setGarrisonRoute({
         gameId,
+        ...(myGameActorId !== null ? { gameActorId: myGameActorId } : {}),
         originSystemId: routeOriginId,
         destinationSystemId: null,
         dispatchPct: 0,
@@ -167,6 +239,7 @@ export function FleetScreen(props: {
 
       await issueFleetOrder({
         gameId,
+        ...(myGameActorId !== null ? { gameActorId: myGameActorId } : {}),
         fleetId,
         orderType: "move",
         targetSystemId: targetId,
@@ -202,6 +275,10 @@ export function FleetScreen(props: {
   }, [links, selectedFleet]);
 
   const linkedTargets = systems.filter((s) => neighborSystemIds.has(s._id));
+  const systemById = useMemo(
+    () => new Map(systems.map((system) => [system._id, system] as const)),
+    [systems],
+  );
 
   function openFleetOnGalaxy(fleetIdToFocus: Id<"flt_fleets">) {
     void navigate(galaxyPath, { state: { focusFleetId: fleetIdToFocus } });
@@ -228,7 +305,11 @@ export function FleetScreen(props: {
               <option value="">Select fleet</option>
               {fleetsVisible.map((fleet) => (
                 <option key={fleet._id} value={fleet._id}>
-                  {normalizeFleetDetachmentDisplayName(fleet.name)} ({fleet.status}, origin #{fleet.originSystemId.slice(-4)})
+                  {normalizeFleetDetachmentDisplayName(fleet.name)}
+                  {fleet.runtimeVersion === "v2_game_actor" && fleet.actorSlotNumber !== null
+                    ? ` · Actor ${fleet.actorSlotNumber}`
+                    : ""}
+                  {` (${fleet.status}, origin ${systemById.get(fleet.originSystemId)?.name ?? `#${fleet.originSystemId.slice(-4)}`})`}
                 </option>
               ))}
             </select>
@@ -265,7 +346,7 @@ export function FleetScreen(props: {
               <option value="">Select system</option>
               {linkedTargets.map((system) => (
                 <option key={system._id} value={system._id}>
-                  {system.name}
+                  {formatFleetSystemOptionLabel(system)}
                 </option>
               ))}
             </select>
@@ -295,15 +376,21 @@ export function FleetScreen(props: {
             <li key={fleet._id} className="contents">
               <button
                 type="button"
-                className="min-w-0 truncate justify-self-start rounded px-1 text-st-fg underline-offset-2 transition-colors hover:text-st-accent hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-st-accent sm:justify-self-center"
+                className="min-w-0 truncate justify-self-start rounded px-1 text-st-fg underline-offset-2 transition-colors hover:text-st-accent hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-st-accent sm:justify-self-center"
                 onClick={() => openFleetOnGalaxy(fleet._id)}
               >
                 {normalizeFleetDetachmentDisplayName(fleet.name)}
+                {fleet.runtimeVersion === "v2_game_actor" && fleet.actorSlotNumber !== null
+                  ? ` · Actor ${fleet.actorSlotNumber}`
+                  : ""}
               </button>
               <span className="min-w-0 justify-self-start text-st-muted sm:justify-self-center">
                 {fleet.strength} ships · {fleet.status}
                 {fleet.status === "enRoute" && fleet.etaTurn !== null
                   ? ` · ETA turn ${fleet.etaTurn}`
+                  : ""}
+                {fleet.runtimeVersion === "v2_game_actor" && fleet.actorDisplayName !== null
+                  ? ` · ${fleet.actorDisplayName}`
                   : ""}
               </span>
             </li>
@@ -344,7 +431,7 @@ export function FleetScreen(props: {
                   <option value="">Select system</option>
                   {ownedSystems.map((s) => (
                     <option key={s._id} value={s._id}>
-                      {s.name}
+                      {formatFleetSystemOptionLabel(s)}
                     </option>
                   ))}
                 </select>
@@ -362,7 +449,7 @@ export function FleetScreen(props: {
                   <option value="">Select neighbor</option>
                   {routeTargets.map((s) => (
                     <option key={s._id} value={s._id}>
-                      {s.name}
+                      {formatFleetSystemOptionLabel(s)}
                     </option>
                   ))}
                 </select>
@@ -421,12 +508,18 @@ export function FleetScreen(props: {
             {garrisonRoutesVisible.length > 0 ? (
               <ul className="mt-4 space-y-1 border-t border-st-border pt-3 text-xs text-st-muted">
                 {garrisonRoutesVisible.map((r) => {
-                  const o = systems.find((s) => s._id === r.originSystemId);
-                  const d = systems.find((s) => s._id === r.destinationSystemId);
+                  const o = systemById.get(r.originSystemId);
+                  const d = systemById.get(r.destinationSystemId);
                   return (
                     <li key={r._id}>
-                      {o?.name ?? "?"} → {d?.name ?? "?"} · {r.dispatchPct}% ·{" "}
+                      {o !== undefined ? formatFleetSystemOptionLabel(o) : "?"} →{" "}
+                      {d !== undefined ? formatFleetSystemOptionLabel(d) : "?"} · {r.dispatchPct}% ·{" "}
                       {r.enabled ? "on" : "paused"}
+                      {r.runtimeVersion === "v2_game_actor" && r.actorSlotNumber !== null ? (
+                        <span className="text-slate-400">
+                          {` · Actor ${r.actorSlotNumber}${r.actorDisplayName !== null ? ` (${r.actorDisplayName})` : ""}`}
+                        </span>
+                      ) : null}
                       {r.managedByStrategy === true ? (
                         <span className="text-slate-400"> · automation</span>
                       ) : null}

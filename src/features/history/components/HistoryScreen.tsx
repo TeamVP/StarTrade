@@ -1,9 +1,14 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { usePaginatedQuery, useQuery } from "convex/react";
 import { api } from "../../../../convex/_generated/api";
+import {
+  TRADER_EVENT_LABELS,
+  TRADER_EVENT_TYPES,
+} from "../../../../convex/sim/eventTypePolicies";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { useActiveGame } from "@/features/galaxy/hooks/useActiveGame";
+import { gameModeSupportsTraderGameplay } from "@/features/games/gameMode";
 
 // ─── Event taxonomy ───────────────────────────────────────────────────────────
 
@@ -26,10 +31,7 @@ const CATEGORY_EVENT_TYPES: Record<Exclude<Category, "all">, string[]> = {
     "fleet_arrived",
     "fleet_dispatched",
   ],
-  traders: [
-    "bg_trader_dispatched",
-    "bg_trader_delivered",
-  ],
+  traders: [...TRADER_EVENT_TYPES],
   empire: [
     "empire_collapse_started",
     "system_claimed",
@@ -80,8 +82,7 @@ const EVENT_TYPE_LABEL: Record<string, string> = {
   system_abandoned_underpopulation:  "Colony Abandoned",
   fleet_arrived:                     "Fleet Arrived",
   fleet_dispatched:                  "Fleet Dispatched",
-  bg_trader_dispatched:              "Trader Dispatched",
-  bg_trader_delivered:               "Trader Delivered",
+  ...TRADER_EVENT_LABELS,
   empire_collapse_started:           "Empire Collapsed",
   system_claimed:                    "System Claimed",
   turn_resolved:                     "Turn Resolved",
@@ -124,12 +125,26 @@ type EventDoc = {
   targetId: string | null;
   summary: string;
   payload: string;
+  actorLabel?: string | null;
+  targetLabel?: string | null;
 };
+
+function formatEntityMetaLabel(value: string): string {
+  return value
+    .split("_")
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
 
 function EventRow({ event }: { event: EventDoc }) {
   const [expanded, setExpanded] = useState(false);
   const cat = categoryOf(event.eventType);
   const style = CATEGORY_STYLE[cat];
+  const actorMetaLabel = event.actorLabel ?? formatEntityMetaLabel(event.actorType);
+  const targetMetaLabel =
+    event.targetType !== null
+      ? event.targetLabel ?? formatEntityMetaLabel(event.targetType)
+      : null;
 
   let parsedPayload: unknown = null;
   try {
@@ -175,8 +190,8 @@ function EventRow({ event }: { event: EventDoc }) {
 
         {/* Actor / target meta */}
         <p className="text-[10px] text-st-muted">
-          {event.actorType}
-          {event.targetType !== null ? ` → ${event.targetType}` : ""}
+          {actorMetaLabel}
+          {targetMetaLabel !== null ? ` → ${targetMetaLabel}` : ""}
         </p>
 
         {/* Expandable payload */}
@@ -222,6 +237,7 @@ export function HistoryScreen(props: { hideGamePicker?: boolean }) {
   const hideGamePicker = props.hideGamePicker === true;
   const { games, activeGame, setSelectedGameId } = useActiveGame();
   const [category, setCategory] = useState<Category>("all");
+  const traderGameplayEnabled = gameModeSupportsTraderGameplay(activeGame?.mode);
   const durableResult = useQuery(
     api.sim.queries.getDurableGameResult,
     activeGame?._id !== undefined && activeGame.status === "finished"
@@ -282,6 +298,25 @@ export function HistoryScreen(props: { hideGamePicker?: boolean }) {
     }
     return counts;
   }, [results]);
+
+  const visibleCategoryTabs = useMemo(
+    () => CATEGORY_TABS.filter(({ key }) => traderGameplayEnabled || key !== "traders"),
+    [traderGameplayEnabled],
+  );
+
+  const visibleCategoryStyles = useMemo(
+    () =>
+      Object.entries(CATEGORY_STYLE).filter(([key]) =>
+        traderGameplayEnabled || key !== "traders",
+      ),
+    [traderGameplayEnabled],
+  );
+
+  useEffect(() => {
+    if (!traderGameplayEnabled && category === "traders") {
+      setCategory("all");
+    }
+  }, [category, traderGameplayEnabled]);
 
   return (
     <div className="space-y-4">
@@ -356,11 +391,12 @@ export function HistoryScreen(props: { hideGamePicker?: boolean }) {
                           #{row.placement}
                         </span>
                         <span className="font-medium text-st-fg">{row.empireName}</span>
-                        <span className="text-xs text-st-muted">
-                          {row.controllerKind === "human"
-                            ? row.playerName ?? "Human"
-                            : row.playerName ?? row.npcPlayerKey ?? "NPC"}
-                        </span>
+                        {row.actorDisplayName !== null || row.actorLabel !== null ? (
+                          <span className="rounded-full border border-st-border px-2 py-0.5 text-xs font-medium text-st-muted">
+                            {row.actorDisplayName ?? row.actorLabel}
+                          </span>
+                        ) : null}
+                        <span className="text-xs text-st-muted">{row.controllerLabel}</span>
                         {row.isWinner ? (
                           <span className="rounded-full border border-emerald-500/40 bg-emerald-950/30 px-2 py-0.5 text-xs font-medium text-emerald-200">
                             Winner
@@ -390,7 +426,7 @@ export function HistoryScreen(props: { hideGamePicker?: boolean }) {
               <p className="text-[10px] font-semibold uppercase tracking-widest text-st-muted mb-2">
                 Filter by category
               </p>
-              {CATEGORY_TABS.map(({ key, label }) => {
+              {visibleCategoryTabs.map(({ key, label }) => {
                 const count = key === "all"
                   ? results.length
                   : categoryCount[key] ?? 0;
@@ -427,7 +463,7 @@ export function HistoryScreen(props: { hideGamePicker?: boolean }) {
               <p className="text-[10px] font-semibold uppercase tracking-widest text-st-muted mb-2">
                 Legend
               </p>
-              {Object.entries(CATEGORY_STYLE).map(([cat, style]) => (
+              {visibleCategoryStyles.map(([cat, style]) => (
                 <div key={cat} className="flex items-center gap-2 text-xs text-st-muted">
                   <span>{style.icon}</span>
                   <span className="capitalize">{cat}</span>

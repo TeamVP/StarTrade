@@ -17,10 +17,19 @@ export function DatabaseScreen() {
     gameId: activeGame?._id,
   });
   const runLegacyGameCleanupBatch = useMutation(api.admin.mutations.runLegacyGameCleanupBatch);
+  const backfillMetadataAccessBatch = useMutation(api.admin.mutations.backfillMetadataAccessBatch);
   const retireGameForCleanup = useMutation(api.admin.mutations.retireGameForCleanup);
 
   const [cleanupBusy, setCleanupBusy] = useState<"official" | "discarded" | null>(null);
   const [cleanupResult, setCleanupResult] = useState<string | null>(null);
+  const [metadataBusy, setMetadataBusy] = useState(false);
+  const [metadataResult, setMetadataResult] = useState<string | null>(null);
+  const [metadataCursors, setMetadataCursors] = useState<{
+    user: string | null;
+    mission: string | null;
+    strategy: string | null;
+    game: string | null;
+  }>({ user: null, mission: null, strategy: null, game: null });
   const [retireBusyGameId, setRetireBusyGameId] = useState<string | null>(null);
   const [retireResult, setRetireResult] = useState<string | null>(null);
 
@@ -63,6 +72,46 @@ export function DatabaseScreen() {
     }
   }
 
+  async function runMetadataBackfill() {
+    setMetadataBusy(true);
+    setMetadataResult(null);
+    try {
+      const result = await backfillMetadataAccessBatch({
+        limit: 32,
+        userCursor: metadataCursors.user ?? undefined,
+        missionCursor: metadataCursors.mission ?? undefined,
+        strategyCursor: metadataCursors.strategy ?? undefined,
+        gameCursor: metadataCursors.game ?? undefined,
+      });
+      const updated = result.updatedUsers + result.updatedGames + result.updatedMissions + result.updatedStrategies;
+      const scanned = result.scannedUsers + result.scannedGames + result.scannedMissions + result.scannedStrategies;
+      if (result.sweepComplete) {
+        setMetadataCursors({ user: null, mission: null, strategy: null, game: null });
+      } else {
+        setMetadataCursors({
+          user: result.nextUserCursor,
+          mission: result.nextMissionCursor,
+          strategy: result.nextStrategyCursor,
+          game: result.nextGameCursor,
+        });
+      }
+      setMetadataResult(
+        updated > 0
+          ? result.sweepComplete
+            ? `Backfilled ${updated} rows: ${result.updatedUsers} users, ${result.updatedMissions} missions, ${result.updatedStrategies} strategies, ${result.updatedGames} games (${result.missionBackedGameModes} mission-backed, ${result.fallbackGameModes} fallback game modes). Metadata sweep complete.`
+            : `Backfilled ${updated} rows: ${result.updatedUsers} users, ${result.updatedMissions} missions, ${result.updatedStrategies} strategies, ${result.updatedGames} games (${result.missionBackedGameModes} mission-backed, ${result.fallbackGameModes} fallback game modes). Continue running to scan older rows.`
+          : result.sweepComplete
+            ? "Metadata sweep complete. No scanned rows needed backfill in the final pass."
+            : `Scanned ${scanned} rows with no updates in this pass. Continue running to scan older rows.`,
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setMetadataResult(message.replace(/^[\s\S]*?Error:\s*/g, "").trim());
+    } finally {
+      setMetadataBusy(false);
+    }
+  }
+
   if (health?.authorized === false) {
     return (
       <Card>
@@ -73,12 +122,13 @@ export function DatabaseScreen() {
 
   const overview = health?.overview;
   const selected = health?.selectedGameTableStats;
-  const tableStats: Array<{ label: string; stat: { count: number; capped: boolean } }> =
+  const tableStats: Array<{ label: string; stat: { count: number; capped: boolean; disabled?: boolean } }> =
     selected === null || selected === undefined
       ? []
       : [
           { label: "sim_events", stat: selected.simEvents },
           { label: "sim_turns", stat: selected.simTurns },
+          { label: "sim_game_actors", stat: selected.simGameActors },
           { label: "sim_turn_preparations", stat: selected.simTurnPreparations },
           { label: "sim_turn_preparation_ops", stat: selected.simTurnPreparationOps },
           { label: "gal_systems", stat: selected.galSystems },
@@ -97,6 +147,19 @@ export function DatabaseScreen() {
           { label: "sim_game_results", stat: selected.simGameResults },
           { label: "emp_results", stat: selected.empResults },
         ];
+  const legacyTraderData = selected?.legacyTraderData ?? null;
+  const legacyTraderRows = legacyTraderData
+    ? [
+        { label: "sim_trader_identities", stat: legacyTraderData.simTraderIdentities },
+        { label: "eco_market_snapshots", stat: legacyTraderData.ecoMarketSnapshots },
+        { label: "eco_system_outputs", stat: legacyTraderData.ecoSystemOutputs },
+        { label: "eco_bg_traders", stat: legacyTraderData.ecoBgTraders },
+        { label: "sim_events (bg_trader_*)", stat: legacyTraderData.simEvents },
+        { label: "trd_charters", stat: legacyTraderData.trdCharters },
+        { label: "trd_runs", stat: legacyTraderData.trdRuns },
+      ]
+    : [];
+  const legacyTraderRowCount = legacyTraderRows.reduce((sum, row) => sum + row.stat.count, 0);
 
   return (
     <div className="space-y-4">
@@ -200,6 +263,36 @@ export function DatabaseScreen() {
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <h2 className="text-sm font-semibold uppercase tracking-wide text-st-muted">
+              Metadata Convergence
+            </h2>
+            <p className="mt-1 text-sm text-st-muted">
+              Backfill missing product-access metadata on users, missions, and games through a resumable sweep so new conquest-core and pro-creation rules do not depend on legacy fallbacks forever.
+            </p>
+          </div>
+          <Button type="button" disabled={metadataBusy} onClick={() => void runMetadataBackfill()}>
+            {metadataBusy ? "Backfilling…" : metadataCursors.user !== null || metadataCursors.mission !== null || metadataCursors.strategy !== null || metadataCursors.game !== null ? "Continue Metadata Backfill" : "Backfill Metadata"}
+          </Button>
+        </div>
+        <div className="mt-4 grid gap-2 md:grid-cols-2 xl:grid-cols-4 text-sm text-st-muted">
+          <div>Games missing mode: <span className="font-medium text-st-fg">{overview?.metadataCounts.missingGameMode ?? "-"}</span></div>
+          <div>Users missing plan: <span className="font-medium text-st-fg">{overview?.metadataCounts.missingUserPlan ?? "-"}</span></div>
+          <div>Users missing publisher: <span className="font-medium text-st-fg">{overview?.metadataCounts.missingUserPublisher ?? "-"}</span></div>
+          <div>Missions missing mode: <span className="font-medium text-st-fg">{overview?.metadataCounts.missingMissionMode ?? "-"}</span></div>
+          <div>Missions missing tier: <span className="font-medium text-st-fg">{overview?.metadataCounts.missingMissionRequiredTier ?? "-"}</span></div>
+          <div>Missions missing source: <span className="font-medium text-st-fg">{overview?.metadataCounts.missingMissionSource ?? "-"}</span></div>
+          <div>Missions missing status: <span className="font-medium text-st-fg">{overview?.metadataCounts.missingMissionStatus ?? "-"}</span></div>
+          <div>Strategies missing source: <span className="font-medium text-st-fg">{overview?.metadataCounts.missingStrategySource ?? "-"}</span></div>
+          <div>Strategies missing status: <span className="font-medium text-st-fg">{overview?.metadataCounts.missingStrategyStatus ?? "-"}</span></div>
+        </div>
+        {metadataResult !== null ? (
+          <p className="mt-3 text-sm text-st-muted">{metadataResult}</p>
+        ) : null}
+      </Card>
+
+      <Card>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 className="text-sm font-semibold uppercase tracking-wide text-st-muted">
               Cleanup Backlog
             </h2>
             <p className="mt-1 text-sm text-st-muted">
@@ -269,6 +362,9 @@ export function DatabaseScreen() {
             <p className="mt-1 text-sm text-st-muted">
               Sampled row counts for the currently focused game. Counts are capped at 512 rows per table to stay safe in queries.
             </p>
+            <p className="mt-1 text-xs text-st-muted">
+              Mode <span className="font-mono text-st-fg">{selected?.mode ?? "trader_economy"}</span> · runtime <span className="font-mono text-st-fg">{selected?.runtimeVersion ?? "v1_empire"}</span>
+            </p>
           </div>
           <select
             className="rounded border border-st-border bg-st-bg px-3 py-2 text-sm"
@@ -301,16 +397,48 @@ export function DatabaseScreen() {
             >
               /game/{getGameRouteKey(selected)}
             </a>
+            {legacyTraderData !== null ? (
+              <p className="text-xs text-st-muted">
+                `sim_events` below excludes legacy `bg_trader_*` rows, which are broken out separately in the legacy trader section.
+              </p>
+            ) : null}
             <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
               {tableStats.map(({ label, stat }) => (
                 <div key={label} className="rounded border border-st-border bg-st-bg px-3 py-2 text-sm">
                   <div className="font-medium text-st-fg">{label}</div>
                   <div className="mt-1 text-st-muted">
-                    {stat.count}{stat.capped ? "+" : ""} rows sampled
+                    {stat.disabled
+                      ? "disabled for this mode"
+                      : `${stat.count}${stat.capped ? "+" : ""} rows sampled`}
                   </div>
                 </div>
               ))}
             </div>
+            {legacyTraderData !== null ? (
+              <div className="rounded border border-amber-500/30 bg-amber-500/5 px-4 py-3">
+                <div>
+                  <div className="text-sm font-medium text-st-fg">Legacy trader-side rows</div>
+                  <p className="mt-1 text-sm text-st-muted">
+                    This game mode does not use trader gameplay. Any rows shown here are leftover legacy data from older seeds or runtime behavior and now drain automatically through bounded post-commit cleanup.
+                  </p>
+                </div>
+                <div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+                  {legacyTraderRows.map(({ label, stat }) => (
+                    <div key={label} className="rounded border border-st-border bg-st-bg px-3 py-2 text-sm">
+                      <div className="font-medium text-st-fg">{label}</div>
+                      <div className="mt-1 text-st-muted">
+                        {stat.count}{stat.capped ? "+" : ""} legacy rows sampled
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <p className="mt-3 text-sm text-st-muted">
+                  {legacyTraderRowCount === 0
+                    ? "No legacy trader rows are currently sampled for this game."
+                    : `${legacyTraderRowCount} sampled legacy trader rows remain across these tables; they should converge away as maintenance batches run.`}
+                </p>
+              </div>
+            ) : null}
           </div>
         )}
       </Card>

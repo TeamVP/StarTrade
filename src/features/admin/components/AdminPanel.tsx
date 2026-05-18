@@ -51,6 +51,8 @@ export function AdminPanel() {
     const formData = new FormData(form);
     const nameValue = formData.get("name");
     const mapKeyValue = formData.get("mapKey");
+    const runtimeVersionValue = formData.get("runtimeVersion");
+    const modeValue = formData.get("mode");
     const retentionClassValue = formData.get("retentionClass");
     const npcEmpireKeys = formData
       .getAll("npcEmpireKeys")
@@ -63,6 +65,16 @@ export function AdminPanel() {
       retentionClassValue === "archived_debug"
         ? retentionClassValue
         : "official";
+    const mode =
+      modeValue === "conquest_core" ||
+      modeValue === "conquest_plus" ||
+      modeValue === "trader_economy"
+        ? modeValue
+        : "trader_economy";
+    const runtimeVersion =
+      runtimeVersionValue === "v2_game_actor" || runtimeVersionValue === "v1_empire"
+        ? runtimeVersionValue
+        : "v1_empire";
 
     if (!name || !mapKey) return;
 
@@ -72,6 +84,8 @@ export function AdminPanel() {
       const newGameId = await createGame({
         name,
         mapKey,
+        runtimeVersion,
+        mode,
         seed: crypto.randomUUID(),
         npcEmpireKeys,
         retentionClass,
@@ -138,6 +152,36 @@ export function AdminPanel() {
             <option value="official">Official results and cleanup</option>
             <option value="discarded">Discard after playtest cleanup</option>
             <option value="archived_debug">Archive debug transcript</option>
+          </select>
+        </label>
+        <label className="block">
+          <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-st-muted">
+            Runtime generation
+          </span>
+          <select
+            name="runtimeVersion"
+            defaultValue="v1_empire"
+            className="w-full rounded border border-st-border bg-st-bg px-3 py-2 text-sm"
+          >
+            <option value="v1_empire">V1 empire runtime</option>
+            <option value="v2_game_actor">V2 game-actor runtime</option>
+          </select>
+          <p className="mt-1 text-xs text-st-muted">
+            V2 currently seeds actor snapshots and read seams while live ownership still bridges through legacy empire rows.
+          </p>
+        </label>
+        <label className="block">
+          <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-st-muted">
+            Game mode
+          </span>
+          <select
+            name="mode"
+            defaultValue="conquest_core"
+            className="w-full rounded border border-st-border bg-st-bg px-3 py-2 text-sm"
+          >
+            <option value="conquest_core">Conquest core</option>
+            <option value="conquest_plus">Conquest plus (unpublished)</option>
+            <option value="trader_economy">Trader economy (pro creation)</option>
           </select>
         </label>
         <fieldset className="rounded border border-st-border bg-st-bg/40 p-3">
@@ -219,7 +263,7 @@ export function AdminPanel() {
               <div>
                 <p className="font-medium">{game.name}</p>
                 <p className="text-xs text-st-muted">
-                  {game.mapKey} - {game.npcEmpireKeys?.length ?? 0} NPC empires - {game.retentionClass ?? "official"}
+                  {game.mapKey} · {game.mode ?? "trader_economy"} · {game.runtimeVersion ?? "v1_empire"} · {game.npcEmpireKeys?.length ?? 0} NPC empires · {game.retentionClass ?? "official"}
                 </p>
                 <a
                   href={getGamePath(game)}
@@ -348,7 +392,7 @@ export function AdminPanel() {
           </button>
           {godModeOpen && (
             <div className="mt-3">
-              <GodModePanel gameId={activeGame._id} />
+              <GodModePanel gameId={activeGame._id} gameMode={activeGame.mode} />
             </div>
           )}
         </div>

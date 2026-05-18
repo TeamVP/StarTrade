@@ -382,7 +382,7 @@ export function LobbyPage() {
                             <span>
                               Winner{" "}
                               <span className="font-semibold text-st-fg">
-                                {result.winnerEmpireName ?? "—"}
+                                {result.winnerDisplayLabel ?? result.winnerEmpireName ?? "—"}
                               </span>
                             </span>
                             <span>

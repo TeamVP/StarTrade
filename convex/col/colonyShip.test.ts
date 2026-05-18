@@ -39,13 +39,16 @@ function fakeHomeworld(over: Partial<Doc<"gal_systems">> = {}): Doc<"gal_systems
 
 describe("validateColonyShipRouteDestinations", () => {
   const e = "emp1" as Id<"emp_states">;
+  const actor = "actor1" as Id<"sim_game_actors">;
   test("allows any length through empire then two foreign hops", () => {
     const err = validateColonyShipRouteDestinations({
       routeSystemIds: ["a", "b", "c", "d"] as Id<"gal_systems">[],
       empireId: e,
       getOwner: (id) => {
-        if (id === "a" || id === "b") return e;
-        return null;
+        if (id === "a" || id === "b") {
+          return { ownerEmpireId: e };
+        }
+        return { ownerEmpireId: null };
       },
     });
     expect(err).toBeNull();
@@ -55,7 +58,7 @@ describe("validateColonyShipRouteDestinations", () => {
     const err = validateColonyShipRouteDestinations({
       routeSystemIds: ["a", "x", "y", "z"] as Id<"gal_systems">[],
       empireId: e,
-      getOwner: (id) => (id === "a" ? e : null),
+      getOwner: (id) => ({ ownerEmpireId: id === "a" ? e : null }),
     });
     expect(err).not.toBeNull();
   });
@@ -64,9 +67,50 @@ describe("validateColonyShipRouteDestinations", () => {
     const err = validateColonyShipRouteDestinations({
       routeSystemIds: ["a", "a"] as Id<"gal_systems">[],
       empireId: e,
-      getOwner: () => e,
+      getOwner: () => ({ ownerEmpireId: e }),
     });
     expect(err).not.toBeNull();
+  });
+
+  test("uses actor ownership for the empire-territory prefix in v2", () => {
+    const err = validateColonyShipRouteDestinations({
+      routeSystemIds: ["a", "b", "c", "d"] as Id<"gal_systems">[],
+      empireId: e,
+      actorId: actor,
+      getOwner: (id) => {
+        if (id === "a" || id === "b") {
+          return {
+            ownerEmpireId: e,
+            ownerActorId: actor,
+          };
+        }
+        return {
+          ownerEmpireId: null,
+          ownerActorId: null,
+        };
+      },
+    });
+    expect(err).toBeNull();
+  });
+
+  test("allows actor-only ownership validation when legacy empire id is absent", () => {
+    const err = validateColonyShipRouteDestinations({
+      routeSystemIds: ["a", "b", "c", "d"] as Id<"gal_systems">[],
+      actorId: actor,
+      getOwner: (id) => {
+        if (id === "a" || id === "b") {
+          return {
+            ownerEmpireId: null,
+            ownerActorId: actor,
+          };
+        }
+        return {
+          ownerEmpireId: null,
+          ownerActorId: null,
+        };
+      },
+    });
+    expect(err).toBeNull();
   });
 });
 

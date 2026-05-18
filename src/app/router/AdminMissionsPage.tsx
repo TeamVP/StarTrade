@@ -1,6 +1,8 @@
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useDeferredValue, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
+import { useSearchParams } from "react-router-dom";
 import { api } from "../../../convex/_generated/api";
+import type { Id } from "../../../convex/_generated/dataModel";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 
@@ -17,6 +19,12 @@ type MissionRow = {
   name: string;
   description: string;
   mapKey: string;
+  ownerUserId: Id<"users"> | null;
+  ownerLabel: string | null;
+  source: "official" | "community";
+  status: "draft" | "published" | "archived" | "deleted" | "admin_deleted";
+  mode: "conquest_core" | "conquest_plus" | "trader_economy";
+  requiredTier: "free" | "pro";
   mapTier: "small" | "medium" | "large";
   level: number;
   requiredWins: number;
@@ -26,9 +34,44 @@ type MissionRow = {
   retentionClass: "discarded" | "official" | "archived_debug";
   scenarioJson: string;
   preview: MissionPreview;
+  moderationHistory: Array<{
+    action: "created" | "updated" | "bulk_status_updated" | "bulk_owner_updated" | "bulk_source_updated";
+    summary: string;
+    note: string | null;
+    createdAt: number;
+    actorLabel: string | null;
+  }>;
   createdAt: number;
   updatedAt: number;
 };
+
+type AssignableOwnerRow = {
+  _id: Id<"users">;
+  name: string | null;
+  email: string | null;
+  admin: boolean;
+  publisher: boolean;
+};
+
+function ownerOptionLabel(owner: AssignableOwnerRow): string {
+  return owner.name?.trim() || owner.email?.trim() || owner._id;
+}
+
+function statusTone(status: MissionRow["status"]): string {
+  switch (status) {
+    case "published":
+      return "border-emerald-500/40 bg-emerald-950/30 text-emerald-200";
+    case "draft":
+      return "border-amber-500/40 bg-amber-950/30 text-amber-200";
+    case "archived":
+      return "border-slate-500/40 bg-slate-900/40 text-slate-200";
+    case "deleted":
+    case "admin_deleted":
+      return "border-red-500/40 bg-red-950/30 text-red-200";
+    default:
+      return "border-st-border text-st-muted";
+  }
+}
 
 type StrategyOption = {
   key: string;
@@ -98,6 +141,34 @@ function parseCsv(text: string): string[] {
 
 function formatCsv(values: string[]): string {
   return values.join(", ");
+}
+
+function normalizeSearchText(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function readMissionSourceFilter(value: string | null): "all" | MissionRow["source"] {
+  return value === "official" || value === "community" ? value : "all";
+}
+
+function readMissionStatusFilter(value: string | null): "all" | MissionRow["status"] {
+  return value === "draft" ||
+    value === "published" ||
+    value === "archived" ||
+    value === "deleted" ||
+    value === "admin_deleted"
+    ? value
+    : "all";
+}
+
+function readMissionOwnerFilter(value: string | null): "all" | "system" | Id<"users"> {
+  if (value === "all" || value === null || value.trim().length === 0) {
+    return "all";
+  }
+  if (value === "system") {
+    return "system";
+  }
+  return value as Id<"users">;
 }
 
 function normalizeNullableString(value: string): string | null {
@@ -1053,13 +1124,21 @@ function MissionSummary(props: { preview: MissionPreview }) {
 
 function MissionCard(props: {
   mission: MissionRow;
+  selected: boolean;
+  onToggleSelect: (key: string) => void;
   empireNpcs: EmpireNpcRow[];
   strategies: StrategyOption[];
+  ownerOptions: AssignableOwnerRow[];
   onSave: (args: {
     key: string;
     name: string;
     description: string;
     mapKey: string;
+    ownerUserId: Id<"users"> | null;
+    source: MissionRow["source"];
+    status: MissionRow["status"];
+    mode: MissionRow["mode"];
+    requiredTier: MissionRow["requiredTier"];
     level: number;
     requiredWins: number;
     prerequisiteMissionKeys: string[];
@@ -1067,25 +1146,35 @@ function MissionCard(props: {
     sortOrder: number;
     retentionClass: MissionRow["retentionClass"];
     scenarioJson: string;
+    moderationNote: string;
   }) => Promise<void>;
 }) {
   const [name, setName] = useState(props.mission.name);
   const [description, setDescription] = useState(props.mission.description);
   const [mapKey, setMapKey] = useState(props.mission.mapKey);
+  const [ownerUserId, setOwnerUserId] = useState<Id<"users"> | "">(props.mission.ownerUserId ?? "");
+  const [source, setSource] = useState<MissionRow["source"]>(props.mission.source);
+  const [contentStatus, setContentStatus] = useState<MissionRow["status"]>(props.mission.status);
+  const [mode, setMode] = useState<MissionRow["mode"]>(props.mission.mode);
+  const [requiredTier, setRequiredTier] = useState<MissionRow["requiredTier"]>(props.mission.requiredTier);
   const [level, setLevel] = useState(String(props.mission.level));
   const [requiredWins, setRequiredWins] = useState(String(props.mission.requiredWins));
   const [prerequisitesText, setPrerequisitesText] = useState(
     formatCsv(props.mission.prerequisiteMissionKeys),
   );
-  const [published, setPublished] = useState(props.mission.published);
   const [sortOrder, setSortOrder] = useState(String(props.mission.sortOrder));
   const [retentionClass, setRetentionClass] = useState<MissionRow["retentionClass"]>(
     props.mission.retentionClass,
   );
   const [scenarioJson, setScenarioJson] = useState(props.mission.scenarioJson);
+  const [moderationNote, setModerationNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const readOnly =
+    props.mission.status === "archived" ||
+    props.mission.status === "deleted" ||
+    props.mission.status === "admin_deleted";
 
   async function handleSave() {
     setBusy(true);
@@ -1097,14 +1186,21 @@ function MissionCard(props: {
         name,
         description,
         mapKey,
+        ownerUserId: source === "community" ? ownerUserId || null : null,
+        source,
+        status: contentStatus,
+        mode,
+        requiredTier,
         level: Number(level),
         requiredWins: Number(requiredWins),
         prerequisiteMissionKeys: parseCsv(prerequisitesText),
-        published,
+        published: contentStatus === "published",
         sortOrder: Number(sortOrder),
         retentionClass,
         scenarioJson,
+        moderationNote,
       });
+      setModerationNote("");
       setStatus("Saved.");
     } catch (saveError) {
       setError(mutationErrorMessage(saveError));
@@ -1116,7 +1212,15 @@ function MissionCard(props: {
   return (
     <Card className="space-y-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
+        <div className="flex items-start gap-3">
+          <input
+            type="checkbox"
+            checked={props.selected}
+            onChange={() => props.onToggleSelect(props.mission.key)}
+            className="mt-1 accent-cyan-400"
+            aria-label={`Select ${props.mission.key}`}
+          />
+          <div>
           <div className="flex flex-wrap items-center gap-2">
             <h3 className="text-sm font-semibold text-st-fg">{props.mission.name}</h3>
             <span className="rounded border border-st-border px-2 py-0.5 text-xs text-st-muted">
@@ -1126,13 +1230,39 @@ function MissionCard(props: {
               Level {props.mission.level}
             </span>
             <span className="rounded border border-st-border px-2 py-0.5 text-xs text-st-muted">
-              {published ? "Published" : "Draft"}
+              {props.mission.mode}
+            </span>
+            <span className="rounded border border-st-border px-2 py-0.5 text-xs text-st-muted">
+              {props.mission.requiredTier}
+            </span>
+            <span className={`rounded border px-2 py-0.5 text-xs ${props.mission.source === "community" ? "border-sky-500/40 bg-sky-950/30 text-sky-200" : "border-st-border text-st-muted"}`}>
+              {props.mission.source}
+            </span>
+            <span className={`rounded border px-2 py-0.5 text-xs ${statusTone(props.mission.status)}`}>
+              {props.mission.status}
             </span>
           </div>
           <p className="mt-1 text-sm text-st-muted">{props.mission.description || "No description."}</p>
           <p className="mt-1 text-xs text-st-muted">
+            Owner {props.mission.ownerLabel ?? props.mission.ownerUserId ?? "System"}
+          </p>
+          <p className="mt-1 text-xs text-st-muted">
             Updated {formatTimestamp(props.mission.updatedAt)} · Created {formatTimestamp(props.mission.createdAt)}
           </p>
+          {props.mission.moderationHistory.length > 0 ? (
+            <div className="mt-2 space-y-1 text-xs text-st-muted">
+              <p className="font-medium text-st-fg">Recent moderation</p>
+              {props.mission.moderationHistory.map((event, index) => (
+                <div key={`${event.createdAt}-${index}`}>
+                  <p>
+                    {formatTimestamp(event.createdAt)} · {event.actorLabel ?? "Unknown admin"} · {event.summary}
+                  </p>
+                  {event.note !== null ? <p className="text-st-fg">Note: {event.note}</p> : null}
+                </div>
+              ))}
+            </div>
+          ) : null}
+        </div>
         </div>
         <MissionSummary preview={props.mission.preview} />
       </div>
@@ -1176,6 +1306,18 @@ function MissionCard(props: {
             className="rounded border border-st-border bg-st-bg px-3 py-2 text-sm text-st-fg outline-none focus:border-st-accent"
           />
         </label>
+        <label className="grid gap-1 text-xs text-st-muted">
+          <span>Mode</span>
+          <select
+            value={mode}
+            onChange={(event) => setMode(event.target.value as MissionRow["mode"])}
+            className="rounded border border-st-border bg-st-bg px-3 py-2 text-sm text-st-fg outline-none focus:border-st-accent"
+          >
+            <option value="conquest_core">conquest_core</option>
+            <option value="conquest_plus">conquest_plus</option>
+            <option value="trader_economy">trader_economy</option>
+          </select>
+        </label>
       </div>
 
       <label className="grid gap-1 text-xs text-st-muted">
@@ -1187,7 +1329,53 @@ function MissionCard(props: {
         />
       </label>
 
-      <div className="grid gap-3 md:grid-cols-[2fr,140px,180px]">
+      <div className="grid gap-3 md:grid-cols-3">
+        <label className="grid gap-1 text-xs text-st-muted">
+          <span>Source</span>
+          <select
+            value={source}
+            disabled={readOnly}
+            onChange={(event) => setSource(event.target.value as MissionRow["source"])}
+            className="rounded border border-st-border bg-st-bg px-3 py-2 text-sm text-st-fg outline-none focus:border-st-accent"
+          >
+            <option value="official">official</option>
+            <option value="community">community</option>
+          </select>
+        </label>
+        <label className="grid gap-1 text-xs text-st-muted">
+          <span>Owner</span>
+          <select
+            value={source === "community" ? ownerUserId : ""}
+            disabled={readOnly || source !== "community"}
+            onChange={(event) => setOwnerUserId(event.target.value as Id<"users"> | "")}
+            className="rounded border border-st-border bg-st-bg px-3 py-2 text-sm text-st-fg outline-none focus:border-st-accent"
+          >
+            <option value="">System / unowned</option>
+            {props.ownerOptions.map((owner) => (
+              <option key={owner._id} value={owner._id}>
+                {ownerOptionLabel(owner)}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="grid gap-1 text-xs text-st-muted">
+          <span>Status</span>
+          <select
+            value={contentStatus}
+            disabled={readOnly}
+            onChange={(event) => setContentStatus(event.target.value as MissionRow["status"])}
+            className="rounded border border-st-border bg-st-bg px-3 py-2 text-sm text-st-fg outline-none focus:border-st-accent"
+          >
+            <option value="draft">draft</option>
+            <option value="published">published</option>
+            <option value="archived">archived</option>
+            <option value="deleted">deleted</option>
+            <option value="admin_deleted">admin_deleted</option>
+          </select>
+        </label>
+      </div>
+
+      <div className="grid gap-3 md:grid-cols-[2fr,140px,180px,160px]">
         <label className="grid gap-1 text-xs text-st-muted">
           <span>Prerequisite mission keys</span>
           <input
@@ -1220,17 +1408,22 @@ function MissionCard(props: {
             <option value="discarded">discarded</option>
           </select>
         </label>
+        <label className="grid gap-1 text-xs text-st-muted">
+          <span>Required tier</span>
+          <select
+            value={requiredTier}
+            onChange={(event) => setRequiredTier(event.target.value as MissionRow["requiredTier"])}
+            className="rounded border border-st-border bg-st-bg px-3 py-2 text-sm text-st-fg outline-none focus:border-st-accent"
+          >
+            <option value="free">free</option>
+            <option value="pro">pro</option>
+          </select>
+        </label>
       </div>
 
-      <label className="flex items-center gap-2 rounded border border-st-border bg-st-bg px-3 py-2 text-sm text-st-muted">
-        <input
-          type="checkbox"
-          checked={published}
-          onChange={(event) => setPublished(event.target.checked)}
-          className="accent-cyan-400"
-        />
-        Published and available in player progression
-      </label>
+      <p className="rounded border border-st-border bg-st-bg px-3 py-2 text-sm text-st-muted">
+        Player availability: <span className="font-medium text-st-fg">{contentStatus === "published" ? "Published" : "Not published"}</span>
+      </p>
 
       <label className="grid gap-1 text-xs text-st-muted">
         <span>Scenario Builder</span>
@@ -1253,11 +1446,24 @@ function MissionCard(props: {
         />
       </label>
 
+      <label className="grid gap-1 text-xs text-st-muted">
+        <span>Moderation note (optional)</span>
+        <textarea
+          value={moderationNote}
+          disabled={readOnly}
+          onChange={(event) => setModerationNote(event.target.value)}
+          rows={3}
+          placeholder="Why is this admin change being made?"
+          className="rounded border border-st-border bg-st-bg px-3 py-2 text-sm text-st-fg outline-none focus:border-st-accent"
+        />
+      </label>
+
       {status !== null ? <p className="text-sm text-emerald-300">{status}</p> : null}
       {error !== null ? <p className="text-sm text-red-300">{error}</p> : null}
+      {readOnly ? <p className="text-sm text-st-muted">Terminal content stays visible here but can no longer be edited.</p> : null}
 
       <div className="flex justify-end">
-        <Button type="button" onClick={() => void handleSave()} disabled={busy}>
+        <Button type="button" onClick={() => void handleSave()} disabled={busy || readOnly}>
           {busy ? "Saving..." : "Save mission"}
         </Button>
       </div>
@@ -1268,11 +1474,17 @@ function MissionCard(props: {
 function CreateMissionCard(props: {
   empireNpcs: EmpireNpcRow[];
   strategies: StrategyOption[];
+  ownerOptions: AssignableOwnerRow[];
   onCreate: (args: {
     key: string;
     name: string;
     description: string;
     mapKey: string;
+    ownerUserId: Id<"users"> | null;
+    source: MissionRow["source"];
+    status: "draft" | "published";
+    mode: MissionRow["mode"];
+    requiredTier: MissionRow["requiredTier"];
     level: number;
     requiredWins: number;
     prerequisiteMissionKeys: string[];
@@ -1286,10 +1498,14 @@ function CreateMissionCard(props: {
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [mapKey, setMapKey] = useState("v1-twenty");
+  const [ownerUserId, setOwnerUserId] = useState<Id<"users"> | "">("");
+  const [source, setSource] = useState<MissionRow["source"]>("official");
+  const [contentStatus, setContentStatus] = useState<"draft" | "published">("published");
+  const [mode, setMode] = useState<MissionRow["mode"]>("conquest_core");
+  const [requiredTier, setRequiredTier] = useState<MissionRow["requiredTier"]>("free");
   const [level, setLevel] = useState("1");
   const [requiredWins, setRequiredWins] = useState("1");
   const [prerequisitesText, setPrerequisitesText] = useState("");
-  const [published, setPublished] = useState(true);
   const [sortOrder, setSortOrder] = useState("100");
   const [retentionClass, setRetentionClass] = useState<MissionRow["retentionClass"]>("official");
   const [scenarioJson, setScenarioJson] = useState(
@@ -1319,10 +1535,15 @@ function CreateMissionCard(props: {
         name,
         description,
         mapKey,
+        ownerUserId: source === "community" ? ownerUserId || null : null,
+        source,
+        status: contentStatus,
+        mode,
+        requiredTier,
         level: Number(level),
         requiredWins: Number(requiredWins),
         prerequisiteMissionKeys: parseCsv(prerequisitesText),
-        published,
+        published: contentStatus === "published",
         sortOrder: Number(sortOrder),
         retentionClass,
         scenarioJson,
@@ -1331,10 +1552,14 @@ function CreateMissionCard(props: {
       setName("");
       setDescription("");
       setMapKey("v1-twenty");
+      setOwnerUserId("");
+      setSource("official");
+      setContentStatus("published");
+      setMode("conquest_core");
+      setRequiredTier("free");
       setLevel("1");
       setRequiredWins("1");
       setPrerequisitesText("");
-      setPublished(true);
       setSortOrder("100");
       setRetentionClass("official");
       setScenarioJson(
@@ -1405,6 +1630,59 @@ function CreateMissionCard(props: {
               className="rounded border border-st-border bg-st-bg px-3 py-2 text-sm text-st-fg outline-none focus:border-st-accent"
             />
           </label>
+          <label className="grid gap-1 text-xs text-st-muted">
+            <span>Mode</span>
+            <select
+              value={mode}
+              onChange={(event) => setMode(event.target.value as MissionRow["mode"])}
+              className="rounded border border-st-border bg-st-bg px-3 py-2 text-sm text-st-fg outline-none focus:border-st-accent"
+            >
+              <option value="conquest_core">conquest_core</option>
+              <option value="conquest_plus">conquest_plus</option>
+              <option value="trader_economy">trader_economy</option>
+            </select>
+          </label>
+        </div>
+
+        <div className="grid gap-3 md:grid-cols-3">
+          <label className="grid gap-1 text-xs text-st-muted">
+            <span>Source</span>
+            <select
+              value={source}
+              onChange={(event) => setSource(event.target.value as MissionRow["source"])}
+              className="rounded border border-st-border bg-st-bg px-3 py-2 text-sm text-st-fg outline-none focus:border-st-accent"
+            >
+              <option value="official">official</option>
+              <option value="community">community</option>
+            </select>
+          </label>
+          <label className="grid gap-1 text-xs text-st-muted">
+            <span>Owner</span>
+            <select
+              value={source === "community" ? ownerUserId : ""}
+              disabled={source !== "community"}
+              onChange={(event) => setOwnerUserId(event.target.value as Id<"users"> | "")}
+              className="rounded border border-st-border bg-st-bg px-3 py-2 text-sm text-st-fg outline-none focus:border-st-accent"
+            >
+              <option value="">System / unowned</option>
+              {props.ownerOptions.map((owner) => (
+                <option key={owner._id} value={owner._id}>
+                  {ownerOptionLabel(owner)}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="grid gap-1 text-xs text-st-muted">
+            <span>Status</span>
+            <select
+              value={contentStatus}
+              onChange={(event) => setContentStatus(event.target.value as "draft" | "published")}
+              className="rounded border border-st-border bg-st-bg px-3 py-2 text-sm text-st-fg outline-none focus:border-st-accent"
+            >
+              <option value="draft">draft</option>
+              <option value="published">published</option>
+            </select>
+          </label>
         </div>
 
         <label className="grid gap-1 text-xs text-st-muted">
@@ -1416,7 +1694,7 @@ function CreateMissionCard(props: {
           />
         </label>
 
-        <div className="grid gap-3 md:grid-cols-[140px,180px,1fr,180px]">
+        <div className="grid gap-3 md:grid-cols-[140px,180px,1fr,180px,160px]">
           <label className="grid gap-1 text-xs text-st-muted">
             <span>Wins required</span>
             <input
@@ -1460,17 +1738,22 @@ function CreateMissionCard(props: {
               <option value="discarded">discarded</option>
             </select>
           </label>
+          <label className="grid gap-1 text-xs text-st-muted">
+            <span>Required tier</span>
+            <select
+              value={requiredTier}
+              onChange={(event) => setRequiredTier(event.target.value as MissionRow["requiredTier"])}
+              className="rounded border border-st-border bg-st-bg px-3 py-2 text-sm text-st-fg outline-none focus:border-st-accent"
+            >
+              <option value="free">free</option>
+              <option value="pro">pro</option>
+            </select>
+          </label>
         </div>
 
-        <label className="flex items-center gap-2 rounded border border-st-border bg-st-bg px-3 py-2 text-sm text-st-muted">
-          <input
-            type="checkbox"
-            checked={published}
-            onChange={(event) => setPublished(event.target.checked)}
-            className="accent-cyan-400"
-          />
-          Published and available to players
-        </label>
+        <p className="rounded border border-st-border bg-st-bg px-3 py-2 text-sm text-st-muted">
+          Player availability: <span className="font-medium text-st-fg">{contentStatus === "published" ? "Published" : "Not published"}</span>
+        </p>
 
         <label className="grid gap-1 text-xs text-st-muted">
           <span>Scenario Builder</span>
@@ -1507,10 +1790,12 @@ function CreateMissionCard(props: {
 }
 
 export function AdminMissionsPage() {
+  const [searchParams] = useSearchParams();
   const missionsQuery = useQuery(api.admin.queries.listMissions, {
     publishedOnly: false,
     fallbackToBuiltIns: false,
   });
+  const usersQuery = useQuery(api.admin.queries.listUsers, { limit: 256 });
   const strategiesQuery = useQuery(api.admin.queries.listAutomationStrategies, {});
   const npcQuery = useQuery(api.admin.queries.listEmpireNpcPlayers, {
     includeInactive: false,
@@ -1518,12 +1803,49 @@ export function AdminMissionsPage() {
   });
   const createMission = useMutation(api.admin.mutations.createMission);
   const updateMission = useMutation(api.admin.mutations.updateMission);
+  const bulkUpdateMissionStatus = useMutation(api.admin.mutations.bulkUpdateMissionStatus);
+  const bulkUpdateMissionOwner = useMutation(api.admin.mutations.bulkUpdateMissionOwner);
+  const bulkUpdateMissionSource = useMutation(api.admin.mutations.bulkUpdateMissionSource);
   const seedMissingMissions = useMutation(api.admin.mutations.seedMissingMissions);
   const [seedBusy, setSeedBusy] = useState(false);
   const [seedStatus, setSeedStatus] = useState<string | null>(null);
   const [seedError, setSeedError] = useState<string | null>(null);
+  const [searchText, setSearchText] = useState(() => searchParams.get("search") ?? "");
+  const [sourceFilter, setSourceFilter] = useState<"all" | MissionRow["source"]>(() =>
+    readMissionSourceFilter(searchParams.get("source")),
+  );
+  const [statusFilter, setStatusFilter] = useState<"all" | MissionRow["status"]>(() =>
+    readMissionStatusFilter(searchParams.get("status")),
+  );
+  const [ownerFilter, setOwnerFilter] = useState<"all" | "system" | Id<"users">>(() =>
+    readMissionOwnerFilter(searchParams.get("owner")),
+  );
+  const [selectedKeys, setSelectedKeys] = useState<string[]>([]);
+  const [bulkStatus, setBulkStatus] = useState<MissionRow["status"]>("archived");
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [bulkResult, setBulkResult] = useState<string | null>(null);
+  const [bulkError, setBulkError] = useState<string | null>(null);
+  const [bulkOwnerUserId, setBulkOwnerUserId] = useState<Id<"users"> | "">("");
+  const [bulkOwnerBusy, setBulkOwnerBusy] = useState(false);
+  const [bulkOwnerResult, setBulkOwnerResult] = useState<string | null>(null);
+  const [bulkOwnerError, setBulkOwnerError] = useState<string | null>(null);
+  const [bulkSource, setBulkSource] = useState<MissionRow["source"]>("community");
+  const [bulkSourceBusy, setBulkSourceBusy] = useState(false);
+  const [bulkSourceResult, setBulkSourceResult] = useState<string | null>(null);
+  const [bulkSourceError, setBulkSourceError] = useState<string | null>(null);
+  const [bulkModerationNote, setBulkModerationNote] = useState("");
+
+  useEffect(() => {
+    setSearchText(searchParams.get("search") ?? "");
+    setSourceFilter(readMissionSourceFilter(searchParams.get("source")));
+    setStatusFilter(readMissionStatusFilter(searchParams.get("status")));
+    setOwnerFilter(readMissionOwnerFilter(searchParams.get("owner")));
+  }, [searchParams]);
 
   const missions = missionsQuery?.authorized ? (missionsQuery.missions as MissionRow[]) : [];
+  const deferredSearchText = useDeferredValue(searchText);
+  const normalizedSearchText = normalizeSearchText(deferredSearchText);
+  const selectedKeySet = useMemo(() => new Set(selectedKeys), [selectedKeys]);
   const strategies = useMemo(
     () =>
       strategiesQuery?.authorized
@@ -1535,6 +1857,63 @@ export function AdminMissionsPage() {
     () => (npcQuery?.authorized ? (npcQuery.empireNpcs as EmpireNpcRow[]) : []),
     [npcQuery],
   );
+  const ownerOptions = useMemo(
+    () =>
+      usersQuery?.authorized
+        ? (usersQuery.users as AssignableOwnerRow[])
+            .filter((user) => user.admin || user.publisher)
+            .sort((left, right) => ownerOptionLabel(left).localeCompare(ownerOptionLabel(right)))
+        : [],
+    [usersQuery],
+  );
+  const filteredMissions = useMemo(
+    () =>
+      missions.filter((mission) => {
+        if (sourceFilter !== "all" && mission.source !== sourceFilter) {
+          return false;
+        }
+        if (statusFilter !== "all" && mission.status !== statusFilter) {
+          return false;
+        }
+        if (ownerFilter === "system" && mission.ownerUserId !== null) {
+          return false;
+        }
+        if (ownerFilter !== "all" && ownerFilter !== "system" && mission.ownerUserId !== ownerFilter) {
+          return false;
+        }
+        if (normalizedSearchText.length === 0) {
+          return true;
+        }
+        return [
+          mission.key,
+          mission.name,
+          mission.description,
+          mission.mapKey,
+          mission.ownerLabel ?? "",
+          mission.mode,
+          mission.requiredTier,
+        ]
+          .join(" ")
+          .toLowerCase()
+          .includes(normalizedSearchText);
+      }),
+    [missions, sourceFilter, statusFilter, ownerFilter, normalizedSearchText],
+  );
+  const visibleKeys = useMemo(() => filteredMissions.map((mission) => mission.key), [filteredMissions]);
+  const selectedVisibleCount = useMemo(
+    () => visibleKeys.filter((key) => selectedKeySet.has(key)).length,
+    [visibleKeys, selectedKeySet],
+  );
+  const allVisibleSelected = visibleKeys.length > 0 && selectedVisibleCount === visibleKeys.length;
+
+  function clearBulkFeedback() {
+    setBulkResult(null);
+    setBulkError(null);
+    setBulkOwnerResult(null);
+    setBulkOwnerError(null);
+    setBulkSourceResult(null);
+    setBulkSourceError(null);
+  }
 
   async function handleSeedBuiltIns() {
     setSeedBusy(true);
@@ -1550,7 +1929,113 @@ export function AdminMissionsPage() {
     }
   }
 
-  if (missionsQuery === undefined || strategiesQuery === undefined || npcQuery === undefined) {
+  function toggleSelectedKey(key: string) {
+    clearBulkFeedback();
+    setSelectedKeys((current) => (current.includes(key) ? current.filter((value) => value !== key) : [...current, key]));
+  }
+
+  function toggleSelectVisible() {
+    clearBulkFeedback();
+    setSelectedKeys((current) => {
+      const next = new Set(current);
+      if (allVisibleSelected) {
+        for (const key of visibleKeys) {
+          next.delete(key);
+        }
+      } else {
+        for (const key of visibleKeys) {
+          next.add(key);
+        }
+      }
+      return Array.from(next);
+    });
+  }
+
+  async function handleBulkStatusUpdate() {
+    clearBulkFeedback();
+    if (selectedKeys.length === 0) {
+      setBulkError("Select at least one mission first.");
+      setBulkResult(null);
+      return;
+    }
+
+    setBulkBusy(true);
+    setBulkResult(null);
+    setBulkError(null);
+    try {
+      const result = await bulkUpdateMissionStatus({
+        keys: selectedKeys,
+        status: bulkStatus,
+        moderationNote: bulkModerationNote,
+      });
+      setBulkResult(`Updated ${result.updatedKeys.length} missions. Skipped ${result.skippedKeys.length}.`);
+      setBulkModerationNote("");
+      setSelectedKeys([]);
+    } catch (error) {
+      setBulkError(mutationErrorMessage(error));
+    } finally {
+      setBulkBusy(false);
+    }
+  }
+
+  async function handleBulkOwnerUpdate() {
+    clearBulkFeedback();
+    if (selectedKeys.length === 0) {
+      setBulkOwnerError("Select at least one mission first.");
+      setBulkOwnerResult(null);
+      return;
+    }
+
+    setBulkOwnerBusy(true);
+    setBulkOwnerResult(null);
+    setBulkOwnerError(null);
+    try {
+      const result = await bulkUpdateMissionOwner({
+        keys: selectedKeys,
+        ownerUserId: bulkOwnerUserId || null,
+        moderationNote: bulkModerationNote,
+      });
+      setBulkOwnerResult(`Updated ${result.updatedKeys.length} mission owners. Skipped ${result.skippedKeys.length}.`);
+      setBulkModerationNote("");
+      setSelectedKeys([]);
+    } catch (error) {
+      setBulkOwnerError(mutationErrorMessage(error));
+    } finally {
+      setBulkOwnerBusy(false);
+    }
+  }
+
+  async function handleBulkSourceUpdate() {
+    clearBulkFeedback();
+    if (selectedKeys.length === 0) {
+      setBulkSourceError("Select at least one mission first.");
+      setBulkSourceResult(null);
+      return;
+    }
+
+    setBulkSourceBusy(true);
+    setBulkSourceResult(null);
+    setBulkSourceError(null);
+    try {
+      const result = await bulkUpdateMissionSource({
+        keys: selectedKeys,
+        source: bulkSource,
+        moderationNote: bulkModerationNote,
+      });
+      setBulkSourceResult(`Updated ${result.updatedKeys.length} mission sources. Skipped ${result.skippedKeys.length}.`);
+      setBulkModerationNote("");
+      if (bulkSource === "official") {
+        setBulkOwnerUserId("");
+      }
+      setSelectedKeys([]);
+    } catch (error) {
+      setBulkSourceError(mutationErrorMessage(error));
+    } finally {
+      setBulkSourceBusy(false);
+    }
+  }
+
+  if (missionsQuery === undefined || usersQuery === undefined || strategiesQuery === undefined || npcQuery === undefined) {
     return (
       <div className="mx-auto max-w-[86.4rem] px-4 py-6">
         <Card className="text-sm text-st-muted">Loading missions...</Card>
@@ -1580,13 +2065,140 @@ export function AdminMissionsPage() {
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <span className="rounded border border-st-border px-3 py-2 text-xs text-st-muted">
-              {missions.length} missions
+              {filteredMissions.length} / {missions.length} missions
             </span>
             <Button type="button" variant="secondary" onClick={() => void handleSeedBuiltIns()} disabled={seedBusy}>
               {seedBusy ? "Seeding..." : "Seed built-ins"}
             </Button>
           </div>
         </div>
+        <div className="grid gap-3 lg:grid-cols-[minmax(0,2fr)_repeat(3,minmax(0,1fr))]">
+          <input
+            value={searchText}
+            onChange={(event) => setSearchText(event.target.value)}
+            placeholder="Search key, name, description, map, owner, or mode"
+            className="rounded border border-st-border bg-st-bg px-3 py-2 text-sm text-st-fg"
+          />
+          <select
+            value={sourceFilter}
+            onChange={(event) => setSourceFilter(event.target.value as typeof sourceFilter)}
+            className="rounded border border-st-border bg-st-bg px-3 py-2 text-sm text-st-fg"
+          >
+            <option value="all">All sources</option>
+            <option value="official">Official</option>
+            <option value="community">Community</option>
+          </select>
+          <select
+            value={statusFilter}
+            onChange={(event) => setStatusFilter(event.target.value as typeof statusFilter)}
+            className="rounded border border-st-border bg-st-bg px-3 py-2 text-sm text-st-fg"
+          >
+            <option value="all">All statuses</option>
+            <option value="draft">Draft</option>
+            <option value="published">Published</option>
+            <option value="archived">Archived</option>
+            <option value="deleted">Deleted</option>
+            <option value="admin_deleted">Admin deleted</option>
+          </select>
+          <select
+            value={ownerFilter}
+            onChange={(event) => setOwnerFilter(event.target.value as typeof ownerFilter)}
+            className="rounded border border-st-border bg-st-bg px-3 py-2 text-sm text-st-fg"
+          >
+            <option value="all">All owners</option>
+            <option value="system">System / unowned</option>
+            {ownerOptions.map((owner) => (
+              <option key={owner._id} value={owner._id}>
+                {ownerOptionLabel(owner)}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="space-y-3 rounded border border-st-border bg-st-bg/70 p-3">
+          <div className="grid gap-3 lg:grid-cols-[minmax(0,1.3fr)_auto] lg:items-center">
+            <p className="text-sm text-st-muted">
+              {selectedVisibleCount} visible selected · {selectedKeys.length} total selected
+            </p>
+            <Button type="button" variant="secondary" onClick={toggleSelectVisible} disabled={visibleKeys.length === 0}>
+              {allVisibleSelected ? "Clear visible" : "Select visible"}
+            </Button>
+          </div>
+
+          <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
+            <div className="grid gap-3 lg:grid-cols-[180px_auto]">
+              <select
+                value={bulkStatus}
+                onChange={(event) => setBulkStatus(event.target.value as MissionRow["status"])}
+                className="rounded border border-st-border bg-st-bg px-3 py-2 text-sm text-st-fg"
+              >
+                <option value="draft">Set to draft</option>
+                <option value="published">Set to published</option>
+                <option value="archived">Set to archived</option>
+                <option value="deleted">Set to deleted</option>
+                <option value="admin_deleted">Set to admin_deleted</option>
+              </select>
+              <Button type="button" onClick={() => void handleBulkStatusUpdate()} disabled={bulkBusy || selectedKeys.length === 0}>
+                {bulkBusy ? "Applying..." : "Apply status"}
+              </Button>
+            </div>
+            <p className="text-xs text-st-muted">Bulk lifecycle action</p>
+          </div>
+
+          <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
+            <div className="grid gap-3 lg:grid-cols-[minmax(0,260px)_auto]">
+              <select
+                value={bulkOwnerUserId}
+                onChange={(event) => setBulkOwnerUserId(event.target.value as Id<"users"> | "")}
+                className="rounded border border-st-border bg-st-bg px-3 py-2 text-sm text-st-fg"
+              >
+                <option value="">Set owner to System / unowned</option>
+                {ownerOptions.map((owner) => (
+                  <option key={owner._id} value={owner._id}>
+                    {ownerOptionLabel(owner)}
+                  </option>
+                ))}
+              </select>
+              <Button type="button" onClick={() => void handleBulkOwnerUpdate()} disabled={bulkOwnerBusy || selectedKeys.length === 0}>
+                {bulkOwnerBusy ? "Applying..." : "Apply owner"}
+              </Button>
+            </div>
+            <p className="text-xs text-st-muted">Official rows skip non-empty owners automatically</p>
+          </div>
+
+          <label className="grid gap-1 text-xs text-st-muted">
+            <span>Bulk moderation note (optional)</span>
+            <textarea
+              value={bulkModerationNote}
+              onChange={(event) => setBulkModerationNote(event.target.value)}
+              rows={2}
+              placeholder="Why is this batch change being made?"
+              className="rounded border border-st-border bg-st-bg px-3 py-2 text-sm text-st-fg"
+            />
+          </label>
+
+          <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
+            <div className="grid gap-3 lg:grid-cols-[180px_auto]">
+              <select
+                value={bulkSource}
+                onChange={(event) => setBulkSource(event.target.value as MissionRow["source"])}
+                className="rounded border border-st-border bg-st-bg px-3 py-2 text-sm text-st-fg"
+              >
+                <option value="community">Set source to community</option>
+                <option value="official">Set source to official</option>
+              </select>
+              <Button type="button" onClick={() => void handleBulkSourceUpdate()} disabled={bulkSourceBusy || selectedKeys.length === 0}>
+                {bulkSourceBusy ? "Applying..." : "Apply source"}
+              </Button>
+            </div>
+            <p className="text-xs text-st-muted">Switching to official clears owners automatically</p>
+          </div>
+        </div>
+        {bulkResult !== null ? <p className="text-sm text-emerald-300">{bulkResult}</p> : null}
+        {bulkError !== null ? <p className="text-sm text-red-300">{bulkError}</p> : null}
+        {bulkOwnerResult !== null ? <p className="text-sm text-emerald-300">{bulkOwnerResult}</p> : null}
+        {bulkOwnerError !== null ? <p className="text-sm text-red-300">{bulkOwnerError}</p> : null}
+        {bulkSourceResult !== null ? <p className="text-sm text-emerald-300">{bulkSourceResult}</p> : null}
+        {bulkSourceError !== null ? <p className="text-sm text-red-300">{bulkSourceError}</p> : null}
         {seedStatus !== null ? <p className="text-sm text-emerald-300">{seedStatus}</p> : null}
         {seedError !== null ? <p className="text-sm text-red-300">{seedError}</p> : null}
       </Card>
@@ -1596,24 +2208,28 @@ export function AdminMissionsPage() {
           <CreateMissionCard
             empireNpcs={empireNpcs}
             strategies={strategies}
+            ownerOptions={ownerOptions}
             onCreate={async (args) => {
               await createMission(args);
             }}
           />
-          {missions.length === 0 ? (
+          {filteredMissions.length === 0 ? (
             <Card className="text-sm text-st-muted">
-              No missions are stored yet. Seed the built-ins or create the first mission manually.
+              No missions match the current filters.
             </Card>
           ) : (
-            missions
+            filteredMissions
               .slice()
               .sort((left, right) => left.sortOrder - right.sortOrder || left.name.localeCompare(right.name))
               .map((mission) => (
                 <MissionCard
                   key={mission.key}
                   mission={mission}
+                    selected={selectedKeySet.has(mission.key)}
+                    onToggleSelect={toggleSelectedKey}
                   empireNpcs={empireNpcs}
                   strategies={strategies}
+                  ownerOptions={ownerOptions}
                   onSave={async (args) => {
                     await updateMission(args);
                   }}

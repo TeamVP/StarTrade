@@ -111,7 +111,9 @@ export async function applyGarrisonRoutes(
       empire !== undefined &&
       !empire.isCollapsed &&
       origin !== null &&
-      origin.ownerEmpireId === route.empireId;
+      (route.gameActorId !== undefined && origin.ownerGameActorId !== undefined
+        ? origin.ownerGameActorId === route.gameActorId
+        : origin.ownerEmpireId === route.empireId);
     const destinationAvailable =
       empire !== undefined &&
       !empire.isCollapsed &&
@@ -128,8 +130,8 @@ export async function applyGarrisonRoutes(
         gameId: params.gameId,
         turnNumber: params.turnNumber,
         eventType: "garrison_route_cancelled",
-        actorType: "empire",
-        actorId: route.empireId,
+        actorType: route.gameActorId !== undefined ? "game_actor" : "empire",
+        actorId: (route.gameActorId ?? route.empireId) as string,
         targetType: "route",
         targetId: route._id,
         summary: "Standing route cancelled because its origin or destination is no longer available",

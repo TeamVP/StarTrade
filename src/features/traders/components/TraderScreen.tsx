@@ -5,6 +5,7 @@ import type { Id } from "../../../../convex/_generated/dataModel";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { useActiveGame } from "@/features/galaxy/hooks/useActiveGame";
+import { gameModeSupportsTraderGameplay } from "@/features/games/gameMode";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -47,7 +48,9 @@ type EnrichedTrader = {
   originSystemId: Id<"gal_systems">;
   destinationSystemId: Id<"gal_systems">;
   originName: string;
+  originOwnerLabel: string;
   destName: string;
+  destOwnerLabel: string;
   turnsRemaining: number;
   totalShipCost: number;
   captainDisplayName?: string | null;
@@ -319,6 +322,9 @@ function TraderCard({
             <span className="font-semibold text-st-fg">{trader.destName}</span>
             <StatusBadge status={trader.status} />
           </div>
+          <p className="text-[10px] text-st-muted mt-1">
+            {trader.originOwnerLabel} origin · {trader.destOwnerLabel} destination
+          </p>
           <p className="text-xs text-st-muted mt-0.5">
             Dispatched turn {trader.dispatchedTurn} · ETA turn {trader.etaTurn}
           </p>
@@ -420,6 +426,7 @@ type SystemInfo = {
   _id: Id<"gal_systems">;
   name: string;
   ownerEmpireId: Id<"emp_states"> | null;
+  ownerLabel: string;
   foodPrice: number | undefined;
   stockFood: number | undefined;
 };
@@ -510,6 +517,7 @@ function SpawnTraderForm({
           </select>
           {originSystem && (
             <p className="text-[10px] text-st-muted">
+              Owner: {originSystem.ownerLabel} · {" "}
               Stock food: {(originSystem.stockFood ?? 0).toLocaleString()} ·
               Price: {originSystem.foodPrice?.toFixed(1) ?? "—"} cr
             </p>
@@ -537,6 +545,7 @@ function SpawnTraderForm({
           </select>
           {destSystem && (
             <p className="text-[10px] text-st-muted">
+              Owner: {destSystem.ownerLabel} · {" "}
               Stock food: {(destSystem.stockFood ?? 0).toLocaleString()} ·
               Price: {destSystem.foodPrice?.toFixed(1) ?? "—"} cr
             </p>
@@ -651,6 +660,7 @@ export function TraderScreen() {
 
   const gameId = activeGame?._id;
   const currentTurn = activeGame?.currentTurn ?? 0;
+  const traderGameplayEnabled = gameModeSupportsTraderGameplay(activeGame?.mode);
 
   useEffect(() => {
     startTransition(() => {
@@ -663,29 +673,29 @@ export function TraderScreen() {
 
   const activeData = useQuery(
     api.eco.queries.listTradersWithDetails,
-    gameId ? { gameId, statusFilter: "enRoute", limit: 64 } : "skip",
+    gameId && traderGameplayEnabled ? { gameId, statusFilter: "enRoute", limit: 64 } : "skip",
   );
 
   const npcRoster = useQuery(
     api.eco.queries.listNpcTraderIdentities,
-    gameId ? { gameId } : "skip",
+    gameId && traderGameplayEnabled ? { gameId } : "skip",
   );
 
   const npcPoolSettings = useQuery(
     api.eco.queries.getNpcTraderPoolSettings,
-    gameId ? { gameId } : "skip",
+    gameId && traderGameplayEnabled ? { gameId } : "skip",
   );
 
   const deliveredData = useQuery(
     api.eco.queries.listTradersWithDetails,
-    gameId && tab === "delivered"
+    gameId && traderGameplayEnabled && tab === "delivered"
       ? { gameId, statusFilter: "delivered", limit: 40 }
       : "skip",
   );
 
   const embargoData = useQuery(
     api.eco.queries.listActiveTraderEmbargoes,
-    gameId ? { gameId } : "skip",
+    gameId && traderGameplayEnabled ? { gameId } : "skip",
   );
 
   const activeTraders = activeData?.traders ?? [];
@@ -749,6 +759,15 @@ export function TraderScreen() {
       {activeGame == null ? (
         <Card>
           <p className="text-sm text-st-muted text-center py-6">Select a game above to view traders.</p>
+        </Card>
+      ) : !traderGameplayEnabled ? (
+        <Card>
+          <p className="text-sm text-st-muted text-center py-6">
+            Trader gameplay is disabled for this game mode.
+          </p>
+          <p className="mt-1 text-xs text-st-muted text-center">
+            This game is running in <span className="font-mono text-st-fg">{activeGame.mode ?? "conquest_core"}</span>, so trader queries and UI are intentionally disabled.
+          </p>
         </Card>
       ) : (
         <>

@@ -17,15 +17,15 @@ import { getAutomationStrategyByKey } from "../usr/automationStrategyCatalog";
 import { getMissionByKey } from "../usr/missionCatalog";
 import {
   DEFAULT_TURN_DURATION_MS,
-  msUntilTurnBoundary,
-  msUntilTurnPreparationStart,
   resumedTurnStartedAt,
   scheduledNextTurnStartedAt,
   shiftPausedDeadline,
 } from "./turnTiming";
+import { scheduleGameTurnWakeups } from "./wakeScheduler";
 import { touchGameMeaningfulActivity } from "./helpers";
 import { invalidateOpenTurnPreparation } from "./turnPreparationInvalidation";
 import { createUniqueGameUrlCode } from "./urlCodes";
+import type { GameMode } from "./gameMode";
 
 async function resolveStarterOwnerDisplayName(
   ctx: MutationCtx,
@@ -143,7 +143,6 @@ async function applyMissionScenarioIfNeeded(
     userId: params.userId,
     empireKey: mission.scenario.playerEmpireKey,
   });
-
   for (const config of mission.scenario.empireConfigs) {
     const empire =
       (config.targetEmpireKey !== null ? empiresByKey.get(config.targetEmpireKey) : undefined) ??
@@ -257,10 +256,214 @@ async function applyMissionScenarioIfNeeded(
   });
 }
 
+async function resolveRequestedGameMode(
+  ctx: MutationCtx,
+  params: {
+    userId: Id<"users">;
+    mode?: GameMode;
+    missionKey?: string;
+    lobbyScenarioKey?: string;
+  },
+): Promise<GameMode> {
+  const missionKey = params.missionKey ?? params.lobbyScenarioKey;
+  const mission = missionKey === undefined ? null : await getMissionByKey(ctx, missionKey);
+  if (missionKey !== undefined && mission === null) {
+    throw new Error("Unknown mission.");
+  }
+
+  const requestedMode = params.mode ?? mission?.mode ?? "conquest_core";
+  if (mission !== null && params.mode !== undefined && params.mode !== mission.mode) {
+    throw new Error("Game mode does not match the selected mission.");
+  }
+
+  const user = await ctx.db.get("users", params.userId);
+  if (user === null) {
+    throw new Error("User not found.");
+  }
+
+  if (requestedMode === "conquest_plus" && !user.admin) {
+    throw new Error("Conquest plus is unpublished.");
+  }
+
+  const needsPro = requestedMode === "trader_economy" || mission?.requiredTier === "pro";
+  if (needsPro && !user.admin && user.plan !== "pro") {
+    throw new Error("Pro is required to create this game mode.");
+  }
+
+  return requestedMode;
+}
+
+function strategyFingerprint(strategyJson: string): string {
+  let hash = 2166136261;
+  for (let index = 0; index < strategyJson.length; index += 1) {
+    hash ^= strategyJson.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return `fnv1a:${(hash >>> 0).toString(16).padStart(8, "0")}`;
+}
+
+async function ensureGameActorsForRuntimeVersion(
+  ctx: MutationCtx,
+  params: {
+    gameId: Id<"sim_games">;
+    runtimeVersion: "v1_empire" | "v2_game_actor" | null | undefined;
+  },
+): Promise<void> {
+  if ((params.runtimeVersion ?? "v1_empire") !== "v2_game_actor") {
+    return;
+  }
+
+  const existingActors = await ctx.db
+    .query("sim_game_actors")
+    .withIndex("by_gameId", (q) => q.eq("gameId", params.gameId))
+    .take(1);
+  if (existingActors.length > 0) {
+    return;
+  }
+
+  const [empires, empireRoles] = await Promise.all([
+    ctx.db
+      .query("emp_states")
+      .withIndex("by_gameId", (q) => q.eq("gameId", params.gameId))
+      .collect(),
+    ctx.db
+      .query("usr_game_roles")
+      .withIndex("by_gameId_and_role", (q) => q.eq("gameId", params.gameId).eq("role", "empire"))
+      .collect(),
+  ]);
+
+  const controllerUserIdByEmpireId = new Map(
+    empireRoles
+      .filter((role) => role.isActive && role.empireId !== null)
+      .map((role) => [role.empireId!, role.userId] as const),
+  );
+
+  const now = Date.now();
+  const orderedEmpires = [...empires].sort((left, right) =>
+    left.empireKey.localeCompare(right.empireKey),
+  );
+  const actorIdByEmpireId = new Map<Id<"emp_states">, Id<"sim_game_actors">>();
+
+  for (const [slotIndex, empire] of orderedEmpires.entries()) {
+    const normalizedStrategy = empire.strategyJson?.trim() ?? "";
+    const strategyJsonSnapshot = normalizedStrategy.length > 0 ? normalizedStrategy : null;
+    const actorId = await ctx.db.insert("sim_game_actors", {
+      gameId: params.gameId,
+      slotNumber: slotIndex + 1,
+      actorKind: "empire",
+      controllerKind: empire.controller === "human" ? "human" : "npc",
+      controllerUserId: controllerUserIdByEmpireId.get(empire._id) ?? null,
+      npcPlayerKey: empire.npcPlayerKey ?? null,
+      legacyEmpireId: empire._id,
+      displayNameSnapshot: empire.playerName?.trim() || empire.name,
+      factionLabelSnapshot: empire.name,
+      colorHex: empire.colorHex,
+      strategyJsonSnapshot,
+      strategyFingerprint:
+        strategyJsonSnapshot === null ? null : strategyFingerprint(strategyJsonSnapshot),
+      status: empire.resignedAt !== undefined ? "resigned" : empire.isCollapsed ? "eliminated" : "active",
+      eliminatedAtTurn: null,
+      homeSystemId: empire.homeSystemId,
+      createdAt: now,
+      updatedAt: now,
+    });
+    actorIdByEmpireId.set(empire._id, actorId);
+  }
+
+  const holdings = await ctx.db
+    .query("emp_system_holdings")
+    .withIndex("by_gameId", (q) => q.eq("gameId", params.gameId))
+    .collect();
+  for (const holding of holdings) {
+    const actorId = actorIdByEmpireId.get(holding.empireId);
+    if ((holding.gameActorId ?? undefined) !== (actorId ?? undefined)) {
+      await ctx.db.patch("emp_system_holdings", holding._id, {
+        gameActorId: actorId ?? undefined,
+      });
+    }
+  }
+
+  const systems = await ctx.db
+    .query("gal_systems")
+    .withIndex("by_gameId", (q) => q.eq("gameId", params.gameId))
+    .collect();
+  for (const system of systems) {
+    if (system.ownerEmpireId === null) continue;
+    const actorId = actorIdByEmpireId.get(system.ownerEmpireId);
+    if ((system.ownerGameActorId ?? undefined) !== (actorId ?? undefined)) {
+      await ctx.db.patch("gal_systems", system._id, {
+        ownerGameActorId: actorId ?? undefined,
+      });
+    }
+  }
+
+  const fleets = await ctx.db
+    .query("flt_fleets")
+    .withIndex("by_gameId", (q) => q.eq("gameId", params.gameId))
+    .collect();
+  for (const fleet of fleets) {
+    const actorId = actorIdByEmpireId.get(fleet.empireId);
+    if ((fleet.gameActorId ?? undefined) !== (actorId ?? undefined)) {
+      await ctx.db.patch("flt_fleets", fleet._id, {
+        gameActorId: actorId ?? undefined,
+      });
+    }
+  }
+
+  const colonyShips = await ctx.db
+    .query("col_colony_ships")
+    .withIndex("by_gameId", (q) => q.eq("gameId", params.gameId))
+    .collect();
+  for (const ship of colonyShips) {
+    const actorId = actorIdByEmpireId.get(ship.empireId);
+    if ((ship.gameActorId ?? undefined) !== (actorId ?? undefined)) {
+      await ctx.db.patch("col_colony_ships", ship._id, {
+        gameActorId: actorId ?? undefined,
+      });
+    }
+  }
+
+  const priorityStars = await ctx.db
+    .query("emp_priority_stars")
+    .withIndex("by_gameId", (q) => q.eq("gameId", params.gameId))
+    .collect();
+  for (const row of priorityStars) {
+    const actorId = actorIdByEmpireId.get(row.empireId);
+    if ((row.gameActorId ?? undefined) !== (actorId ?? undefined)) {
+      await ctx.db.patch("emp_priority_stars", row._id, {
+        gameActorId: actorId ?? undefined,
+      });
+    }
+  }
+
+  const garrisonRoutes = await ctx.db
+    .query("flt_garrison_routes")
+    .withIndex("by_gameId", (q) => q.eq("gameId", params.gameId))
+    .collect();
+  for (const route of garrisonRoutes) {
+    const actorId = actorIdByEmpireId.get(route.empireId);
+    if ((route.gameActorId ?? undefined) !== (actorId ?? undefined)) {
+      await ctx.db.patch("flt_garrison_routes", route._id, {
+        gameActorId: actorId ?? undefined,
+      });
+    }
+  }
+}
+
 export const createGame = mutation({
   args: {
     name: v.string(),
     mapKey: v.string(),
+    runtimeVersion: v.optional(
+      v.union(v.literal("v1_empire"), v.literal("v2_game_actor")),
+    ),
+    mode: v.optional(
+      v.union(
+        v.literal("conquest_core"),
+        v.literal("conquest_plus"),
+        v.literal("trader_economy"),
+      ),
+    ),
     /** Per-game RNG seed (e.g. from `crypto.randomUUID()` on the client). */
     seed: v.string(),
     npcEmpireKeys: v.optional(v.array(v.string())),
@@ -281,6 +484,13 @@ export const createGame = mutation({
       throw new Error("Authentication required.");
     }
 
+    const requestedMode = await resolveRequestedGameMode(ctx, {
+      userId,
+      mode: args.mode,
+      missionKey: args.missionKey,
+      lobbyScenarioKey: args.lobbyScenarioKey,
+    });
+
     const npcEmpireKeys = await normalizeNpcEmpireKeys(ctx, args.npcEmpireKeys ?? []);
 
     const seed = args.seed.trim();
@@ -293,8 +503,10 @@ export const createGame = mutation({
     const gameId = await ctx.db.insert("sim_games", {
       name: args.name,
       urlCode,
+      runtimeVersion: args.runtimeVersion ?? "v1_empire",
       status: "lobby",
       mapKey: args.mapKey,
+      mode: requestedMode,
       turnDurationMs: DEFAULT_TURN_DURATION_MS,
       currentTurn: 0,
       seed,
@@ -416,6 +628,11 @@ export const startGame = mutation({
       });
     }
 
+    await ensureGameActorsForRuntimeVersion(ctx, {
+      gameId: args.gameId,
+      runtimeVersion: game.runtimeVersion,
+    });
+
     const now = Date.now();
     await ctx.db.patch("sim_games", args.gameId, {
       status: "running",
@@ -457,25 +674,12 @@ export const startGame = mutation({
       payload: JSON.stringify({}),
     });
 
-    await ctx.scheduler.runAfter(
-      msUntilTurnPreparationStart({
-        nowMs: now,
-        turnStartedAtMs: now,
-        turnDurationMs: game.turnDurationMs,
-      }),
-      internal.sim.actions.attemptResolveTurnBoundary,
-      { gameId: args.gameId },
-    );
-
-    await ctx.scheduler.runAfter(
-      msUntilTurnBoundary({
-        nowMs: now,
-        turnStartedAtMs: now,
-        turnDurationMs: game.turnDurationMs,
-      }),
-      internal.sim.actions.attemptResolveTurnBoundary,
-      { gameId: args.gameId },
-    );
+    await scheduleGameTurnWakeups(ctx, {
+      gameId: args.gameId,
+      turnStartedAtMs: now,
+      turnDurationMs: game.turnDurationMs,
+      nowMs: now,
+    });
 
     await touchGameMeaningfulActivity(ctx, args.gameId, {
       humanAction: true,
@@ -550,6 +754,7 @@ async function buildBlankOwnedGarrisonRoutes(
   ctx: MutationCtx,
   params: { gameId: Id<"sim_games"> },
 ): Promise<number> {
+  const game = await ctx.db.get("sim_games", params.gameId);
   const systems = await ctx.db
     .query("gal_systems")
     .withIndex("by_gameId", (q) => q.eq("gameId", params.gameId))
@@ -567,6 +772,18 @@ async function buildBlankOwnedGarrisonRoutes(
     .query("emp_states")
     .withIndex("by_gameId", (q) => q.eq("gameId", params.gameId))
     .take(64);
+  const actorIdByLegacyEmpireId = new Map<Id<"emp_states">, Id<"sim_game_actors">>();
+  if ((game?.runtimeVersion ?? "v1_empire") === "v2_game_actor") {
+    const actors = await ctx.db
+      .query("sim_game_actors")
+      .withIndex("by_gameId", (q) => q.eq("gameId", params.gameId))
+      .collect();
+    for (const actor of actors) {
+      if (actor.legacyEmpireId !== null) {
+        actorIdByLegacyEmpireId.set(actor.legacyEmpireId, actor._id);
+      }
+    }
+  }
 
   let created = 0;
   const DEFAULT_DISPATCH_PCT = 25;
@@ -596,6 +813,9 @@ async function buildBlankOwnedGarrisonRoutes(
       await ctx.db.insert("flt_garrison_routes", {
         gameId: params.gameId,
         empireId: empire._id,
+        ...(actorIdByLegacyEmpireId.has(empire._id)
+          ? { gameActorId: actorIdByLegacyEmpireId.get(empire._id)! }
+          : {}),
         originSystemId: origin._id,
         destinationSystemId: chosen._id,
         dispatchPct: DEFAULT_DISPATCH_PCT,
@@ -793,6 +1013,8 @@ export const pauseGame = mutation({
     await ctx.db.patch("sim_games", args.gameId, {
       status: "paused",
       turnPausedAtMs: Date.now(),
+      nextPreparationWakeAt: undefined,
+      nextBoundaryWakeAt: undefined,
     });
     await touchGameMeaningfulActivity(ctx, args.gameId, { humanAction: true });
     return args.gameId;
@@ -867,24 +1089,12 @@ export const resumeGame = mutation({
     });
 
     if (activeTurnStartedAt !== null) {
-      await ctx.scheduler.runAfter(
-        msUntilTurnPreparationStart({
-          nowMs: resumedAt,
-          turnStartedAtMs: activeTurnStartedAt,
-          turnDurationMs: game.turnDurationMs,
-        }),
-        internal.sim.actions.attemptResolveTurnBoundary,
-        { gameId: args.gameId },
-      );
-      await ctx.scheduler.runAfter(
-        msUntilTurnBoundary({
-          nowMs: resumedAt,
-          turnStartedAtMs: activeTurnStartedAt,
-          turnDurationMs: game.turnDurationMs,
-        }),
-        internal.sim.actions.attemptResolveTurnBoundary,
-        { gameId: args.gameId },
-      );
+      await scheduleGameTurnWakeups(ctx, {
+        gameId: args.gameId,
+        turnStartedAtMs: activeTurnStartedAt,
+        turnDurationMs: game.turnDurationMs,
+        nowMs: resumedAt,
+      });
     }
     await touchGameMeaningfulActivity(ctx, args.gameId, { humanAction: true });
     return args.gameId;

@@ -1,6 +1,10 @@
 import type { GalaxyMapCamera } from "@/features/galaxy/utils/mapCamera";
+import {
+  classifySoundscapeEventActionType,
+  type SoundscapeActionType,
+} from "../../../../convex/sim/eventTypePolicies";
 
-export type SoundscapeActionType = "attack" | "defense" | "exploration";
+export type { SoundscapeActionType } from "../../../../convex/sim/eventTypePolicies";
 
 export type SoundscapeSampleKey =
   | "player_attack"
@@ -35,7 +39,9 @@ export type SoundscapeBellIntent = {
   actionType: SoundscapeActionType;
   sampleKey: SoundscapeSampleKey;
   systemId: string;
+  ownerActorId: string | null;
   ownerEmpireId: string | null;
+  listenerActorId: string | null;
   listenerEmpireId: string | null;
   isListenerOwnedEvent: boolean;
   ownerVariant: number;
@@ -58,45 +64,33 @@ export type SoundscapeBellIntent = {
 
 export type SoundscapeOwnershipContext = {
   fleetEmpireById?: Readonly<Record<string, string | null>>;
+  fleetActorById?: Readonly<Record<string, string | null>>;
   colonyShipEmpireById?: Readonly<Record<string, string | null>>;
+  colonyShipActorById?: Readonly<Record<string, string | null>>;
   systemOwnerById?: Readonly<Record<string, string | null>>;
+  systemOwnerActorById?: Readonly<Record<string, string | null>>;
 };
 
 export function selectSoundscapeSampleKey(params: {
   actionType: SoundscapeActionType;
+  ownerActorId?: string | null;
   ownerEmpireId: string | null;
+  listenerActorId?: string | null;
   listenerEmpireId?: string | null;
 }): SoundscapeSampleKey {
-  const { actionType, ownerEmpireId, listenerEmpireId = null } = params;
+  const {
+    actionType,
+    ownerActorId = null,
+    ownerEmpireId,
+    listenerActorId = null,
+    listenerEmpireId = null,
+  } = params;
+  const sameActor = ownerActorId !== null && listenerActorId !== null && ownerActorId === listenerActorId;
+  const sameEmpire = ownerEmpireId !== null && listenerEmpireId !== null && ownerEmpireId === listenerEmpireId;
   const prefix =
-    ownerEmpireId !== null && listenerEmpireId !== null && ownerEmpireId === listenerEmpireId
-      ? "player"
-      : "enemy";
+    sameActor || sameEmpire ? "player" : "enemy";
   return `${prefix}_${actionType}` as SoundscapeSampleKey;
 }
-
-const ATTACK_EVENT_TYPES = new Set([
-  "battle_started",
-  "battle_round_resolved",
-  "battle_continues",
-  "collateral_damage_applied",
-  "system_claimed",
-  "system_conquered",
-]);
-
-const DEFENSE_EVENT_TYPES = new Set([
-  "battle_reinforced",
-  "battle_defender_changed",
-  "system_held",
-]);
-
-const EXPLORATION_EVENT_TYPES = new Set([
-  "fleet_dispatched",
-  "fleet_arrived",
-  "colony_ship_dispatched",
-  "colony_ship_arrived",
-  "system_colonized",
-]);
 
 const NOTE_PALETTES: Record<SoundscapeActionType, readonly string[]> = {
   attack: ["C3", "Eb3", "G3", "Bb3", "C4"],
@@ -183,16 +177,7 @@ export function deriveEmpireBellProfile(empireId: string | null): {
 }
 
 export function classifySoundscapeActionType(eventType: string): SoundscapeActionType | null {
-  if (ATTACK_EVENT_TYPES.has(eventType)) {
-    return "attack";
-  }
-  if (DEFENSE_EVENT_TYPES.has(eventType)) {
-    return "defense";
-  }
-  if (EXPLORATION_EVENT_TYPES.has(eventType)) {
-    return "exploration";
-  }
-  return null;
+  return classifySoundscapeEventActionType(eventType);
 }
 
 export function inferFleetSize(payload: Record<string, unknown> | null): number {
@@ -344,11 +329,69 @@ export function resolveEventEmpireId(params: {
   );
 }
 
+export function resolveEventActorId(params: {
+  event: SoundscapeEventRow;
+  actionType: SoundscapeActionType;
+  payload: Record<string, unknown> | null;
+  ownership?: SoundscapeOwnershipContext;
+}): string | null {
+  const { event, actionType, payload, ownership } = params;
+  const fleetActorId =
+    event.actorId !== undefined && event.actorId !== null
+      ? ownership?.fleetActorById?.[event.actorId] ?? null
+      : null;
+  const colonyShipActorId =
+    event.actorId !== undefined && event.actorId !== null
+      ? ownership?.colonyShipActorById?.[event.actorId] ?? null
+      : null;
+  const systemId = resolveEventSystemId(event, payload);
+  const systemOwnerActorId =
+    systemId !== null ? ownership?.systemOwnerActorById?.[systemId] ?? null : null;
+  const actorActorId =
+    event.actorType === "empire" && event.actorId !== undefined && event.actorId !== null
+      ? event.actorId
+      : null;
+
+  if (actionType === "attack") {
+    return (
+      stringField(payload, "attackerGameActorId") ??
+      stringField(payload, "winnerGameActorId") ??
+      stringField(payload, "gameActorId") ??
+      actorActorId ??
+      fleetActorId ??
+      colonyShipActorId ??
+      systemOwnerActorId
+    );
+  }
+
+  if (actionType === "defense") {
+    return (
+      stringField(payload, "defenderGameActorId") ??
+      stringField(payload, "winnerGameActorId") ??
+      stringField(payload, "gameActorId") ??
+      actorActorId ??
+      fleetActorId ??
+      colonyShipActorId ??
+      systemOwnerActorId
+    );
+  }
+
+  return (
+    stringField(payload, "gameActorId") ??
+    stringField(payload, "winnerGameActorId") ??
+    actorActorId ??
+    fleetActorId ??
+    colonyShipActorId ??
+    systemOwnerActorId
+  );
+}
+
 export function toSoundscapeBellIntent(params: {
   event: SoundscapeEventRow;
   camera: SoundscapeCameraSnapshot;
   systemsById: Readonly<Record<string, SoundscapeSystemPosition>>;
   ownership?: SoundscapeOwnershipContext;
+  listenerActorId?: string | null;
   listenerEmpireId?: string | null;
 }): SoundscapeBellIntent | null {
   const actionType = classifySoundscapeActionType(params.event.eventType);
@@ -376,17 +419,33 @@ export function toSoundscapeBellIntent(params: {
     payload,
     ownership: params.ownership,
   });
+  const ownerActorId = resolveEventActorId({
+    event: params.event,
+    actionType,
+    payload,
+    ownership: params.ownership,
+  });
+  const listenerActorId = params.listenerActorId ?? null;
   const listenerEmpireId = params.listenerEmpireId ?? null;
   const isListenerOwnedEvent =
-    ownerEmpireId !== null && listenerEmpireId !== null && ownerEmpireId === listenerEmpireId;
-  const ownerProfile = deriveEmpireBellProfile(ownerEmpireId);
+    (ownerActorId !== null && listenerActorId !== null && ownerActorId === listenerActorId) ||
+    (ownerEmpireId !== null && listenerEmpireId !== null && ownerEmpireId === listenerEmpireId);
+  const ownerProfile = deriveEmpireBellProfile(ownerActorId ?? ownerEmpireId);
 
   return {
     eventId: params.event._id,
     actionType,
-    sampleKey: selectSoundscapeSampleKey({ actionType, ownerEmpireId, listenerEmpireId }),
+    sampleKey: selectSoundscapeSampleKey({
+      actionType,
+      ownerActorId,
+      ownerEmpireId,
+      listenerActorId,
+      listenerEmpireId,
+    }),
     systemId,
+    ownerActorId,
     ownerEmpireId,
+    listenerActorId,
     listenerEmpireId,
     isListenerOwnedEvent,
     ownerVariant: ownerProfile.ownerVariant,

@@ -1,11 +1,20 @@
 import type { QueryCtx } from "../_generated/server";
-import type { Doc } from "../_generated/dataModel";
+import type { Doc, Id } from "../_generated/dataModel";
 import type { PublicAutomationStrategy } from "./automationStrategyLibrary";
 import { summarizeAutomationStrategy } from "./automationStrategyLibrary";
+import {
+  resolvePublisherContentSource,
+  resolvePublisherContentStatus,
+  type PublisherContentSource,
+  type PublisherContentStatus,
+} from "./publisherAccess";
 
 export type AutomationStrategyRecord = Doc<"usr_automation_strategies">;
 
 export type AutomationStrategyCatalogRow = PublicAutomationStrategy & {
+  ownerUserId: Id<"users"> | null;
+  source: PublisherContentSource;
+  status: PublisherContentStatus;
   availableForHumans: boolean;
   availableForNpcs: boolean;
   createdAt: number;
@@ -21,6 +30,7 @@ export function toPublicAutomationStrategy(row: AutomationStrategyRecord): Publi
     description: row.description,
     tags: row.tags,
     strategyJson: row.strategyJson,
+    source: resolvePublisherContentSource(row.source),
     preview: summarizeAutomationStrategy(row.strategyJson),
   };
 }
@@ -30,6 +40,9 @@ export function toAutomationStrategyCatalogRow(
 ): AutomationStrategyCatalogRow {
   return {
     ...toPublicAutomationStrategy(row),
+    ownerUserId: row.ownerUserId ?? null,
+    source: resolvePublisherContentSource(row.source),
+    status: resolvePublisherContentStatus({ status: row.status }),
     availableForHumans: row.availableForHumans,
     availableForNpcs: row.availableForNpcs,
     createdAt: row.createdAt,
@@ -52,7 +65,11 @@ export async function getPublicAutomationStrategyByKey(
   key: string,
 ): Promise<PublicAutomationStrategy | null> {
   const strategy = await getAutomationStrategyByKey(ctx, key);
-  if (strategy === null || !strategy.availableForHumans) {
+  if (
+    strategy === null ||
+    !strategy.availableForHumans ||
+    resolvePublisherContentStatus({ status: strategy.status }) !== "published"
+  ) {
     return null;
   }
   return toPublicAutomationStrategy(strategy);

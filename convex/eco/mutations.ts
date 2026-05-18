@@ -21,6 +21,8 @@ import {
   buildUndirectedHyperlaneAdjacency,
   shortestTravelTurnsBetween,
 } from "../gal/hyperlaneGraph";
+import { TRADER_EVENT_DISPATCHED } from "../sim/eventTypePolicies";
+import { gameUsesTraderEconomy, loadGameWithPersistedResolvedMode } from "../sim/gameMode";
 
 /**
  * Admin action: manually inject a background trader on any hyperspace-connected route
@@ -57,8 +59,11 @@ export const spawnTrader = mutation({
       throw new Error("Invalid commodity. Must be: food, weapons, or heavy_metals.");
     }
 
-    const game = await ctx.db.get("sim_games", args.gameId);
+    const game = await loadGameWithPersistedResolvedMode(ctx, args.gameId);
     if (game === null) throw new Error("Game not found.");
+    if (!gameUsesTraderEconomy(game)) {
+      throw new Error("Trader gameplay is disabled for this game mode.");
+    }
 
     const origin = await ctx.db.get("gal_systems", args.originSystemId);
     const dest = await ctx.db.get("gal_systems", args.destinationSystemId);
@@ -179,7 +184,7 @@ export const spawnTrader = mutation({
     await ctx.db.insert("sim_events", {
       gameId: args.gameId,
       turnNumber: currentTurn,
-      eventType: "bg_trader_dispatched",
+      eventType: TRADER_EVENT_DISPATCHED,
       actorType: "admin",
       actorId: userId,
       targetType: "system",
@@ -223,6 +228,12 @@ export const addNpcTraderTreasuryFunds = mutation({
     if (userId === null) throw new Error("Authentication required.");
     await assertGameAdmin(ctx, args.gameId, userId);
 
+    const game = await loadGameWithPersistedResolvedMode(ctx, args.gameId);
+    if (game === null) throw new Error("Game not found.");
+    if (!gameUsesTraderEconomy(game)) {
+      throw new Error("Trader gameplay is disabled for this game mode.");
+    }
+
     const row = await ctx.db.get("sim_trader_identities", args.traderIdentityId);
     if (row === null) {
       throw new Error("Merchant not found.");
@@ -263,6 +274,12 @@ export const updateNpcTraderHireChancePct = mutation({
     if (userId === null) throw new Error("Authentication required.");
     await assertGameAdmin(ctx, args.gameId, userId);
 
+    const game = await loadGameWithPersistedResolvedMode(ctx, args.gameId);
+    if (game === null) throw new Error("Game not found.");
+    if (!gameUsesTraderEconomy(game)) {
+      throw new Error("Trader gameplay is disabled for this game mode.");
+    }
+
     const traderHireChancePct = Math.max(
       0,
       Math.min(100, Math.round(args.traderHireChancePct)),
@@ -296,6 +313,7 @@ export const setEmpireTaxRate = mutation({
   args: {
     gameId: v.id("sim_games"),
     empireId: v.id("emp_states"),
+    gameActorId: v.optional(v.id("sim_game_actors")),
     taxPercent: v.number(),
   },
   returns: v.null(),
@@ -307,6 +325,7 @@ export const setEmpireTaxRate = mutation({
       gameId: args.gameId,
       userId,
       empireId: args.empireId,
+      gameActorId: args.gameActorId,
     });
 
     if (empire.isCollapsed) {

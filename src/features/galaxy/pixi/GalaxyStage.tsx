@@ -148,6 +148,8 @@ type StarVisualOffset = {
 export type FleetMarkerModel = {
   fleetId: string;
   empireId: string;
+  runtimeVersion?: "v1_empire" | "v2_game_actor";
+  actorId?: string | null;
   originSystemId: string;
   x: number;
   y: number;
@@ -321,10 +323,14 @@ export type GalaxyStageProps = {
   repeatNextDragEnabled: boolean;
   canIssueOrders: boolean;
   /**
-   * When set, only fleets whose `empireId` passes this check can be selected or dragged.
-   * Omitted = all fleets selectable (e.g. tests). Viewport passes player empire + admin bypass.
+   * When set, only fleets whose ownership passes this check can be selected or dragged.
+   * Omitted = all fleets selectable (e.g. tests). Viewport passes player ownership + admin bypass.
    */
-  fleetSelectionAllowed?: (fleetEmpireId: string) => boolean;
+  fleetSelectionAllowed?: (fleet: {
+    empireId: string;
+    runtimeVersion?: "v1_empire" | "v2_game_actor";
+    actorId?: string | null;
+  }) => boolean;
   onFleetMoveCommit?: (payload: FleetMoveCommitPayload) => Promise<void>;
   onRouteMidpointTap?: (routeId: string) => void;
   onStarPointerTap?: (systemId: string) => void;
@@ -1137,7 +1143,12 @@ function GalaxyStageInner({
 
   const fleetSelectable = useCallback(
     (fleet: FleetMarkerModel) =>
-      fleetSelectionAllowed === undefined || fleetSelectionAllowed(fleet.empireId),
+      fleetSelectionAllowed === undefined ||
+      fleetSelectionAllowed({
+        empireId: fleet.empireId,
+        runtimeVersion: fleet.runtimeVersion,
+        actorId: fleet.actorId ?? null,
+      }),
     [fleetSelectionAllowed],
   );
 

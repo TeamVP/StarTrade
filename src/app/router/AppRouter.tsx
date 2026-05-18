@@ -65,6 +65,10 @@ const AdminDatabasePage = lazyNamedComponent(
   () => import("@/app/router/AdminDatabasePage"),
   "AdminDatabasePage",
 );
+const AdminModerationPage = lazyNamedComponent(
+  () => import("@/app/router/AdminModerationPage"),
+  "AdminModerationPage",
+);
 const AdminStrategiesPage = lazyNamedComponent(
   () => import("@/app/router/AdminStrategiesPage"),
   "AdminStrategiesPage",
@@ -97,6 +101,7 @@ const UserAreaLayout = lazyNamedComponent(
 );
 const LobbyPage = lazyNamedComponent(() => import("@/app/router/LobbyPage"), "LobbyPage");
 const ProfilePage = lazyNamedComponent(() => import("@/app/router/ProfilePage"), "ProfilePage");
+const PublisherPage = lazyNamedComponent(() => import("@/app/router/PublisherPage"), "PublisherPage");
 const StratPage = lazyNamedComponent(() => import("@/app/router/StratPage"), "StratPage");
 const PrivacyPolicyPage = lazyNamedComponent(
   () => import("@/app/router/PrivacyPolicyPage"),
@@ -166,6 +171,7 @@ const adminChildRoutes = [
   { path: "history", element: <HistoryPage /> },
   { path: "results", element: <ResultsPage /> },
   { path: "db", element: <AdminDatabasePage /> },
+  { path: "moderation", element: <AdminModerationPage /> },
   { path: "strategies", element: <AdminStrategiesPage /> },
   { path: "mission", element: <AdminMissionsPage /> },
   { path: "empire-npcs", element: <AdminEmpireNpcsPage /> },
@@ -210,6 +216,12 @@ const router = createBrowserRouter([
     element: <UserAreaLayout />,
     errorElement: routeErrorElement,
     children: [{ index: true, element: <ProfilePage /> }],
+  },
+  {
+    path: "/publisher",
+    element: <UserAreaLayout />,
+    errorElement: routeErrorElement,
+    children: [{ index: true, element: <PublisherPage /> }],
   },
   {
     path: "/strat",

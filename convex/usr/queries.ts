@@ -2,30 +2,218 @@ import { query, type QueryCtx } from "../_generated/server";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { v } from "convex/values";
 import type { Doc, Id } from "../_generated/dataModel";
+import { resolveLoadedGameMode } from "../sim/gameMode";
 import { listMissions, mapTierFromMapKey } from "./missionCatalog";
 import { getAutomationStrategyByKey, toPublicAutomationStrategy } from "./automationStrategyCatalog";
 import { summarizeAutomationStrategy } from "./automationStrategyLibrary";
+import { resolvePublisherContentStatus } from "./publisherAccess";
 
-type EmpireResultWithGame = Doc<"emp_results"> & {
-  gameResult: Doc<"sim_game_results">;
+function resolveGameRuntimeVersion(
+  runtimeVersion: "v1_empire" | "v2_game_actor" | null | undefined,
+): "v1_empire" | "v2_game_actor" {
+  return runtimeVersion ?? "v1_empire";
+}
+
+async function resolveControlledEmpireIdForRole(
+  ctx: QueryCtx,
+  params: {
+    gameId: Id<"sim_games">;
+    runtimeVersion: "v1_empire" | "v2_game_actor";
+    userId: Id<"users">;
+    role: "observer" | "empire" | "trader" | "admin";
+    empireId: Id<"emp_states"> | null;
+  },
+): Promise<Id<"emp_states"> | null> {
+  if (params.role !== "empire") {
+    return null;
+  }
+  if (params.empireId !== null) {
+    return params.empireId;
+  }
+  if (params.runtimeVersion !== "v2_game_actor") {
+    return null;
+  }
+
+  const actor = await ctx.db
+    .query("sim_game_actors")
+    .withIndex("by_gameId_and_controllerUserId", (q) =>
+      q.eq("gameId", params.gameId).eq("controllerUserId", params.userId),
+    )
+    .unique();
+  return actor?.legacyEmpireId ?? null;
+}
+
+async function getActorForRole(
+  ctx: QueryCtx,
+  params: {
+    gameId: Id<"sim_games">;
+    runtimeVersion: "v1_empire" | "v2_game_actor";
+    empireId: Id<"emp_states"> | null;
+    userId: Id<"users">;
+    role: "observer" | "empire" | "trader" | "admin";
+  },
+) {
+  if (params.runtimeVersion !== "v2_game_actor") {
+    return null;
+  }
+
+  if (params.role === "empire" && params.empireId !== null) {
+    return await ctx.db
+      .query("sim_game_actors")
+      .withIndex("by_gameId_and_legacyEmpireId", (q) =>
+        q.eq("gameId", params.gameId).eq("legacyEmpireId", params.empireId),
+      )
+      .unique();
+  }
+
+  return await ctx.db
+    .query("sim_game_actors")
+    .withIndex("by_gameId_and_controllerUserId", (q) =>
+      q.eq("gameId", params.gameId).eq("controllerUserId", params.userId),
+    )
+    .unique();
+}
+
+type EmpireResultWithGameMeta = Doc<"emp_results"> & {
+  gameResult: {
+    endedAt: number;
+    isOfficial: boolean;
+    mapKey: string;
+    missionKey: string | null;
+    lobbyScenarioKey: string | null;
+  };
 };
 
-async function attachGameResults(
+type EmpireResultWithEmbeddedGameMeta = Doc<"emp_results"> & {
+  gameEndedAt: number;
+  gameIsOfficial: boolean;
+  gameMapKey: string;
+  gameMissionKey: string | null;
+  gameLobbyScenarioKey: string | null;
+};
+
+function hasEmbeddedGameMetadata(
+  row: Doc<"emp_results">,
+): row is EmpireResultWithEmbeddedGameMeta {
+  return (
+    row.gameEndedAt !== undefined &&
+    row.gameIsOfficial !== undefined &&
+    row.gameMapKey !== undefined &&
+    row.gameMissionKey !== undefined &&
+    row.gameLobbyScenarioKey !== undefined
+  );
+}
+
+async function attachGameMetadata(
   ctx: QueryCtx,
   rows: Doc<"emp_results">[],
-): Promise<EmpireResultWithGame[]> {
+): Promise<EmpireResultWithGameMeta[]> {
   const gameResultMap = new Map<Id<"sim_game_results">, Doc<"sim_game_results">>();
+  const missingGameResultIds: Id<"sim_game_results">[] = [];
   for (const row of rows) {
+    if (hasEmbeddedGameMetadata(row)) {
+      continue;
+    }
     if (gameResultMap.has(row.gameResultId)) continue;
-    const gameResult = await ctx.db.get("sim_game_results", row.gameResultId);
+    gameResultMap.set(row.gameResultId, null as never);
+    missingGameResultIds.push(row.gameResultId);
+  }
+  const gameResults = await Promise.all(
+    missingGameResultIds.map((gameResultId) => ctx.db.get("sim_game_results", gameResultId)),
+  );
+  for (const [index, gameResultId] of missingGameResultIds.entries()) {
+    const gameResult = gameResults[index];
     if (gameResult !== null) {
-      gameResultMap.set(row.gameResultId, gameResult);
+      gameResultMap.set(gameResultId, gameResult);
     }
   }
   return rows.flatMap((row) => {
+    if (hasEmbeddedGameMetadata(row)) {
+      return [
+        {
+          ...row,
+          gameResult: {
+            endedAt: row.gameEndedAt,
+            isOfficial: row.gameIsOfficial,
+            mapKey: row.gameMapKey,
+            missionKey: row.gameMissionKey,
+            lobbyScenarioKey: row.gameLobbyScenarioKey,
+          },
+        },
+      ];
+    }
     const gameResult = gameResultMap.get(row.gameResultId);
-    return gameResult === undefined ? [] : [{ ...row, gameResult }];
+    return gameResult === undefined
+      ? []
+      : [
+          {
+            ...row,
+            gameResult: {
+              endedAt: gameResult.endedAt,
+              isOfficial: gameResult.isOfficial,
+              mapKey: gameResult.mapKey,
+              missionKey: gameResult.missionKey ?? null,
+              lobbyScenarioKey: gameResult.lobbyScenarioKey,
+            },
+          },
+        ];
   });
+}
+
+async function listOfficialEmpireResults(
+  ctx: QueryCtx,
+  limit: number,
+): Promise<EmpireResultWithGameMeta[]> {
+  const indexedRows = await ctx.db
+    .query("emp_results")
+    .withIndex("by_gameIsOfficial", (q) => q.eq("gameIsOfficial", true))
+    .take(limit);
+  const legacyCandidates = await ctx.db.query("emp_results").take(limit);
+  const legacyRows = (await attachGameMetadata(ctx, legacyCandidates)).filter(
+    (row) => row.gameIsOfficial === undefined && row.gameResult.isOfficial,
+  );
+
+  const rowsById = new Map<string, EmpireResultWithGameMeta>();
+  for (const row of await attachGameMetadata(ctx, indexedRows)) {
+    rowsById.set(row._id, row);
+  }
+  for (const row of legacyRows) {
+    if (!rowsById.has(row._id)) {
+      rowsById.set(row._id, row);
+    }
+  }
+  return Array.from(rowsById.values());
+}
+
+async function listOfficialWinningEmpireResultsForUser(
+  ctx: QueryCtx,
+  userId: Id<"users">,
+  limit: number,
+): Promise<EmpireResultWithGameMeta[]> {
+  const indexedRows = await ctx.db
+    .query("emp_results")
+    .withIndex("by_userId_and_gameIsOfficial_and_isWinner", (q) =>
+      q.eq("userId", userId).eq("gameIsOfficial", true).eq("isWinner", true),
+    )
+    .take(limit);
+  const legacyCandidates = await ctx.db
+    .query("emp_results")
+    .withIndex("by_userId_and_isWinner", (q) => q.eq("userId", userId).eq("isWinner", true))
+    .take(limit);
+  const legacyRows = (await attachGameMetadata(ctx, legacyCandidates)).filter(
+    (row) => row.gameIsOfficial === undefined && row.gameResult.isOfficial,
+  );
+
+  const rowsById = new Map<string, EmpireResultWithGameMeta>();
+  for (const row of await attachGameMetadata(ctx, indexedRows)) {
+    rowsById.set(row._id, row);
+  }
+  for (const row of legacyRows) {
+    if (!rowsById.has(row._id)) {
+      rowsById.set(row._id, row);
+    }
+  }
+  return Array.from(rowsById.values());
 }
 
 function rankGroupedResults<T extends { wins: number; top3: number; games: number; score: number; key: string }>(
@@ -38,6 +226,32 @@ function rankGroupedResults<T extends { wins: number; top3: number; games: numbe
     if (a.games !== b.games) return b.games - a.games;
     return a.key.localeCompare(b.key);
   });
+}
+
+function buildResultControllerLabel(params: {
+  controllerKind: "human" | "npc";
+  playerName: string | null;
+  npcPlayerKey: string | null;
+}): string {
+  if (params.controllerKind === "human") {
+    return params.playerName ?? "Human";
+  }
+  return params.playerName ?? params.npcPlayerKey ?? "NPC";
+}
+
+function buildResultIdentityLabel(params: {
+  empireName: string;
+  controllerLabel: string | null;
+  actorDisplayName: string | null;
+  actorLabel: string | null;
+}): string {
+  const suffixParts = [params.actorDisplayName, params.actorLabel, params.controllerLabel].filter(
+    (value, index, values): value is string =>
+      value !== null && value !== params.empireName && values.indexOf(value) === index,
+  );
+  return suffixParts.length === 0
+    ? params.empireName
+    : `${params.empireName} (${suffixParts.join(" · ")})`;
 }
 
 export const getMyProfile = query({
@@ -68,16 +282,18 @@ export const getMyAccount = query({
       return null;
     }
 
-    const profile = await ctx.db
-      .query("usr_profiles")
-      .withIndex("by_userId", (q) => q.eq("userId", userId))
-      .unique();
-    const passwordAccount = await ctx.db
-      .query("authAccounts")
-      .withIndex("providerAndAccountId", (q) =>
-        q.eq("provider", "password").eq("providerAccountId", (user.email ?? "").toLowerCase()),
-      )
-      .unique();
+    const [profile, passwordAccount] = await Promise.all([
+      ctx.db
+        .query("usr_profiles")
+        .withIndex("by_userId", (q) => q.eq("userId", userId))
+        .unique(),
+      ctx.db
+        .query("authAccounts")
+        .withIndex("providerAndAccountId", (q) =>
+          q.eq("provider", "password").eq("providerAccountId", (user.email ?? "").toLowerCase()),
+        )
+        .unique(),
+    ]);
 
     return {
       user: {
@@ -87,6 +303,8 @@ export const getMyAccount = query({
         image: user.image ?? null,
         isAnonymous: user.isAnonymous ?? false,
         admin: user.admin ?? false,
+        publisher: user.publisher ?? false,
+        plan: user.plan ?? "free",
       },
       profile,
       hasPasswordAccount: passwordAccount?.userId === user._id,
@@ -124,16 +342,25 @@ export const getMyGameMembership = query({
       return null;
     }
 
-    const role = await ctx.db
-      .query("usr_game_roles")
-      .withIndex("by_gameId_and_userId", (q) =>
-        q.eq("gameId", args.gameId).eq("userId", userId),
-      )
-      .unique();
+    const [role, game] = await Promise.all([
+      ctx.db
+        .query("usr_game_roles")
+        .withIndex("by_gameId_and_userId", (q) =>
+          q.eq("gameId", args.gameId).eq("userId", userId),
+        )
+        .unique(),
+      ctx.db.get("sim_games", args.gameId),
+    ]);
+    const runtimeVersion = resolveGameRuntimeVersion(game?.runtimeVersion);
 
     if (role === null || !role.isActive) {
       return {
+        runtimeVersion,
         role: null,
+        actorId: null,
+        actorSlotNumber: null,
+        actorLabel: null,
+        actorDisplayName: null,
         empireId: null,
         empireName: null,
         isEmpirePlayer: false,
@@ -141,12 +368,26 @@ export const getMyGameMembership = query({
       };
     }
 
-    const empire = role.empireId === null ? null : await ctx.db.get("emp_states", role.empireId);
-    const isEmpirePlayer = role.role === "empire" && empire !== null;
+    const actor = await getActorForRole(ctx, {
+      gameId: args.gameId,
+      runtimeVersion,
+      empireId: role.empireId,
+      userId,
+      role: role.role,
+    });
+    const effectiveEmpireId = role.empireId ?? actor?.legacyEmpireId ?? null;
+    const empire =
+      effectiveEmpireId === null ? null : await ctx.db.get("emp_states", effectiveEmpireId);
+    const isEmpirePlayer = role.role === "empire" && effectiveEmpireId !== null && empire !== null;
 
     return {
+      runtimeVersion,
       role: role.role,
-      empireId: empire?._id ?? null,
+      actorId: actor?._id ?? null,
+      actorSlotNumber: actor?.slotNumber ?? null,
+      actorLabel: actor?.factionLabelSnapshot ?? null,
+      actorDisplayName: actor?.displayNameSnapshot ?? null,
+      empireId: effectiveEmpireId,
       empireName: empire?.name ?? null,
       isEmpirePlayer,
       isSpectator: role.role === "observer" || !isEmpirePlayer,
@@ -172,33 +413,51 @@ export const listGamePlayersForAdmin = query({
       return [];
     }
 
-    const roles = [];
-    for (const role of ["admin", "empire", "trader", "observer"] as const) {
-      const rows = await ctx.db
-        .query("usr_game_roles")
-        .withIndex("by_gameId_and_role", (q) =>
-          q.eq("gameId", args.gameId).eq("role", role),
-        )
-        .take(args.limit);
-      roles.push(...rows);
-    }
+    const game = await ctx.db.get("sim_games", args.gameId);
+    const runtimeVersion = resolveGameRuntimeVersion(game?.runtimeVersion);
+
+    const roleRows = await Promise.all(
+      (["admin", "empire", "trader", "observer"] as const).map((role) =>
+        ctx.db
+          .query("usr_game_roles")
+          .withIndex("by_gameId_and_role", (q) =>
+            q.eq("gameId", args.gameId).eq("role", role),
+          )
+          .take(args.limit),
+      ),
+    );
+    const roles = roleRows.flat();
 
     const activeRoles = roles.filter((role) => role.isActive).slice(0, args.limit);
-    const result = [];
-    for (const role of activeRoles) {
-      const profile = await ctx.db
-        .query("usr_profiles")
-        .withIndex("by_userId", (q) => q.eq("userId", role.userId))
-        .unique();
-      result.push({
+    return await Promise.all(
+      activeRoles.map(async (role) => {
+        const [profile, actor] = await Promise.all([
+          ctx.db
+            .query("usr_profiles")
+            .withIndex("by_userId", (q) => q.eq("userId", role.userId))
+            .unique(),
+          getActorForRole(ctx, {
+            gameId: args.gameId,
+            runtimeVersion,
+            empireId: role.empireId,
+            userId: role.userId,
+            role: role.role,
+          }),
+        ]);
+        return {
         roleId: role._id,
         userId: role.userId,
+        runtimeVersion,
         role: role.role,
+        actorId: actor?._id ?? null,
+        actorSlotNumber: actor?.slotNumber ?? null,
+        actorLabel: actor?.factionLabelSnapshot ?? null,
+        actorDisplayName: actor?.displayNameSnapshot ?? null,
         empireId: role.empireId,
         displayName: profile?.displayName ?? `Player ${role.userId.slice(-4)}`,
-      });
-    }
-    return result;
+        };
+      }),
+    );
   },
 });
 
@@ -210,21 +469,28 @@ export const getMyLobbyState = query({
       return null;
     }
 
+    const user = await ctx.db.get("users", userId);
+    if (user === null) {
+      return null;
+    }
+    const plan = user.plan ?? "free";
+
     const [currentGames, missions] = await Promise.all([
-      ctx.db.query("sim_games").withIndex("by_ownerUserId", (q) => q.eq("ownerUserId", userId)).collect(),
-      listMissions(ctx, { publishedOnly: true, fallbackToBuiltIns: true }),
+      ctx.db
+        .query("sim_games")
+        .withIndex("by_ownerUserId", (q) => q.eq("ownerUserId", userId))
+        .collect()
+        .then((games) => Promise.all(games.map((game) => resolveLoadedGameMode(ctx, game))))
+        .then((games) => games.filter((game): game is NonNullable<typeof game> => game !== null)),
+      listMissions(ctx, { publishedOnly: true, fallbackToBuiltIns: true, allowedTier: plan }),
     ]);
 
-    const winningRows = await ctx.db
-      .query("emp_results")
-      .withIndex("by_userId_and_isWinner", (q) => q.eq("userId", userId).eq("isWinner", true))
-      .take(256);
-    const wins = await attachGameResults(ctx, winningRows);
+    const wins = await listOfficialWinningEmpireResultsForUser(ctx, userId, 256);
     const missionByKey = new Map(missions.map((mission) => [mission.key, mission]));
     const missionWinsByKey = new Map<string, number>();
     const auroraWins = wins.filter((row) => {
       const missionKey = row.gameResult.missionKey ?? row.gameResult.lobbyScenarioKey;
-      if (missionKey === null || !row.gameResult.isOfficial) {
+      if (missionKey === null) {
         return false;
       }
       const mission = missionByKey.get(missionKey);
@@ -246,6 +512,13 @@ export const getMyLobbyState = query({
         .map((game) => [game.missionKey ?? game.lobbyScenarioKey, game] as const)
         .filter((entry): entry is [string, (typeof currentGames)[number]] => entry[0] !== null),
     );
+    const memberships = await ctx.db
+      .query("usr_game_roles")
+      .withIndex("by_userId", (q) => q.eq("userId", userId))
+      .collect();
+    const membershipByGameId = new Map(
+      memberships.map((membership) => [membership.gameId, membership] as const),
+    );
 
     const resultByGameId = new Map<
       Id<"sim_games">,
@@ -255,6 +528,10 @@ export const getMyLobbyState = query({
         winnerEmpireKey: string | null;
         winnerEmpireName: string | null;
         winnerPlayerName: string | null;
+        winnerControllerLabel: string | null;
+        winnerActorLabel: string | null;
+        winnerActorDisplayName: string | null;
+        winnerDisplayLabel: string | null;
         auroraPlacement: number | null;
         auroraScoreFinal: number | null;
         auroraStarsControlledFinal: number | null;
@@ -263,36 +540,77 @@ export const getMyLobbyState = query({
       }
     >();
 
-    for (const game of currentGames) {
-      if (game.status !== "finished") continue;
-      const gameResult = await ctx.db
-        .query("sim_game_results")
-        .withIndex("by_gameId", (q) => q.eq("gameId", game._id))
-        .unique();
-      if (gameResult === null) continue;
+    const finishedGameSummaries = await Promise.all(
+      currentGames
+        .filter((game) => game.status === "finished")
+        .map(async (game) => {
+          const gameResult = await ctx.db
+            .query("sim_game_results")
+            .withIndex("by_gameId", (q) => q.eq("gameId", game._id))
+            .unique();
+          if (gameResult === null) return null;
 
-      const empireResults = await ctx.db
-        .query("emp_results")
-        .withIndex("by_gameResultId", (q) => q.eq("gameResultId", gameResult._id))
-        .collect();
-      const missionKey = gameResult.missionKey ?? gameResult.lobbyScenarioKey;
-      const mission = missionKey === null ? null : missionByKey.get(missionKey) ?? null;
-      const playerEmpireKey = mission?.scenario.playerEmpireKey ?? "aurora";
-      const winner = empireResults.find((row) => row.isWinner) ?? null;
-      const aurora = empireResults.find((row) => row.empireKey === playerEmpireKey) ?? null;
+          const missionKey = gameResult.missionKey ?? gameResult.lobbyScenarioKey;
+          const mission = missionKey === null ? null : missionByKey.get(missionKey) ?? null;
+          const playerEmpireKey = mission?.scenario.playerEmpireKey ?? "aurora";
+          const [winnerRows, auroraRows] = await Promise.all([
+            ctx.db
+              .query("emp_results")
+              .withIndex("by_gameId_and_isWinner", (q) =>
+                q.eq("gameId", game._id).eq("isWinner", true),
+              )
+              .take(1),
+            ctx.db
+              .query("emp_results")
+              .withIndex("by_gameId_and_empireKey", (q) =>
+                q.eq("gameId", game._id).eq("empireKey", playerEmpireKey),
+              )
+              .take(1),
+          ]);
+          const winner = winnerRows[0] ?? null;
+          const aurora = auroraRows[0] ?? null;
+          const winnerControllerLabel =
+            winner === null
+              ? null
+              : buildResultControllerLabel({
+                  controllerKind: winner.controllerKind,
+                  playerName: winner.playerName,
+                  npcPlayerKey: winner.npcPlayerKey,
+                });
 
-      resultByGameId.set(game._id, {
-        endedAt: gameResult.endedAt,
-        finishReason: gameResult.finishReason,
-        winnerEmpireKey: winner?.empireKey ?? null,
-        winnerEmpireName: winner?.empireName ?? null,
-        winnerPlayerName: winner?.playerName ?? null,
-        auroraPlacement: aurora?.placement ?? null,
-        auroraScoreFinal: aurora?.scoreFinal ?? null,
-        auroraStarsControlledFinal: aurora?.starsControlledFinal ?? null,
-        auroraFleetStrengthFinal: aurora?.fleetStrengthFinal ?? null,
-        auroraWasWinner: aurora?.isWinner ?? false,
-      });
+          return {
+            gameId: game._id,
+            summary: {
+              endedAt: gameResult.endedAt,
+              finishReason: gameResult.finishReason,
+              winnerEmpireKey: winner?.empireKey ?? null,
+              winnerEmpireName: winner?.empireName ?? null,
+              winnerPlayerName: winner?.playerName ?? null,
+              winnerControllerLabel,
+              winnerActorLabel: winner?.actorLabel ?? null,
+              winnerActorDisplayName: winner?.actorDisplayName ?? null,
+              winnerDisplayLabel:
+                winner === null
+                  ? null
+                  : buildResultIdentityLabel({
+                      empireName: winner.empireName,
+                      controllerLabel: winnerControllerLabel,
+                      actorDisplayName: winner.actorDisplayName ?? null,
+                      actorLabel: winner.actorLabel ?? null,
+                    }),
+              auroraPlacement: aurora?.placement ?? null,
+              auroraScoreFinal: aurora?.scoreFinal ?? null,
+              auroraStarsControlledFinal: aurora?.starsControlledFinal ?? null,
+              auroraFleetStrengthFinal: aurora?.fleetStrengthFinal ?? null,
+              auroraWasWinner: aurora?.isWinner ?? false,
+            },
+          };
+        }),
+    );
+    for (const row of finishedGameSummaries) {
+      if (row !== null) {
+        resultByGameId.set(row.gameId, row.summary);
+      }
     }
 
     return {
@@ -310,22 +628,14 @@ export const getMyLobbyState = query({
         ).length,
         totalMissionCount: missions.length,
       },
-      games: await Promise.all(missions.map((scenario) => {
+      games: missions.map((scenario) => {
         const game = gamesByScenario.get(scenario.key) ?? null;
-        const activeMembershipPromise =
-          game === null
-            ? Promise.resolve(null)
-            : ctx.db
-                .query("usr_game_roles")
-                .withIndex("by_gameId_and_userId", (q) =>
-                  q.eq("gameId", game._id).eq("userId", userId),
-                )
-                .unique();
+        const membership = game === null ? null : membershipByGameId.get(game._id) ?? null;
         const unlocked = scenario.prerequisiteMissionKeys.every(
           (missionKey) =>
             (missionWinsByKey.get(missionKey) ?? 0) >= (missionByKey.get(missionKey)?.requiredWins ?? 1),
         );
-        return activeMembershipPromise.then((membership) => ({
+        return {
           key: scenario.key,
           name: scenario.name,
           description: scenario.description,
@@ -344,8 +654,8 @@ export const getMyLobbyState = query({
           result: game === null ? null : resultByGameId.get(game._id) ?? null,
           isActiveMember: membership?.isActive ?? false,
           myRole: membership?.isActive ? membership.role : null,
-        }));
-      })),
+        };
+      }),
     };
   },
 });
@@ -356,6 +666,7 @@ export const listPublicAutomationStrategies = query({
     const rows = await ctx.db.query("usr_automation_strategies").take(128);
     return rows
       .filter((row) => row.availableForHumans)
+      .filter((row) => resolvePublisherContentStatus({ status: row.status }) === "published")
       .map((row) => toPublicAutomationStrategy(row))
       .sort((left, right) => left.name.localeCompare(right.name));
   },
@@ -373,6 +684,19 @@ export const listMyAutomationProfiles = query({
       .query("usr_automation_profiles")
       .withIndex("by_userId", (q) => q.eq("userId", userId))
       .take(128);
+    const sourceLibraryKeys = Array.from(
+      new Set(
+        rows.flatMap((row) =>
+          row.sourceLibraryKey !== undefined ? [row.sourceLibraryKey] : [],
+        ),
+      ),
+    );
+    const sourceLibraries = await Promise.all(
+      sourceLibraryKeys.map((key) => getAutomationStrategyByKey(ctx, key)),
+    );
+    const sourceLibraryByKey = new Map(
+      sourceLibraryKeys.map((key, index) => [key, sourceLibraries[index] ?? null]),
+    );
 
     return await Promise.all(
       rows
@@ -380,7 +704,7 @@ export const listMyAutomationProfiles = query({
         .map(async (row) => {
           const sourceLibrary =
             row.sourceLibraryKey !== undefined
-              ? await getAutomationStrategyByKey(ctx, row.sourceLibraryKey)
+              ? sourceLibraryByKey.get(row.sourceLibraryKey) ?? null
               : null;
 
           return {
@@ -427,6 +751,9 @@ export const getMyEmpireAutomationStrategy = query({
       return null;
     }
 
+    const game = await ctx.db.get("sim_games", args.gameId);
+    const runtimeVersion = resolveGameRuntimeVersion(game?.runtimeVersion);
+
     const role = await ctx.db
       .query("usr_game_roles")
       .withIndex("by_gameId_and_userId", (q) =>
@@ -434,16 +761,22 @@ export const getMyEmpireAutomationStrategy = query({
       )
       .unique();
 
-    if (
-      role === null ||
-      !role.isActive ||
-      role.role !== "empire" ||
-      role.empireId === null
-    ) {
+    if (role === null || !role.isActive) {
       return null;
     }
 
-    const empire = await ctx.db.get("emp_states", role.empireId);
+    const empireId = await resolveControlledEmpireIdForRole(ctx, {
+      gameId: args.gameId,
+      runtimeVersion,
+      userId,
+      role: role.role,
+      empireId: role.empireId,
+    });
+    if (empireId === null) {
+      return null;
+    }
+
+    const empire = await ctx.db.get("emp_states", empireId);
     if (empire === null || empire.gameId !== args.gameId) {
       return null;
     }
@@ -472,6 +805,13 @@ export const listRecentOfficialEmpireResults = query({
       .withIndex("by_isOfficial_and_endedAt", (q) => q.eq("isOfficial", true))
       .order("desc")
       .take(limit);
+    const winnerRows = await Promise.all(
+      gameResults.map((gameResult) =>
+        gameResult.winnerEmpireResultId === null
+          ? Promise.resolve(null)
+          : ctx.db.get("emp_results", gameResult.winnerEmpireResultId),
+      ),
+    );
 
     const results = [] as Array<{
       gameId: Id<"sim_games">;
@@ -487,6 +827,11 @@ export const listRecentOfficialEmpireResults = query({
         playerName: string | null;
         userId: Id<"users"> | null;
         npcPlayerKey: string | null;
+        controllerLabel: string;
+        actorId: Id<"sim_game_actors"> | null;
+        actorSlotNumber: number | null;
+        actorLabel: string | null;
+        actorDisplayName: string | null;
         scoreFinal: number;
         starsControlledFinal: number;
         fleetStrengthFinal: number;
@@ -494,14 +839,11 @@ export const listRecentOfficialEmpireResults = query({
       } | null;
     }>;
 
-    for (const gameResult of gameResults) {
-      const game = await ctx.db.get("sim_games", gameResult.gameId);
-      const winner = gameResult.winnerEmpireResultId === null
-        ? null
-        : await ctx.db.get("emp_results", gameResult.winnerEmpireResultId);
+    for (const [index, gameResult] of gameResults.entries()) {
+      const winner = winnerRows[index] ?? null;
       results.push({
         gameId: gameResult.gameId,
-        urlCode: game?.urlCode ?? null,
+        urlCode: gameResult.urlCode ?? null,
         endedAt: gameResult.endedAt,
         name: gameResult.name,
         mapKey: gameResult.mapKey,
@@ -516,6 +858,15 @@ export const listRecentOfficialEmpireResults = query({
                 playerName: winner.playerName,
                 userId: winner.userId,
                 npcPlayerKey: winner.npcPlayerKey,
+                controllerLabel: buildResultControllerLabel({
+                  controllerKind: winner.controllerKind,
+                  playerName: winner.playerName,
+                  npcPlayerKey: winner.npcPlayerKey,
+                }),
+                actorId: winner.actorId ?? null,
+                actorSlotNumber: winner.actorSlotNumber ?? null,
+                actorLabel: winner.actorLabel ?? null,
+                actorDisplayName: winner.actorDisplayName ?? null,
                 scoreFinal: winner.scoreFinal,
                 starsControlledFinal: winner.starsControlledFinal,
                 fleetStrengthFinal: winner.fleetStrengthFinal,
@@ -531,10 +882,7 @@ export const listRecentOfficialEmpireResults = query({
 export const listEmpireUserLeaderboard = query({
   args: { limit: v.number() },
   handler: async (ctx, args) => {
-    const allRows = await ctx.db.query("emp_results").take(512);
-    const officialRows = (await attachGameResults(ctx, allRows))
-      .filter((row) => row.gameResult.isOfficial)
-      .map((row) => row as Doc<"emp_results">);
+    const officialRows = await listOfficialEmpireResults(ctx, 512);
     const withUsers = officialRows.filter((row) => row.userId !== null);
     const grouped = new Map<
       Id<"users">,
@@ -542,6 +890,11 @@ export const listEmpireUserLeaderboard = query({
         key: Id<"users">;
         userId: Id<"users">;
         displayName: string | null;
+        latestActorId: Id<"sim_game_actors"> | null;
+        latestActorSlotNumber: number | null;
+        latestActorLabel: string | null;
+        latestActorDisplayName: string | null;
+        latestEndedAt: number;
         wins: number;
         top3: number;
         games: number;
@@ -554,11 +907,23 @@ export const listEmpireUserLeaderboard = query({
         key: row.userId!,
         userId: row.userId!,
         displayName: null,
+        latestActorId: null,
+        latestActorSlotNumber: null,
+        latestActorLabel: null,
+        latestActorDisplayName: null,
+        latestEndedAt: 0,
         wins: 0,
         top3: 0,
         games: 0,
         score: 0,
       };
+      if (row.gameResult.endedAt >= prev.latestEndedAt) {
+        prev.latestEndedAt = row.gameResult.endedAt;
+        prev.latestActorId = row.actorId ?? null;
+        prev.latestActorSlotNumber = row.actorSlotNumber ?? null;
+        prev.latestActorLabel = row.actorLabel ?? null;
+        prev.latestActorDisplayName = row.actorDisplayName ?? null;
+      }
       prev.wins += row.isWinner ? 1 : 0;
       prev.top3 += row.placement <= 3 ? 1 : 0;
       prev.games += 1;
@@ -570,12 +935,16 @@ export const listEmpireUserLeaderboard = query({
       0,
       Math.min(Math.max(Math.floor(args.limit), 1), 50),
     );
-    for (const row of ranked) {
-      const profile = await ctx.db
-        .query("usr_profiles")
-        .withIndex("by_userId", (q) => q.eq("userId", row.userId))
-        .unique();
-      row.displayName = profile?.displayName ?? null;
+    const profiles = await Promise.all(
+      ranked.map((row) =>
+        ctx.db
+          .query("usr_profiles")
+          .withIndex("by_userId", (q) => q.eq("userId", row.userId))
+          .unique(),
+      ),
+    );
+    for (const [index, row] of ranked.entries()) {
+      row.displayName = profiles[index]?.displayName ?? null;
     }
     return ranked;
   },
@@ -584,16 +953,20 @@ export const listEmpireUserLeaderboard = query({
 export const listEmpireNpcLeaderboard = query({
   args: { limit: v.number() },
   handler: async (ctx, args) => {
-    const allRows = await ctx.db.query("emp_results").take(512);
-    const npcRows = (await attachGameResults(ctx, allRows))
-      .filter((row) => row.gameResult.isOfficial && row.npcPlayerKey !== null)
-      .map((row) => row as Doc<"emp_results">);
+    const npcRows = (await listOfficialEmpireResults(ctx, 512)).filter(
+      (row) => row.npcPlayerKey !== null,
+    );
     const grouped = new Map<
       string,
       {
         key: string;
         npcPlayerKey: string;
         latestPlayerName: string | null;
+        latestActorId: Id<"sim_game_actors"> | null;
+        latestActorSlotNumber: number | null;
+        latestActorLabel: string | null;
+        latestActorDisplayName: string | null;
+        latestEndedAt: number;
         wins: number;
         top3: number;
         games: number;
@@ -607,12 +980,24 @@ export const listEmpireNpcLeaderboard = query({
         key: npcPlayerKey,
         npcPlayerKey,
         latestPlayerName: row.playerName,
+        latestActorId: null,
+        latestActorSlotNumber: null,
+        latestActorLabel: null,
+        latestActorDisplayName: null,
+        latestEndedAt: 0,
         wins: 0,
         top3: 0,
         games: 0,
         score: 0,
       };
       prev.latestPlayerName = row.playerName ?? prev.latestPlayerName;
+      if (row.gameResult.endedAt >= prev.latestEndedAt) {
+        prev.latestEndedAt = row.gameResult.endedAt;
+        prev.latestActorId = row.actorId ?? null;
+        prev.latestActorSlotNumber = row.actorSlotNumber ?? null;
+        prev.latestActorLabel = row.actorLabel ?? null;
+        prev.latestActorDisplayName = row.actorDisplayName ?? null;
+      }
       prev.wins += row.isWinner ? 1 : 0;
       prev.top3 += row.placement <= 3 ? 1 : 0;
       prev.games += 1;
@@ -630,10 +1015,9 @@ export const listEmpireNpcLeaderboard = query({
 export const listEmpireStrategyLeaderboard = query({
   args: { limit: v.number() },
   handler: async (ctx, args) => {
-    const allRows = await ctx.db.query("emp_results").take(512);
-    const strategyRows = (await attachGameResults(ctx, allRows))
-      .filter((row) => row.gameResult.isOfficial && row.strategyFingerprint !== null)
-      .map((row) => row as Doc<"emp_results">);
+    const strategyRows = (await listOfficialEmpireResults(ctx, 512)).filter(
+      (row) => row.strategyFingerprint !== null,
+    );
     const grouped = new Map<
       string,
       {
@@ -642,6 +1026,12 @@ export const listEmpireStrategyLeaderboard = query({
         strategyLibraryKey: string | null;
         strategySourceKind: Doc<"emp_results">["strategySourceKind"];
         sampleStrategySummaryJson: string | null;
+        latestActorId: Id<"sim_game_actors"> | null;
+        latestActorSlotNumber: number | null;
+        latestActorLabel: string | null;
+        latestActorDisplayName: string | null;
+        latestControllerLabel: string | null;
+        latestEndedAt: number;
         wins: number;
         top3: number;
         games: number;
@@ -657,11 +1047,29 @@ export const listEmpireStrategyLeaderboard = query({
         strategyLibraryKey: row.strategyLibraryKey,
         strategySourceKind: row.strategySourceKind,
         sampleStrategySummaryJson: row.strategySummaryJson,
+        latestActorId: null,
+        latestActorSlotNumber: null,
+        latestActorLabel: null,
+        latestActorDisplayName: null,
+        latestControllerLabel: null,
+        latestEndedAt: 0,
         wins: 0,
         top3: 0,
         games: 0,
         score: 0,
       };
+      if (row.gameResult.endedAt >= prev.latestEndedAt) {
+        prev.latestEndedAt = row.gameResult.endedAt;
+        prev.latestActorId = row.actorId ?? null;
+        prev.latestActorSlotNumber = row.actorSlotNumber ?? null;
+        prev.latestActorLabel = row.actorLabel ?? null;
+        prev.latestActorDisplayName = row.actorDisplayName ?? null;
+        prev.latestControllerLabel = buildResultControllerLabel({
+          controllerKind: row.controllerKind,
+          playerName: row.playerName,
+          npcPlayerKey: row.npcPlayerKey,
+        });
+      }
       prev.wins += row.isWinner ? 1 : 0;
       prev.top3 += row.placement <= 3 ? 1 : 0;
       prev.games += 1;

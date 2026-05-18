@@ -4,6 +4,7 @@ import { api } from "../../../../convex/_generated/api";
 import type { Id } from "../../../../convex/_generated/dataModel";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { gameModeSupportsTraderGameplay, type GameMode } from "@/features/games/gameMode";
 
 // Full settings type — mirrors what the server returns from getGameSettings.
 type Settings = {
@@ -325,7 +326,14 @@ function BalanceSection({
 
 // ─── Main component ────────────────────────────────────────────────────────────
 
-export function BalancePanel({ gameId }: { gameId: Id<"sim_games"> }) {
+export function BalancePanel({
+  gameId,
+  gameMode,
+}: {
+  gameId: Id<"sim_games">;
+  gameMode?: GameMode;
+}) {
+  const traderGameplayEnabled = gameModeSupportsTraderGameplay(gameMode);
   const serverSettings = useQuery(api.admin.mutations.getGameSettings, { gameId });
   const updateSettings = useMutation(api.admin.mutations.updateGameSettings);
   const resetSettings = useMutation(api.admin.mutations.resetGameSettings);
@@ -416,66 +424,80 @@ export function BalancePanel({ gameId }: { gameId: Id<"sim_games"> }) {
 
   return (
     <div className="space-y-6">
-      <Card className="space-y-5">
-        <div className="flex items-center gap-2 pb-2 border-b border-st-border">
-          <span className="text-lg">🚀</span>
-          <h3 className="text-sm font-semibold uppercase tracking-wider text-st-fg">
-            Traders
-          </h3>
-        </div>
-
-        <div className="space-y-2 rounded-md border border-st-border p-3">
-          <p className="text-xs text-st-muted leading-relaxed">
-            {local.traderLimitsAutomated ? (
-              <>
-                NPC trader limits are{" "}
-                <span className="text-st-fg font-medium">automated</span>. Every 10 turns the sim
-                reviews completed deliveries: if average profit is negative it lowers the max by 1
-                (never below 1); if total sale proceeds versus total voyage costs exceed 1.4×,
-                <span className="text-st-fg font-medium">and</span> at least half of NPC voyages in
-                that window were net-profitable, it raises the max by 1 (capped by the NPC roster).
-                Only voyages assigned to an NPC captain count (admin spawns are excluded). New games
-                start with a max of 3 active traders.
-              </>
-            ) : (
-              <>
-                Automation is <span className="text-st-fg font-medium">off</span>. Min and max NPC
-                traders follow the sliders below until you re-enable automation.
-              </>
-            )}
-          </p>
-          <div className="flex flex-wrap gap-2 pt-1">
-            {local.traderLimitsAutomated ? (
-              <Button
-                type="button"
-                variant="secondary"
-                className="text-xs"
-                onClick={() => setTraderLimitsAutomated(false)}
-              >
-                Override manually
-              </Button>
-            ) : (
-              <Button
-                type="button"
-                className="text-xs"
-                onClick={() => setTraderLimitsAutomated(true)}
-              >
-                Re-enable automation
-              </Button>
-            )}
+      {traderGameplayEnabled ? (
+        <Card className="space-y-5">
+          <div className="flex items-center gap-2 pb-2 border-b border-st-border">
+            <span className="text-lg">🚀</span>
+            <h3 className="text-sm font-semibold uppercase tracking-wider text-st-fg">
+              Traders
+            </h3>
           </div>
-        </div>
 
-        {TRADER_SLIDERS.map((spec) => (
-          <BalanceSlider
-            key={spec.key}
-            spec={spec}
-            value={local[spec.key] as number}
-            disabled={Boolean(spec.lockedByTraderAutomation && local.traderLimitsAutomated)}
-            onChange={(v) => handleChange(spec.key, v)}
-          />
-        ))}
-      </Card>
+          <div className="space-y-2 rounded-md border border-st-border p-3">
+            <p className="text-xs text-st-muted leading-relaxed">
+              {local.traderLimitsAutomated ? (
+                <>
+                  NPC trader limits are{" "}
+                  <span className="text-st-fg font-medium">automated</span>. Every 10 turns the sim
+                  reviews completed deliveries: if average profit is negative it lowers the max by 1
+                  (never below 1); if total sale proceeds versus total voyage costs exceed 1.4×,
+                  <span className="text-st-fg font-medium">and</span> at least half of NPC voyages in
+                  that window were net-profitable, it raises the max by 1 (capped by the NPC roster).
+                  Only voyages assigned to an NPC captain count (admin spawns are excluded). New games
+                  start with a max of 3 active traders.
+                </>
+              ) : (
+                <>
+                  Automation is <span className="text-st-fg font-medium">off</span>. Min and max NPC
+                  traders follow the sliders below until you re-enable automation.
+                </>
+              )}
+            </p>
+            <div className="flex flex-wrap gap-2 pt-1">
+              {local.traderLimitsAutomated ? (
+                <Button
+                  type="button"
+                  variant="secondary"
+                  className="text-xs"
+                  onClick={() => setTraderLimitsAutomated(false)}
+                >
+                  Override manually
+                </Button>
+              ) : (
+                <Button
+                  type="button"
+                  className="text-xs"
+                  onClick={() => setTraderLimitsAutomated(true)}
+                >
+                  Re-enable automation
+                </Button>
+              )}
+            </div>
+          </div>
+
+          {TRADER_SLIDERS.map((spec) => (
+            <BalanceSlider
+              key={spec.key}
+              spec={spec}
+              value={local[spec.key] as number}
+              disabled={Boolean(spec.lockedByTraderAutomation && local.traderLimitsAutomated)}
+              onChange={(v) => handleChange(spec.key, v)}
+            />
+          ))}
+        </Card>
+      ) : (
+        <Card>
+          <div className="flex items-center gap-2 pb-2 border-b border-st-border">
+            <span className="text-lg">🚀</span>
+            <h3 className="text-sm font-semibold uppercase tracking-wider text-st-fg">
+              Traders
+            </h3>
+          </div>
+          <p className="mt-4 text-sm text-st-muted">
+            Trader balance controls are disabled for this game mode.
+          </p>
+        </Card>
+      )}
       <BalanceSection
         title="Economy"
         icon="🌾"

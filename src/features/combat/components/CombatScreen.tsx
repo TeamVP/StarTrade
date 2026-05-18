@@ -15,19 +15,72 @@ const COMBAT_EVENT_TYPES = new Set([
   "system_held",
 ]);
 
+type RecentCombatEvent = {
+  _id: string;
+  turnNumber: number;
+  eventType: string;
+  summary: string;
+  actorType: string;
+  targetType: string | null;
+  actorLabel?: string | null;
+  targetLabel?: string | null;
+};
+
+type ActiveBattleRow = {
+  _id: string;
+  systemId: string;
+  attackerEmpireId: string;
+  defenderEmpireId: string;
+  roundNumber: number;
+  attackerShips: number;
+  defenderShips: number;
+  attackerDisplayLabel?: string;
+  defenderDisplayLabel?: string;
+};
+
+function formatEventTypeLabel(eventType: string): string {
+  return eventType.split("_").join(" ");
+}
+
+function formatCombatEmpireLabel(empire: {
+  name: string;
+  runtimeVersion?: "v1_empire" | "v2_game_actor";
+  actorSlotNumber?: number | null;
+  actorLabel?: string | null;
+  actorDisplayName?: string | null;
+} | null | undefined): string {
+  if (
+    empire?.runtimeVersion === "v2_game_actor" &&
+    empire.actorSlotNumber !== null &&
+    empire.actorSlotNumber !== undefined
+  ) {
+    const actorName = empire.actorDisplayName ?? empire.actorLabel ?? empire.name;
+    return `Actor ${empire.actorSlotNumber}${actorName.length > 0 ? ` · ${actorName}` : ""}`;
+  }
+  return empire?.name ?? "Empire";
+}
+
 export function CombatScreen(props: {
-  playerPerspective?: { empireId: Id<"emp_states">; label: string } | null;
+  playerPerspective?: {
+    empireId?: Id<"emp_states"> | null;
+    actorId?: Id<"sim_game_actors"> | null;
+    label: string;
+  } | null;
 }) {
   const playerPerspective = props.playerPerspective ?? null;
   const { activeGame, systems, empires } = useGalaxyData();
   const [selectedPerspectiveId, setSelectedPerspectiveId] = useState<string>(
     () =>
-      playerPerspective !== null ? `empire:${playerPerspective.empireId}` : "all",
+      playerPerspective?.empireId !== null && playerPerspective?.empireId !== undefined
+        ? `empire:${playerPerspective.empireId}`
+        : playerPerspective?.actorId !== null && playerPerspective?.actorId !== undefined
+          ? `actor:${playerPerspective.actorId}`
+          : "all",
   );
-  const recentEvents = useQuery(
+  const recentEvents = (useQuery(
     api.sim.queries.listRecentEvents,
     activeGame ? { gameId: activeGame._id, limit: 80 } : "skip",
-  );
+  ) ?? []) as RecentCombatEvent[];
   const playersQuery = useQuery(
     api.usr.queries.listGamePlayersForAdmin,
     activeGame ? { gameId: activeGame._id, limit: 80 } : "skip",
@@ -35,18 +88,17 @@ export function CombatScreen(props: {
   const activeBattlesQuery = useQuery(
     api.cmb.queries.listActiveBattles,
     activeGame ? { gameId: activeGame._id, limit: 40 } : "skip",
-  );
+  ) as ActiveBattleRow[] | undefined;
   const combatEvents = useMemo(
-    () =>
-      (recentEvents ?? []).filter((event) => COMBAT_EVENT_TYPES.has(event.eventType)),
+    () => recentEvents.filter((event) => COMBAT_EVENT_TYPES.has(event.eventType)),
     [recentEvents],
   );
   const systemNames = useMemo(
     () => Object.fromEntries(systems.map((system) => [system._id, system.name])),
     [systems],
   );
-  const empireNames = useMemo(
-    () => Object.fromEntries(empires.map((empire) => [empire._id, empire.name])),
+  const empiresById = useMemo(
+    () => Object.fromEntries(empires.map((empire) => [empire._id, empire])),
     [empires],
   );
   const activeBattles = activeBattlesQuery ?? [];
@@ -55,19 +107,19 @@ export function CombatScreen(props: {
       { id: "all", label: "All players", kind: "Shared view" },
       ...empires.map((empire) => ({
         id: `empire:${empire._id}`,
-        label: empire.name,
+        label: formatCombatEmpireLabel(empire),
         kind: "Empire",
       })),
       ...(playersQuery ?? []).map((player) => ({
         id: `player:${player.roleId}`,
         label: player.displayName,
         kind:
-          player.role === "empire" && player.empireId !== null
-            ? `Player · ${empireNames[player.empireId] ?? "Empire"}`
+          player.role === "empire"
+            ? `Player · ${player.actorDisplayName ?? player.actorLabel ?? (player.empireId !== null ? formatCombatEmpireLabel(empiresById[player.empireId]) : "Empire")}`
             : `Player · ${player.role}`,
       })),
     ],
-    [empires, empireNames, playersQuery],
+    [empires, empiresById, playersQuery],
   );
   const selectedPerspective =
     perspectives.find((perspective) => perspective.id === selectedPerspectiveId) ??
@@ -88,7 +140,7 @@ export function CombatScreen(props: {
           </p>
         ) : (
           <p className="mt-2 text-sm text-st-muted">
-            Combat overview and the message stream for your empire.
+            Combat overview and the message stream for your faction.
           </p>
         )}
       </Card>
@@ -138,8 +190,11 @@ export function CombatScreen(props: {
                         {systemNames[battle.systemId] ?? "Unknown system"}
                       </div>
                       <p className="mt-1 text-xs text-st-muted">
-                        {empireNames[battle.attackerEmpireId] ?? "Attacker"} attacking{" "}
-                        {empireNames[battle.defenderEmpireId] ?? "Defender"} · round{" "}
+                        {battle.attackerDisplayLabel ??
+                          formatCombatEmpireLabel(empiresById[battle.attackerEmpireId])}{" "}
+                        attacking{" "}
+                        {battle.defenderDisplayLabel ??
+                          formatCombatEmpireLabel(empiresById[battle.defenderEmpireId])} · round{" "}
                         {battle.roundNumber}
                       </p>
                       <p className="mt-1 text-xs text-st-muted">
@@ -155,7 +210,7 @@ export function CombatScreen(props: {
         )}
       </Card>
 
-      <Card className="min-h-[200px]">
+      <Card className="min-h-50">
         <h3 className="text-xs font-semibold uppercase tracking-wide text-st-muted">
           Messages For {messagesTitle}
         </h3>
@@ -170,7 +225,7 @@ export function CombatScreen(props: {
             arrival.
           </p>
         ) : (
-          <ul className="mt-3 max-h-[420px] space-y-2 overflow-y-auto text-sm">
+          <ul className="mt-3 max-h-105 space-y-2 overflow-y-auto text-sm">
             {combatEvents.map((event) => (
               <li
                 key={event._id}
@@ -179,10 +234,21 @@ export function CombatScreen(props: {
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <span className="text-xs text-st-muted">Turn {event.turnNumber}</span>
                   <span className="rounded bg-st-panel px-2 py-0.5 text-[11px] font-medium uppercase tracking-wide text-st-muted">
-                    {event.eventType.split("_").join(" ")}
+                    {formatEventTypeLabel(event.eventType)}
                   </span>
                 </div>
                 <p className="mt-1 text-st-fg">{event.summary}</p>
+                {(event.actorLabel !== undefined && event.actorLabel !== null) ||
+                (event.targetLabel !== undefined && event.targetLabel !== null) ? (
+                  <p className="mt-1 text-xs text-st-muted">
+                    {event.actorLabel ?? event.actorType}
+                    {event.targetLabel !== undefined && event.targetLabel !== null
+                      ? ` → ${event.targetLabel}`
+                      : event.targetType !== null
+                        ? ` → ${event.targetType}`
+                        : ""}
+                  </p>
+                ) : null}
               </li>
             ))}
           </ul>

@@ -294,7 +294,7 @@ export function PlayerLobbyPage() {
                         <div>
                           <dt className="text-xs uppercase tracking-wide">Winner</dt>
                           <dd className="mt-0.5 text-st-fg">
-                            {result.winnerEmpireName ?? "No winner"}
+                            {result.winnerDisplayLabel ?? result.winnerEmpireName ?? "No winner"}
                           </dd>
                         </div>
                         <div>

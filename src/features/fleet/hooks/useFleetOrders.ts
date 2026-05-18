@@ -4,6 +4,7 @@ import type { Id } from "../../../../convex/_generated/dataModel";
 
 type IssueOrderArgs = {
   gameId: Id<"sim_games">;
+  gameActorId?: Id<"sim_game_actors">;
   fleetId: Id<"flt_fleets">;
   turnNumber?: number;
   orderType: "move" | "hold";

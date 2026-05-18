@@ -83,6 +83,23 @@ type PublicAutomationStrategyRow = {
   } | null;
 };
 
+type EmpireEditorRow = Doc<"emp_states"> & {
+  runtimeVersion?: "v1_empire" | "v2_game_actor";
+  actorId?: Id<"sim_game_actors"> | null;
+  actorSlotNumber?: number | null;
+  actorLabel?: string | null;
+  actorDisplayName?: string | null;
+};
+
+function empireMetaTarget(empire: EmpireEditorRow):
+  | { empireId: Id<"emp_states"> }
+  | { gameActorId: Id<"sim_game_actors"> } {
+  if (empire.actorId !== undefined && empire.actorId !== null) {
+    return { gameActorId: empire.actorId };
+  }
+  return { empireId: empire._id };
+}
+
 type AutomationProfileRow = {
   _id: Id<"usr_automation_profiles">;
   name: string;
@@ -406,7 +423,7 @@ function SavedAutomationProfileCard(props: {
 }
 
 function AutomationProfilesPanel(props: {
-  empire: Doc<"emp_states">;
+  empire: EmpireEditorRow;
   strategyText: string;
   setStrategyText: (value: string) => void;
 }) {
@@ -479,7 +496,7 @@ function AutomationProfilesPanel(props: {
   async function applyProfileStrategy(strategyJson: string) {
     const normalized = validateStrategyText(strategyJson);
     await updateEmpireMeta({
-      empireId: props.empire._id,
+      ...empireMetaTarget(props.empire),
       strategyJson: normalized,
     });
     props.setStrategyText(normalized);
@@ -637,7 +654,7 @@ function AutomationProfilesPanel(props: {
   );
 }
 
-function EmpireEditor({ empire }: { empire: Doc<"emp_states"> }) {
+function EmpireEditor({ empire }: { empire: EmpireEditorRow }) {
   const updateEmpireMeta = useMutation(api.emp.mutations.updateEmpireMeta);
   const [name, setName] = useState(empire.name);
   const [colorHex, setColorHex] = useState(empire.colorHex);
@@ -664,7 +681,7 @@ function EmpireEditor({ empire }: { empire: Doc<"emp_states"> }) {
     setStatus(null);
     try {
       await updateEmpireMeta({
-        empireId: empire._id,
+        ...empireMetaTarget(empire),
         name,
         colorHex: nextColorHex,
         playerName,
@@ -688,7 +705,7 @@ function EmpireEditor({ empire }: { empire: Doc<"emp_states"> }) {
         ? Math.max(1, parsedStartTurn)
         : 1;
       await updateEmpireMeta({
-        empireId: empire._id,
+        ...empireMetaTarget(empire),
         strategyJson: normalized,
         strategyStartMode,
         strategyStartTurn: strategyStartMode === "turn" ? normalizedStartTurn : null,
@@ -872,11 +889,13 @@ function EmpireEditor({ empire }: { empire: Doc<"emp_states"> }) {
 export function EmpiresPage(props: {
   /** When supplied (player home), list at most this empire (`null` = not present in this game). */
   onlyEmpireId?: Id<"emp_states"> | null;
+  onlyActorId?: Id<"sim_game_actors"> | null;
   hideGamePicker?: boolean;
 }) {
   const hideGamePicker = props.hideGamePicker === true;
   const playerEmpireFilter = "onlyEmpireId" in props;
   const onlyEmpireId = playerEmpireFilter ? props.onlyEmpireId ?? null : undefined;
+  const onlyActorId = playerEmpireFilter ? props.onlyActorId ?? null : undefined;
   const { activeGame, games, setSelectedGameId } = useActiveGame();
   const empiresAllRaw = useQuery(
     api.emp.queries.listEmpires,
@@ -885,9 +904,17 @@ export function EmpiresPage(props: {
   const empiresAll = useMemo(() => empiresAllRaw ?? [], [empiresAllRaw]);
   const empires = useMemo(() => {
     if (!playerEmpireFilter) return empiresAll;
+    if (onlyActorId !== null) {
+      return empiresAll.filter((e) => e.actorId === onlyActorId);
+    }
     if (onlyEmpireId === null) return [];
     return empiresAll.filter((e) => e._id === onlyEmpireId);
-  }, [empiresAll, onlyEmpireId, playerEmpireFilter]);
+  }, [empiresAll, onlyActorId, onlyEmpireId, playerEmpireFilter]);
+  const missingPlayerSeat =
+    playerEmpireFilter &&
+    empiresAll.length > 0 &&
+    empires.length === 0 &&
+    (onlyActorId !== null || onlyEmpireId === null);
   return (
     <div className="mx-auto max-w-5xl space-y-6 px-4 py-6">
       <div className="space-y-1">
@@ -946,7 +973,7 @@ export function EmpiresPage(props: {
             ) : (
               <Card>
                 <p className="text-sm text-st-muted">
-                  {playerEmpireFilter && onlyEmpireId === null && empiresAll.length > 0
+                  {missingPlayerSeat
                     ? "Your assigned empire is not part of this game. Select a matching seeded game from the main app."
                     : "No empires have been seeded yet."}
                 </p>

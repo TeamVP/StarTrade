@@ -263,6 +263,7 @@ export async function seedV1SpiralMap(
   gameSeed: string,
   npcEmpireKeys: readonly string[],
   empireColorPrefLookup: Record<string, string> = {},
+  seedTraderIdentities = true,
 ): Promise<{ systems: number; empires: number; mapKey: string }> {
   await spiralInsertSystemsRange(ctx, gameId, 0, V1_SPIRAL_SYSTEMS.length);
   const npcEmpireCount = await spiralFinishEmpiresNpcHoldingsFleets(ctx, {
@@ -273,7 +274,9 @@ export async function seedV1SpiralMap(
     empireColorPrefLookup,
   });
   await spiralInsertLinksRange(ctx, gameId, 0, V1_SPIRAL_LANE_KEYS.length);
-  await seedNpcTraderIdentitiesForGame(ctx, gameId);
+  if (seedTraderIdentities) {
+    await seedNpcTraderIdentitiesForGame(ctx, gameId);
+  }
 
   return {
     systems: V1_SPIRAL_SYSTEMS.length,

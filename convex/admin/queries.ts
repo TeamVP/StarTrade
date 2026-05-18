@@ -1,9 +1,76 @@
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { v } from "convex/values";
-import { query } from "../_generated/server";
+import { query, type QueryCtx } from "../_generated/server";
+import type { Id } from "../_generated/dataModel";
 import { getAutomationStrategyByKey, toAutomationStrategyCatalogRow } from "../usr/automationStrategyCatalog";
 import { listMissions as listMissionCatalogRows } from "../usr/missionCatalog";
 import { listNpcEmpirePlayers } from "../seed/npcEmpirePlayers";
+import { TRADER_EVENT_TYPES } from "../sim/eventTypePolicies";
+import { gameUsesTraderEconomy, loadGameWithResolvedMode, resolveLoadedGameMode } from "../sim/gameMode";
+
+async function loadOwnerLabels(
+  ctx: QueryCtx,
+  ownerIds: Array<Id<"users"> | null>,
+) {
+  const uniqueOwnerIds = Array.from(new Set(ownerIds.filter((ownerId): ownerId is Id<"users"> => ownerId !== null)));
+  const owners = await Promise.all(uniqueOwnerIds.map((ownerId) => ctx.db.get("users", ownerId)));
+  return new Map(
+    uniqueOwnerIds.map((ownerId, index) => {
+      const user = owners[index] ?? null;
+      return [ownerId, user?.name ?? user?.email ?? null] as const;
+    }),
+  );
+}
+
+async function loadRecentModerationEvents(
+  ctx: QueryCtx,
+  args: {
+    contentType: "mission" | "strategy";
+    contentKeys: string[];
+    limitPerContent?: number;
+  },
+) {
+  const limitPerContent = Math.min(Math.max(args.limitPerContent ?? 3, 1), 5);
+  const uniqueContentKeys = Array.from(new Set(args.contentKeys));
+  const eventRows = await Promise.all(
+    uniqueContentKeys.map(async (contentKey) => ({
+      contentKey,
+      events: await ctx.db
+        .query("admin_content_moderation_events")
+        .withIndex("by_contentType_and_contentKey_and_createdAt", (q) =>
+          q.eq("contentType", args.contentType).eq("contentKey", contentKey),
+        )
+        .order("desc")
+        .take(limitPerContent),
+    })),
+  );
+
+  const actorIds = Array.from(
+    new Set(
+      eventRows.flatMap((row) => row.events.map((event) => event.actorUserId)),
+    ),
+  );
+  const actorUsers = await Promise.all(actorIds.map((actorUserId) => ctx.db.get("users", actorUserId)));
+  const actorLabels = new Map(
+    actorIds.map((actorUserId, index) => {
+      const user = actorUsers[index] ?? null;
+      return [actorUserId, user?.name ?? user?.email ?? null] as const;
+    }),
+  );
+
+  return new Map(
+    eventRows.map((row) => [
+      row.contentKey,
+      row.events.map((event) => ({
+        action: event.action,
+        summary: event.summary,
+        note: event.note ?? null,
+        createdAt: event.createdAt,
+        actorLabel: actorLabels.get(event.actorUserId) ?? null,
+      })),
+    ] as const),
+  );
+}
 
 export const listUsers = query({
   args: {
@@ -41,6 +108,8 @@ export const listUsers = query({
           phoneVerificationTime: user.phoneVerificationTime ?? null,
           isAnonymous: user.isAnonymous ?? false,
           admin: user.admin ?? false,
+          publisher: user.publisher ?? false,
+          plan: user.plan ?? "free",
           hasPasswordAccount: passwordAccount?.userId === user._id,
         };
       }),
@@ -107,6 +176,21 @@ export const getDatabaseHealth = query({
       }
     }
 
+    const users = await ctx.db.query("users").order("desc").take(SAMPLE_GAMES_LIMIT);
+    const missions = await ctx.db.query("sim_missions").collect();
+    const strategies = await ctx.db.query("usr_automation_strategies").collect();
+    const metadataCounts = {
+      missingGameMode: games.filter((game) => game.mode === undefined).length,
+      missingUserPlan: users.filter((user) => user.plan === undefined).length,
+      missingUserPublisher: users.filter((user) => user.publisher === undefined).length,
+      missingMissionMode: missions.filter((mission) => mission.mode === undefined).length,
+      missingMissionRequiredTier: missions.filter((mission) => mission.requiredTier === undefined).length,
+      missingMissionSource: missions.filter((mission) => mission.source === undefined).length,
+      missingMissionStatus: missions.filter((mission) => mission.status === undefined).length,
+      missingStrategySource: strategies.filter((strategy) => strategy.source === undefined).length,
+      missingStrategyStatus: strategies.filter((strategy) => strategy.status === undefined).length,
+    };
+
     const cleanupCandidates = games
       .filter((game) => {
         if (game.status === "finished") {
@@ -136,8 +220,12 @@ export const getDatabaseHealth = query({
 
     const selectedGame =
       args.gameId === undefined
-        ? games[0] ?? null
-        : games.find((game) => game._id === args.gameId) ?? (await ctx.db.get("sim_games", args.gameId));
+        ? await resolveLoadedGameMode(ctx, games[0] ?? null)
+        : await resolveLoadedGameMode(
+            ctx,
+            games.find((game) => game._id === args.gameId) ??
+              (await loadGameWithResolvedMode(ctx, args.gameId)),
+          );
 
     function boundedCountFromRows<T extends { length: number }>(rows: T) {
       return {
@@ -146,26 +234,153 @@ export const getDatabaseHealth = query({
       };
     }
 
+    function subtractTableStats(
+      total: { count: number; capped: boolean },
+      subset: { count: number; capped: boolean },
+    ) {
+      return {
+        // These are sampled counts already, so clamp at zero when the sampled subset
+        // consumes the visible total bucket.
+        count: Math.max(0, total.count - subset.count),
+        capped: total.capped,
+      };
+    }
+
+    const disabledTableStat = {
+      count: 0,
+      capped: false,
+      disabled: true as const,
+    };
+
+    async function countLegacySimTraderIdentities(
+      gameId: NonNullable<typeof selectedGame>["_id"],
+    ) {
+      return boundedCountFromRows(
+        await ctx.db
+          .query("sim_trader_identities")
+          .withIndex("by_gameId", (q) => q.eq("gameId", gameId))
+          .take(TABLE_SAMPLE_LIMIT + 1),
+      );
+    }
+
+    async function countLegacyEcoMarketSnapshots(
+      gameId: NonNullable<typeof selectedGame>["_id"],
+    ) {
+      return boundedCountFromRows(
+        await ctx.db
+          .query("eco_market_snapshots")
+          .withIndex("by_gameId_and_turnNumber", (q) => q.eq("gameId", gameId))
+          .take(TABLE_SAMPLE_LIMIT + 1),
+      );
+    }
+
+    async function countLegacyEcoSystemOutputs(
+      gameId: NonNullable<typeof selectedGame>["_id"],
+    ) {
+      return boundedCountFromRows(
+        await ctx.db
+          .query("eco_system_outputs")
+          .withIndex("by_gameId_and_systemId", (q) => q.eq("gameId", gameId))
+          .take(TABLE_SAMPLE_LIMIT + 1),
+      );
+    }
+
+    async function countLegacyEcoBgTraders(
+      gameId: NonNullable<typeof selectedGame>["_id"],
+    ) {
+      return boundedCountFromRows(
+        await ctx.db
+          .query("eco_bg_traders")
+          .withIndex("by_gameId_and_status", (q) => q.eq("gameId", gameId))
+          .take(TABLE_SAMPLE_LIMIT + 1),
+      );
+    }
+
+    async function countLegacyTrdCharters(
+      gameId: NonNullable<typeof selectedGame>["_id"],
+    ) {
+      return boundedCountFromRows(
+        await ctx.db
+          .query("trd_charters")
+          .withIndex("by_gameId_and_status", (q) => q.eq("gameId", gameId))
+          .take(TABLE_SAMPLE_LIMIT + 1),
+      );
+    }
+
+    async function countLegacyTrdRuns(
+      gameId: NonNullable<typeof selectedGame>["_id"],
+    ) {
+      return boundedCountFromRows(
+        await ctx.db
+          .query("trd_runs")
+          .withIndex("by_gameId_and_turnNumber", (q) => q.eq("gameId", gameId))
+          .take(TABLE_SAMPLE_LIMIT + 1),
+      );
+    }
+
+    async function countLegacyTraderEvents(
+      gameId: NonNullable<typeof selectedGame>["_id"],
+    ) {
+      let count = 0;
+      let capped = false;
+      for (const eventType of TRADER_EVENT_TYPES) {
+        const rows = await ctx.db
+          .query("sim_events")
+          .withIndex("by_gameId_and_eventType", (q) =>
+            q.eq("gameId", gameId).eq("eventType", eventType),
+          )
+          .take(TABLE_SAMPLE_LIMIT + 1);
+        count += Math.min(rows.length, TABLE_SAMPLE_LIMIT + 1);
+        capped ||= rows.length > TABLE_SAMPLE_LIMIT;
+      }
+      return {
+        count: Math.min(count, TABLE_SAMPLE_LIMIT),
+        capped: capped || count > TABLE_SAMPLE_LIMIT,
+      };
+    }
+
+    const selectedGameUsesTraderEconomy =
+      selectedGame !== null && gameUsesTraderEconomy(selectedGame);
+    const selectedGameLegacyTraderEvents =
+      selectedGame !== null && !selectedGameUsesTraderEconomy
+        ? await countLegacyTraderEvents(selectedGame._id)
+        : undefined;
+    const selectedGameSimEvents =
+      selectedGame === null
+        ? undefined
+        : boundedCountFromRows(
+            await ctx.db
+              .query("sim_events")
+              .withIndex("by_gameId", (q) => q.eq("gameId", selectedGame._id))
+              .take(TABLE_SAMPLE_LIMIT + 1),
+          );
+
     const selectedGameTableStats =
       selectedGame === null
         ? null
         : {
             gameId: selectedGame._id,
-          urlCode: selectedGame.urlCode ?? null,
+            urlCode: selectedGame.urlCode ?? null,
             name: selectedGame.name,
+            mode: selectedGame.mode ?? "trader_economy",
+          runtimeVersion: selectedGame.runtimeVersion ?? "v1_empire",
             status: selectedGame.status,
             currentTurn: selectedGame.currentTurn,
             retentionClass: selectedGame.retentionClass ?? null,
             finalizationState: selectedGame.finalizationState ?? null,
-            simEvents: boundedCountFromRows(
-              await ctx.db
-                .query("sim_events")
-                .withIndex("by_gameId", (q) => q.eq("gameId", selectedGame._id))
-                .take(TABLE_SAMPLE_LIMIT + 1),
-            ),
+            simEvents:
+              selectedGameUsesTraderEconomy || selectedGameLegacyTraderEvents === undefined
+                ? selectedGameSimEvents!
+                : subtractTableStats(selectedGameSimEvents!, selectedGameLegacyTraderEvents),
             simTurns: boundedCountFromRows(
               await ctx.db
                 .query("sim_turns")
+                .withIndex("by_gameId", (q) => q.eq("gameId", selectedGame._id))
+                .take(TABLE_SAMPLE_LIMIT + 1),
+            ),
+            simGameActors: boundedCountFromRows(
+              await ctx.db
+                .query("sim_game_actors")
                 .withIndex("by_gameId", (q) => q.eq("gameId", selectedGame._id))
                 .take(TABLE_SAMPLE_LIMIT + 1),
             ),
@@ -243,24 +458,30 @@ export const getDatabaseHealth = query({
                 .withIndex("by_gameId", (q) => q.eq("gameId", selectedGame._id))
                 .take(TABLE_SAMPLE_LIMIT + 1),
             ),
-            ecoMarketSnapshots: boundedCountFromRows(
-              await ctx.db
-                .query("eco_market_snapshots")
-                .withIndex("by_gameId_and_turnNumber", (q) => q.eq("gameId", selectedGame._id))
-                .take(TABLE_SAMPLE_LIMIT + 1),
-            ),
-            ecoSystemOutputs: boundedCountFromRows(
-              await ctx.db
-                .query("eco_system_outputs")
-                .withIndex("by_gameId_and_systemId", (q) => q.eq("gameId", selectedGame._id))
-                .take(TABLE_SAMPLE_LIMIT + 1),
-            ),
-            ecoBgTraders: boundedCountFromRows(
-              await ctx.db
-                .query("eco_bg_traders")
-                .withIndex("by_gameId_and_status", (q) => q.eq("gameId", selectedGame._id))
-                .take(TABLE_SAMPLE_LIMIT + 1),
-            ),
+            ecoMarketSnapshots: gameUsesTraderEconomy(selectedGame)
+              ? boundedCountFromRows(
+                  await ctx.db
+                    .query("eco_market_snapshots")
+                    .withIndex("by_gameId_and_turnNumber", (q) => q.eq("gameId", selectedGame._id))
+                    .take(TABLE_SAMPLE_LIMIT + 1),
+                )
+              : disabledTableStat,
+            ecoSystemOutputs: gameUsesTraderEconomy(selectedGame)
+              ? boundedCountFromRows(
+                  await ctx.db
+                    .query("eco_system_outputs")
+                    .withIndex("by_gameId_and_systemId", (q) => q.eq("gameId", selectedGame._id))
+                    .take(TABLE_SAMPLE_LIMIT + 1),
+                )
+              : disabledTableStat,
+            ecoBgTraders: gameUsesTraderEconomy(selectedGame)
+              ? boundedCountFromRows(
+                  await ctx.db
+                    .query("eco_bg_traders")
+                    .withIndex("by_gameId_and_status", (q) => q.eq("gameId", selectedGame._id))
+                    .take(TABLE_SAMPLE_LIMIT + 1),
+                )
+              : disabledTableStat,
             simGameResults: boundedCountFromRows(
               await ctx.db
                 .query("sim_game_results")
@@ -273,6 +494,29 @@ export const getDatabaseHealth = query({
                 .withIndex("by_gameId", (q) => q.eq("gameId", selectedGame._id))
                 .take(TABLE_SAMPLE_LIMIT + 1),
             ),
+            legacyTraderData: selectedGameUsesTraderEconomy
+              ? null
+              : {
+                  simTraderIdentities: await countLegacySimTraderIdentities(
+                    selectedGame._id,
+                  ),
+                  ecoMarketSnapshots: await countLegacyEcoMarketSnapshots(
+                    selectedGame._id,
+                  ),
+                  ecoSystemOutputs: await countLegacyEcoSystemOutputs(
+                    selectedGame._id,
+                  ),
+                  ecoBgTraders: await countLegacyEcoBgTraders(
+                    selectedGame._id,
+                  ),
+                  simEvents: selectedGameLegacyTraderEvents!,
+                  trdCharters: await countLegacyTrdCharters(
+                    selectedGame._id,
+                  ),
+                  trdRuns: await countLegacyTrdRuns(
+                    selectedGame._id,
+                  ),
+                },
           };
 
     return {
@@ -283,6 +527,7 @@ export const getDatabaseHealth = query({
         statusCounts,
         retentionCounts,
         finalizationCounts,
+        metadataCounts,
         cleanupCandidates,
         cleanupCandidateCount: cleanupCandidates.length,
       },
@@ -302,11 +547,26 @@ export const listAutomationStrategies = query({
 
     const limit = Math.min(Math.max(Math.floor(args.limit ?? 128), 1), 256);
     const strategies = await ctx.db.query("usr_automation_strategies").take(limit);
+    const ownerLabels = await loadOwnerLabels(
+      ctx,
+      strategies.map((row) => row.ownerUserId ?? null),
+    );
+    const moderationEvents = await loadRecentModerationEvents(ctx, {
+      contentType: "strategy",
+      contentKeys: strategies.map((row) => row.key),
+    });
 
     return {
       authorized: true as const,
       strategies: strategies
-        .map((row) => toAutomationStrategyCatalogRow(row))
+        .map((row) => ({
+          ...toAutomationStrategyCatalogRow(row),
+          ownerLabel:
+            row.ownerUserId === undefined || row.ownerUserId === null
+              ? null
+              : ownerLabels.get(row.ownerUserId) ?? null,
+          moderationHistory: moderationEvents.get(row.key) ?? [],
+        }))
         .sort((left, right) => left.name.localeCompare(right.name)),
     };
   },
@@ -364,12 +624,29 @@ export const listMissions = query({
       return { authorized: false as const, missions: [] as const };
     }
 
+    const missions = await listMissionCatalogRows(ctx, {
+      publishedOnly: args.publishedOnly ?? false,
+      fallbackToBuiltIns: args.fallbackToBuiltIns ?? false,
+      includeCommunity: true,
+      includeUnpublishedModes: true,
+    });
+    const ownerLabels = await loadOwnerLabels(
+      ctx,
+      missions.map((mission) => mission.ownerUserId),
+    );
+    const moderationEvents = await loadRecentModerationEvents(ctx, {
+      contentType: "mission",
+      contentKeys: missions.map((mission) => mission.key),
+    });
+
     return {
       authorized: true as const,
-      missions: await listMissionCatalogRows(ctx, {
-        publishedOnly: args.publishedOnly ?? false,
-        fallbackToBuiltIns: args.fallbackToBuiltIns ?? false,
-      }),
+      missions: missions.map((mission) => ({
+        ...mission,
+        ownerLabel:
+          mission.ownerUserId === null ? null : ownerLabels.get(mission.ownerUserId) ?? null,
+        moderationHistory: moderationEvents.get(mission.key) ?? [],
+      })),
     };
   },
 });

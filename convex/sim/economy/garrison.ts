@@ -1,5 +1,6 @@
 import type { Doc, Id } from "../../_generated/dataModel";
 import type { MutationCtx } from "../../_generated/server";
+import { resolveGameActorIdForEmpire } from "../systemHoldings";
 
 /**
  * Adds military ships to an empire's garrison at a system: merges into an idle fleet
@@ -33,6 +34,14 @@ export async function addShipsToSystemGarrison(
     (f) => !params.fleetIdsWithOrdersThisTurn.has(f._id as string),
   );
 
+  const ownerGameActorId =
+    params.system.ownerGameActorId ??
+    (await resolveGameActorIdForEmpire(ctx, {
+      gameId: params.gameId,
+      empireId: params.empire._id,
+    })) ??
+    null;
+
   if (withoutOrder.length > 0) {
     withoutOrder.sort((a, b) => a._id.localeCompare(b._id));
     const keeper = withoutOrder[0];
@@ -41,7 +50,12 @@ export async function addShipsToSystemGarrison(
       total += withoutOrder[i].strength;
       await ctx.db.delete("flt_fleets", withoutOrder[i]._id);
     }
-    await ctx.db.patch("flt_fleets", keeper._id, { strength: total });
+    await ctx.db.patch("flt_fleets", keeper._id, {
+      strength: total,
+      ...((keeper.gameActorId ?? undefined) !== (ownerGameActorId ?? undefined)
+        ? { gameActorId: ownerGameActorId ?? undefined }
+        : {}),
+    });
     return;
   }
 
@@ -49,6 +63,7 @@ export async function addShipsToSystemGarrison(
   await ctx.db.insert("flt_fleets", {
     gameId: params.gameId,
     empireId: params.empire._id,
+    ...(ownerGameActorId !== null ? { gameActorId: ownerGameActorId } : {}),
     fleetKey,
     name: `${params.system.name} Garrison`,
     strength: params.shipsToAdd,

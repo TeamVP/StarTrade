@@ -41,6 +41,7 @@ export function ProfilePage() {
   const displayName = account?.profile?.displayName ?? account?.user.name ?? "Gamer profile";
   const email = account?.user.email ?? "No email on file";
   const avatarUrl = account?.profile?.avatarUrl ?? account?.user.image ?? null;
+  const plan = account?.user.plan ?? "free";
   const initials = initialsFromName(
     account?.profile?.displayName ?? account?.user.name,
     account?.user.email,
@@ -116,6 +117,9 @@ export function ProfilePage() {
             <div className="min-w-0">
               <h1 className="truncate text-2xl font-semibold text-st-fg">{displayName}</h1>
               <p className="mt-1 text-sm text-st-muted">{email}</p>
+              <p className="mt-2 text-xs uppercase tracking-wide text-st-muted">
+                Plan <span className="font-medium text-st-fg">{plan === "pro" ? "Pro" : "Free"}</span>
+              </p>
               <p className="mt-2 text-sm text-st-muted">
                 Manage your gamer profile, account details, and session state from one place.
               </p>
@@ -204,6 +208,10 @@ export function ProfilePage() {
               <dd className="mt-1 font-medium text-st-fg">
                 {avatarUrl !== null ? "Custom avatar set" : "Using initials"}
               </dd>
+            </div>
+            <div className="rounded border border-st-border bg-st-bg p-3">
+              <dt className="text-xs uppercase tracking-wide">Plan</dt>
+              <dd className="mt-1 font-medium text-st-fg">{plan === "pro" ? "Pro" : "Free"}</dd>
             </div>
           </dl>
         </Card>

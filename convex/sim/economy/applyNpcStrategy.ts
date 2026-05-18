@@ -8,6 +8,7 @@ import {
   shipsToDispatchFromPct,
 } from "../garrisonRoutes";
 import { dispatchMoveFromFleet } from "../fleetDispatch";
+import { resolveGameActorIdForEmpire } from "../systemHoldings";
 import {
   cleanupFleetOrdersForTurn,
   hasManualOrderOriginLock,
@@ -788,6 +789,7 @@ async function upsertStrategyRoutes(
   params: {
     gameId: Id<"sim_games">;
     empireId: Id<"emp_states">;
+    gameActorId: Id<"sim_game_actors"> | null;
     turnNumber: number;
     desiredRoutes: DesiredRoute[];
     existingRoutes: Doc<"flt_garrison_routes">[];
@@ -853,6 +855,7 @@ async function upsertStrategyRoutes(
       dispatchPct?: number;
       enabled?: boolean;
       ownershipInvalidTurns?: number;
+      gameActorId?: Id<"sim_game_actors"> | undefined;
       strategyPurpose?: StrategyPurpose;
       strategyUpdatedTurn?: number;
     } = {};
@@ -867,6 +870,9 @@ async function upsertStrategyRoutes(
     }
     if ((route.ownershipInvalidTurns ?? 0) !== 0) {
       patch.ownershipInvalidTurns = 0;
+    }
+    if ((route.gameActorId ?? undefined) !== (params.gameActorId ?? undefined)) {
+      patch.gameActorId = params.gameActorId ?? undefined;
     }
     if (route.strategyPurpose !== desired.purpose) {
       patch.strategyPurpose = desired.purpose;
@@ -899,6 +905,7 @@ async function upsertStrategyRoutes(
     await ctx.db.insert("flt_garrison_routes", {
       gameId: params.gameId,
       empireId: params.empireId,
+      ...(params.gameActorId !== null ? { gameActorId: params.gameActorId } : {}),
       originSystemId: route.originSystemId,
       destinationSystemId: route.destinationSystemId,
       dispatchPct: route.dispatchPct,
@@ -1015,10 +1022,15 @@ async function maintainStrategyRoutesForEmpire(
   const systemsById = new Map(params.systems.map((system) => [system._id, system]));
   const ownedSystems = params.ownedSystems;
   const ownedSystemIds = new Set(ownedSystems.map((system) => system._id as string));
+  const gameActorId = await resolveGameActorIdForEmpire(ctx, {
+    gameId: params.gameId,
+    empireId: params.empire._id,
+  });
   if (ownedSystems.length === 0) {
     await upsertStrategyRoutes(ctx, {
       gameId: params.gameId,
       empireId: params.empire._id,
+      gameActorId,
       turnNumber: params.turnNumber,
       desiredRoutes: [],
       existingRoutes: params.existingRoutes,
@@ -1304,6 +1316,7 @@ async function maintainStrategyRoutesForEmpire(
   await upsertStrategyRoutes(ctx, {
     gameId: params.gameId,
     empireId: params.empire._id,
+    gameActorId,
     turnNumber: params.turnNumber,
     desiredRoutes,
     existingRoutes: params.existingRoutes,

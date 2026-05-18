@@ -10,14 +10,17 @@ import {
 } from "../sim/helpers";
 import { invalidateOpenTurnPreparation } from "../sim/turnPreparationInvalidation";
 
-async function resolvePriorityStarEmpireId(
+async function resolvePriorityStarAccess(
   ctx: MutationCtx,
   params: {
     gameId: Id<"sim_games">;
     userId: Id<"users">;
     requestedEmpireId?: Id<"emp_states">;
   },
-): Promise<Id<"emp_states">> {
+): Promise<{
+  empireId: Id<"emp_states">;
+  gameActorId: Id<"sim_game_actors"> | null;
+}> {
   const binding = await ctx.db
     .query("usr_game_roles")
     .withIndex("by_gameId_and_userId", (q) =>
@@ -28,14 +31,33 @@ async function resolvePriorityStarEmpireId(
     throw new Error("You need an active role in this game.");
   }
 
-  if (binding.role === "empire" && binding.empireId !== null) {
+  if (binding.role === "empire") {
+    let controlledEmpireId = binding.empireId;
+    let controlledGameActorId: Id<"sim_game_actors"> | null = null;
+    if (controlledEmpireId === null) {
+      const game = await ctx.db.get("sim_games", params.gameId);
+      const runtimeVersion = game?.runtimeVersion ?? "v1_empire";
+      if (runtimeVersion === "v2_game_actor") {
+        const actor = await ctx.db
+          .query("sim_game_actors")
+          .withIndex("by_gameId_and_controllerUserId", (q) =>
+            q.eq("gameId", params.gameId).eq("controllerUserId", params.userId),
+          )
+          .unique();
+        controlledGameActorId = actor?._id ?? null;
+        controlledEmpireId = actor?.legacyEmpireId ?? null;
+      }
+    }
+    if (controlledEmpireId === null) {
+      throw new Error("Empire players must control a faction before marking Priority stars.");
+    }
     if (
       params.requestedEmpireId !== undefined &&
-      params.requestedEmpireId !== binding.empireId
+      params.requestedEmpireId !== controlledEmpireId
     ) {
       throw new Error("Empire players can only mark Priority stars for their own empire.");
     }
-    return binding.empireId;
+    return { empireId: controlledEmpireId, gameActorId: controlledGameActorId };
   }
 
   if (binding.role === "admin") {
@@ -46,10 +68,27 @@ async function resolvePriorityStarEmpireId(
     if (empire === null || empire.gameId !== params.gameId) {
       throw new Error("Empire not found in this game.");
     }
-    return empire._id;
+    return { empireId: empire._id, gameActorId: null };
   }
 
   throw new Error("Only empire players and game admins can mark Priority stars.");
+}
+
+async function assertGameActorMatchesEmpire(
+  ctx: MutationCtx,
+  params: {
+    gameId: Id<"sim_games">;
+    gameActorId: Id<"sim_game_actors">;
+    empireId: Id<"emp_states">;
+  },
+): Promise<void> {
+  const actor = await ctx.db.get("sim_game_actors", params.gameActorId);
+  if (actor === null || actor.gameId !== params.gameId) {
+    throw new Error("Game actor not found.");
+  }
+  if (actor.legacyEmpireId !== params.empireId) {
+    throw new Error("Game actor does not match the controlled empire.");
+  }
 }
 
 /**
@@ -132,6 +171,7 @@ export const setPriorityStar = mutation({
     systemId: v.id("gal_systems"),
     enabled: v.boolean(),
     empireId: v.optional(v.id("emp_states")),
+    gameActorId: v.optional(v.id("sim_game_actors")),
   },
   returns: v.null(),
   handler: async (ctx, args) => {
@@ -149,11 +189,20 @@ export const setPriorityStar = mutation({
       throw new Error("System not found in this game.");
     }
 
-    const empireId = await resolvePriorityStarEmpireId(ctx, {
+    const access = await resolvePriorityStarAccess(ctx, {
       gameId: args.gameId,
       userId,
       requestedEmpireId: args.empireId,
     });
+    const empireId = access.empireId;
+    if (args.gameActorId !== undefined) {
+      await assertGameActorMatchesEmpire(ctx, {
+        gameId: args.gameId,
+        gameActorId: args.gameActorId,
+        empireId,
+      });
+    }
+    const resolvedGameActorId = args.gameActorId ?? access.gameActorId;
     const existing = await ctx.db
       .query("emp_priority_stars")
       .withIndex("by_gameId_and_empireId_and_systemId", (q) =>
@@ -174,6 +223,9 @@ export const setPriorityStar = mutation({
       await ctx.db.insert("emp_priority_stars", {
         gameId: args.gameId,
         empireId,
+        ...(resolvedGameActorId !== null && resolvedGameActorId !== undefined
+          ? { gameActorId: resolvedGameActorId }
+          : {}),
         systemId: args.systemId,
         createdByUserId: userId,
         createdAt: Date.now(),

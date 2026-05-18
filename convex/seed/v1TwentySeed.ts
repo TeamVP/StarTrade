@@ -22,6 +22,7 @@ export async function seedV1TwentyMap(
   gameSeed: string,
   npcEmpireKeys: readonly string[],
   empireColorPrefLookup: Record<string, string> = {},
+  seedTraderIdentities = true,
 ): Promise<{ systems: number; empires: number; mapKey: string }> {
   const keyToId = new Map<string, Id<"gal_systems">>();
   const coordByKey = new Map<string, { x: number; y: number }>();
@@ -196,7 +197,9 @@ export async function seedV1TwentyMap(
     status: "idle",
   });
 
-  await seedNpcTraderIdentitiesForGame(ctx, gameId);
+  if (seedTraderIdentities) {
+    await seedNpcTraderIdentitiesForGame(ctx, gameId);
+  }
 
   return {
     systems: V1_TWENTY_SYSTEMS.length,

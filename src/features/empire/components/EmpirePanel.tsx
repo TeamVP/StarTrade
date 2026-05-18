@@ -78,6 +78,9 @@ function StrategicSlidersBlock(props: { gameId: Id<"sim_games"> }) {
     <div className="mt-3 space-y-3 border-t border-st-border pt-3">
       <p className="text-[11px] text-st-muted">
         Override your strategy&apos;s default settings.
+        {data.runtimeVersion === "v2_game_actor" && data.actorSlotNumber !== null
+          ? ` Controls Actor ${data.actorSlotNumber}${data.actorDisplayName !== null ? ` (${data.actorDisplayName})` : data.actorLabel !== null ? ` (${data.actorLabel})` : ""}.`
+          : ""}
       </p>
       {STRATEGIC_SLIDER_KEYS.map((key) => {
         const defaultLevel = data.defaults[key];
@@ -110,9 +113,19 @@ function StrategicSlidersBlock(props: { gameId: Id<"sim_games"> }) {
                     }
                     onClick={() => {
                       if (level === defaultLevel) {
-                        void patchSlider({ gameId: props.gameId, key, level: null });
+                        void patchSlider({
+                          gameId: props.gameId,
+                          gameActorId: data.actorId ?? undefined,
+                          key,
+                          level: null,
+                        });
                       } else {
-                        void patchSlider({ gameId: props.gameId, key, level });
+                        void patchSlider({
+                          gameId: props.gameId,
+                          gameActorId: data.actorId ?? undefined,
+                          key,
+                          level,
+                        });
                       }
                     }}
                   >
@@ -321,20 +334,49 @@ function EmpireAutomationPicker(props: { gameId: Id<"sim_games"> }) {
 }
 
 function resolveHomeworldSystemId(
-  empire: { _id: Id<"emp_states">; homeSystemId: Id<"gal_systems"> | null },
+  empire: {
+    _id: Id<"emp_states">;
+    homeSystemId: Id<"gal_systems"> | null;
+    runtimeVersion?: "v1_empire" | "v2_game_actor";
+    actorId?: Id<"sim_game_actors"> | null;
+  },
   systems: {
     _id: Id<"gal_systems">;
+    name: string;
     ownerEmpireId: Id<"emp_states"> | null;
+    runtimeVersion?: "v1_empire" | "v2_game_actor";
+    ownerActorId?: Id<"sim_game_actors"> | null;
     isHomeworld: boolean;
   }[],
 ): Id<"gal_systems"> | null {
   if (empire.homeSystemId !== null) return empire.homeSystemId;
+  const matchesOwnership = (system: (typeof systems)[number]) => {
+    if (
+      empire.runtimeVersion === "v2_game_actor" &&
+      empire.actorId !== null &&
+      empire.actorId !== undefined &&
+      system.runtimeVersion === "v2_game_actor" &&
+      system.ownerActorId !== null &&
+      system.ownerActorId !== undefined
+    ) {
+      return system.ownerActorId === empire.actorId;
+    }
+    return system.ownerEmpireId === empire._id;
+  };
   const homeworld = systems.find(
-    (s) => s.ownerEmpireId === empire._id && s.isHomeworld,
+    (s) => matchesOwnership(s) && s.isHomeworld,
   );
   if (homeworld !== undefined) return homeworld._id;
-  const anyOwned = systems.find((s) => s.ownerEmpireId === empire._id);
+  const anyOwned = systems.find((s) => matchesOwnership(s));
   return anyOwned?._id ?? null;
+}
+
+function resolveEmpireDisplayLabel(empire: EmpireSnapshotDoc): string {
+  if (empire.runtimeVersion === "v2_game_actor" && empire.actorSlotNumber !== null) {
+    const actorName = empire.actorDisplayName ?? empire.actorLabel ?? empire.name;
+    return `Actor ${empire.actorSlotNumber}${actorName.length > 0 ? ` · ${actorName}` : ""}`;
+  }
+  return empire.name;
 }
 
 /** Empire Snapshot: names longer than 18 chars show 15 chars plus an ellipsis. */
@@ -361,6 +403,11 @@ type EmpireSnapshotDoc = {
   colorHex: string;
   treasury: number;
   population: number;
+  runtimeVersion?: "v1_empire" | "v2_game_actor";
+  actorId?: Id<"sim_game_actors"> | null;
+  actorSlotNumber?: number | null;
+  actorLabel?: string | null;
+  actorDisplayName?: string | null;
   controller?: "human" | "npc";
   playerName?: string;
   insolvencyTurns?: number;
@@ -371,11 +418,13 @@ function EmpireSnapshotListRow(props: {
   empire: EmpireSnapshotDoc;
   starsOwned: number;
   homeworldId: Id<"gal_systems"> | null;
+  homeworldName: string | null;
   requestEmpireHomeworldFocus?: (empireId: Id<"emp_states">) => void;
   showCredits: boolean;
 }) {
-  const { empire, starsOwned, homeworldId, requestEmpireHomeworldFocus, showCredits } = props;
+  const { empire, starsOwned, homeworldId, homeworldName, requestEmpireHomeworldFocus, showCredits } = props;
   const canFocusHomeworld = requestEmpireHomeworldFocus !== undefined && homeworldId !== null;
+  const displayLabel = resolveEmpireDisplayLabel(empire);
 
   return (
     <li className="flex justify-between gap-2">
@@ -390,16 +439,27 @@ function EmpireSnapshotListRow(props: {
             <button
               type="button"
               className="block max-w-44 text-left font-medium text-cyan-200/95 underline decoration-cyan-500/40 decoration-dotted underline-offset-2 hover:text-cyan-100 hover:decoration-cyan-300/70"
-              title={`${empire.name} — pan map to homeworld`}
+              title={`${displayLabel} — pan map to homeworld`}
               onClick={() => requestEmpireHomeworldFocus?.(empire._id)}
             >
-              {formatEmpireSnapshotName(empire.name)}
+              {formatEmpireSnapshotName(displayLabel)}
             </button>
           ) : (
-            <span className="block font-medium text-st-fg" title={empire.name}>
-              {formatEmpireSnapshotName(empire.name)}
+            <span className="block font-medium text-st-fg" title={displayLabel}>
+              {formatEmpireSnapshotName(displayLabel)}
             </span>
           )}
+          {empire.runtimeVersion === "v2_game_actor" && empire.actorSlotNumber !== undefined && empire.actorSlotNumber !== null ? (
+            <span className="block text-[11px] text-st-muted">
+              Actor {empire.actorSlotNumber}
+              {empire.actorDisplayName !== null && empire.actorDisplayName !== undefined
+                ? ` · ${empire.actorDisplayName}`
+                : ""}
+            </span>
+          ) : null}
+          {homeworldName !== null ? (
+            <span className="block text-[11px] text-st-muted">Homeworld: {homeworldName}</span>
+          ) : null}
           {empire.playerName !== undefined ? (
             <span className="block text-[11px] text-st-muted">
               {empire.controller === "npc" ? "NPC" : "Player"}: {empire.playerName}
@@ -428,8 +488,13 @@ function EmpireSnapshotListRow(props: {
   );
 }
 
-export function EmpirePanel(props: { focusEmpireId?: Id<"emp_states"> | null }) {
+export function EmpirePanel(props: {
+  focusEmpireId?: Id<"emp_states"> | null;
+  focusActorId?: Id<"sim_game_actors"> | null;
+}) {
   const focusEmpireId = props.focusEmpireId ?? null;
+  const focusActorId = props.focusActorId ?? null;
+  const hasFocusTarget = focusEmpireId !== null || focusActorId !== null;
   const { activeGame, setSelectedGameId } = useActiveGame();
   const galaxyMapNav = useGalaxyMapNav();
   const requestEmpireHomeworldFocus = galaxyMapNav?.requestEmpireHomeworldFocus;
@@ -456,10 +521,11 @@ export function EmpirePanel(props: { focusEmpireId?: Id<"emp_states"> | null }) 
   const [pauseBusy, setPauseBusy] = useState(false);
   const [pauseError, setPauseError] = useState<string | null>(null);
 
-  const turnTimeline = useQuery(
-    api.sim.queries.getTurnTimelineForGame,
+  const turnPresentationPackage = useQuery(
+    api.sim.queries.getTurnPresentationPackageForGame,
     activeGame ? { gameId: activeGame._id } : "skip",
   );
+  const turnTimeline = turnPresentationPackage?.timeline;
 
   const turnStartedAt = turnTimeline?.turnStartedAt ?? null;
   const turnDurationMs = turnTimeline?.turnDurationMs ?? null;
@@ -473,7 +539,7 @@ export function EmpirePanel(props: { focusEmpireId?: Id<"emp_states"> | null }) 
 
   // Fraction elapsed in the current turn window [0..1]; visible during running AND paused.
   const turnElapsedFrac = useMemo(() => {
-    if (gameStatus !== "running" && gameStatus !== "paused") return null;
+    if (!(turnTimeline?.isTurnClockActive ?? false)) return null;
     return getTurnElapsedFraction({
       turnStartedAtMs: turnStartedAt,
       turnDurationMs,
@@ -481,20 +547,58 @@ export function EmpirePanel(props: { focusEmpireId?: Id<"emp_states"> | null }) 
       gameStatus,
       turnPausedAtMs,
     });
-  }, [gameStatus, alignedNowMs, turnStartedAt, turnDurationMs, turnPausedAtMs]);
+  }, [alignedNowMs, gameStatus, turnDurationMs, turnPausedAtMs, turnStartedAt, turnTimeline?.isTurnClockActive]);
 
   type EmpireRow = (typeof empires)[number];
 
+  const ownedSystemCountByEmpireId = useMemo(() => {
+    const counts = new Map<Id<"emp_states">, number>();
+    for (const system of systems) {
+      if (system.ownerEmpireId === null) continue;
+      counts.set(system.ownerEmpireId, (counts.get(system.ownerEmpireId) ?? 0) + 1);
+    }
+    return counts;
+  }, [systems]);
+  const ownedSystemCountByActorId = useMemo(() => {
+    const counts = new Map<Id<"sim_game_actors">, number>();
+    for (const system of systems) {
+      if (
+        system.runtimeVersion !== "v2_game_actor" ||
+        system.ownerActorId === null ||
+        system.ownerActorId === undefined
+      ) {
+        continue;
+      }
+      counts.set(system.ownerActorId, (counts.get(system.ownerActorId) ?? 0) + 1);
+    }
+    return counts;
+  }, [systems]);
+  const systemNameById = useMemo(
+    () => new Map(systems.map((system) => [system._id, system.name] as const)),
+    [systems],
+  );
+  const getStarsOwned = (empire: EmpireRow) =>
+    empire.runtimeVersion === "v2_game_actor" &&
+    empire.actorId !== null &&
+    empire.actorId !== undefined
+      ? (ownedSystemCountByActorId.get(empire.actorId) ?? 0)
+      : (ownedSystemCountByEmpireId.get(empire._id) ?? 0);
+
   const { snapshotEmpire, otherHumanEmpires, npcEmpires } = useMemo(() => {
-    if (focusEmpireId === null) {
+    if (!hasFocusTarget) {
       return {
         snapshotEmpire: null as EmpireRow | null,
         otherHumanEmpires: [] as EmpireRow[],
         npcEmpires: [] as EmpireRow[],
       };
     }
-    const mine = empires.find((e) => e._id === focusEmpireId) ?? null;
-    const rest = empires.filter((e) => e._id !== focusEmpireId);
+    const mine =
+      (focusActorId !== null
+        ? empires.find((e) => e.actorId === focusActorId)
+        : undefined) ??
+      (focusEmpireId !== null ? empires.find((e) => e._id === focusEmpireId) : undefined) ??
+      null;
+    const rest = mine === null ? empires : empires.filter((e) => e._id !== mine._id);
     const humans = rest.filter((e) => e.controller !== "npc");
     const npcs = rest.filter((e) => e.controller === "npc");
     const byName = (a: EmpireRow, b: EmpireRow) => a.name.localeCompare(b.name);
@@ -503,31 +607,36 @@ export function EmpirePanel(props: { focusEmpireId?: Id<"emp_states"> | null }) 
       otherHumanEmpires: [...humans].sort(byName),
       npcEmpires: [...npcs].sort(byName),
     };
-  }, [empires, focusEmpireId]);
+  }, [empires, focusActorId, focusEmpireId, hasFocusTarget]);
 
   const hasRivalSection =
-    focusEmpireId !== null && (otherHumanEmpires.length > 0 || npcEmpires.length > 0);
+    hasFocusTarget && (otherHumanEmpires.length > 0 || npcEmpires.length > 0);
   const snapshotStarsOwned =
     snapshotEmpire === null
       ? 0
-      : systems.filter((s) => s.ownerEmpireId === snapshotEmpire._id).length;
+      : getStarsOwned(snapshotEmpire);
+  const snapshotHomeworldId =
+    snapshotEmpire === null ? null : resolveHomeworldSystemId(snapshotEmpire, systems);
+  const snapshotHomeworldName =
+    snapshotHomeworldId === null ? null : (systemNameById.get(snapshotHomeworldId) ?? null);
   const canResignFromSnapshot =
     activeGame !== null &&
     snapshotEmpire !== null &&
     activeGame.status !== "finished" &&
     myMembership?.isEmpirePlayer === true &&
-    myMembership.empireId === snapshotEmpire._id;
+    ((myMembership.runtimeVersion === "v2_game_actor" &&
+      myMembership.actorId !== null &&
+      snapshotEmpire.actorId !== null &&
+      snapshotEmpire.actorId !== undefined
+        ? myMembership.actorId === snapshotEmpire.actorId
+        : myMembership.empireId === snapshotEmpire._id));
   const canCreateNewStarterGame =
     activeGame !== null &&
     (activeGame.missionKey ?? activeGame.lobbyScenarioKey ?? null) !== null &&
     activeGame.status === "finished";
   const canPauseOrResume =
     activeGame !== null &&
-    ((activeGame.status === "running" &&
-      (turnTimeline?.turnState === undefined ||
-        turnTimeline.turnState === null ||
-        turnTimeline.turnState === "open")) ||
-      activeGame.status === "paused") &&
+    (turnTimeline?.acceptingOrders ?? false) &&
     (myMembership?.role === "empire" || myMembership?.role === "admin");
 
   async function onPauseToggle() {
@@ -636,7 +745,7 @@ export function EmpirePanel(props: { focusEmpireId?: Id<"emp_states"> | null }) 
         <dd className="text-right capitalize">{activeGame?.status ?? "—"}</dd>
         <dt className="text-st-muted">Turn</dt>
         <dd className="text-right">{activeGame?.currentTurn ?? "—"}</dd>
-        {focusEmpireId === null ? (
+        {!hasFocusTarget ? (
           <>
             <dt className="text-st-muted">Systems</dt>
             <dd className="text-right">{systems.length}</dd>
@@ -646,17 +755,25 @@ export function EmpirePanel(props: { focusEmpireId?: Id<"emp_states"> | null }) 
         ) : (
           <>
             <dt className="text-st-muted">Your empire</dt>
-            <dd className="truncate text-right text-st-fg" title={snapshotEmpire?.name ?? ""}>
-              {snapshotEmpire?.name ?? "—"}
+            <dt className="text-st-muted">
+              {snapshotEmpire?.runtimeVersion === "v2_game_actor" ? "Your actor" : "Your empire"}
+            </dt>
+            <dd
+              className="truncate text-right text-st-fg"
+              title={snapshotEmpire !== null ? resolveEmpireDisplayLabel(snapshotEmpire) : ""}
+            >
+              {snapshotEmpire !== null ? resolveEmpireDisplayLabel(snapshotEmpire) : "—"}
             </dd>
             <dt className="text-st-muted">Stars held</dt>
             <dd className="text-right">
               {snapshotEmpire === null ? "—" : snapshotStarsOwned}
             </dd>
+            <dt className="text-st-muted">Homeworld</dt>
+            <dd className="truncate text-right">{snapshotHomeworldName ?? "—"}</dd>
           </>
         )}
       </dl>
-      {focusEmpireId !== null && empires.length > 0 && snapshotEmpire === null ? (
+      {hasFocusTarget && empires.length > 0 && snapshotEmpire === null ? (
         <p className="mt-3 text-xs text-amber-300/90">
           This game has no empire matching your assigned faction. Check the active game or seed.
         </p>
@@ -664,7 +781,7 @@ export function EmpirePanel(props: { focusEmpireId?: Id<"emp_states"> | null }) 
       {activeGame !== null && snapshotEmpire !== null ? (
         <EmpireAutomationPicker gameId={activeGame._id} />
       ) : null}
-      {focusEmpireId !== null &&
+      {hasFocusTarget &&
       (snapshotEmpire !== null || otherHumanEmpires.length > 0 || npcEmpires.length > 0) ? (
         <div className="mt-3 space-y-2 border-t border-st-border pt-3 text-xs">
           {snapshotEmpire !== null ? (
@@ -672,7 +789,8 @@ export function EmpirePanel(props: { focusEmpireId?: Id<"emp_states"> | null }) 
               <EmpireSnapshotListRow
                 empire={snapshotEmpire}
                 starsOwned={snapshotStarsOwned}
-                homeworldId={resolveHomeworldSystemId(snapshotEmpire, systems)}
+                homeworldId={snapshotHomeworldId}
+                homeworldName={snapshotHomeworldName}
                 requestEmpireHomeworldFocus={requestEmpireHomeworldFocus}
                 showCredits={true}
               />
@@ -716,47 +834,65 @@ export function EmpirePanel(props: { focusEmpireId?: Id<"emp_states"> | null }) 
               {snapshotEmpire !== null ? <div className="border-t border-st-border" /> : null}
               {otherHumanEmpires.length > 0 ? (
                 <ul className="space-y-2">
-                  {otherHumanEmpires.map((empire) => (
-                    <EmpireSnapshotListRow
-                      key={empire._id}
-                      empire={empire}
-                      starsOwned={systems.filter((s) => s.ownerEmpireId === empire._id).length}
-                      homeworldId={resolveHomeworldSystemId(empire, systems)}
-                      requestEmpireHomeworldFocus={requestEmpireHomeworldFocus}
-                      showCredits={false}
-                    />
-                  ))}
+                  {otherHumanEmpires.map((empire) => {
+                    const homeworldId = resolveHomeworldSystemId(empire, systems);
+                    const homeworldName =
+                      homeworldId === null ? null : (systemNameById.get(homeworldId) ?? null);
+                    return (
+                      <EmpireSnapshotListRow
+                        key={empire._id}
+                        empire={empire}
+                        starsOwned={getStarsOwned(empire)}
+                        homeworldId={homeworldId}
+                        homeworldName={homeworldName}
+                        requestEmpireHomeworldFocus={requestEmpireHomeworldFocus}
+                        showCredits={false}
+                      />
+                    );
+                  })}
                 </ul>
               ) : null}
               {npcEmpires.length > 0 ? (
                 <ul className={`space-y-2 ${otherHumanEmpires.length > 0 ? "mt-2" : ""}`}>
-                  {npcEmpires.map((empire) => (
-                    <EmpireSnapshotListRow
-                      key={empire._id}
-                      empire={empire}
-                      starsOwned={systems.filter((s) => s.ownerEmpireId === empire._id).length}
-                      homeworldId={resolveHomeworldSystemId(empire, systems)}
-                      requestEmpireHomeworldFocus={requestEmpireHomeworldFocus}
-                      showCredits={false}
-                    />
-                  ))}
+                  {npcEmpires.map((empire) => {
+                    const homeworldId = resolveHomeworldSystemId(empire, systems);
+                    const homeworldName =
+                      homeworldId === null ? null : (systemNameById.get(homeworldId) ?? null);
+                    return (
+                      <EmpireSnapshotListRow
+                        key={empire._id}
+                        empire={empire}
+                        starsOwned={getStarsOwned(empire)}
+                        homeworldId={homeworldId}
+                        homeworldName={homeworldName}
+                        requestEmpireHomeworldFocus={requestEmpireHomeworldFocus}
+                        showCredits={false}
+                      />
+                    );
+                  })}
                 </ul>
               ) : null}
             </>
           ) : null}
         </div>
-      ) : focusEmpireId === null && empires.length > 0 ? (
+      ) : !hasFocusTarget && empires.length > 0 ? (
         <ul className="mt-3 space-y-2 border-t border-st-border pt-3 text-xs">
-          {empires.map((empire) => (
-            <EmpireSnapshotListRow
-              key={empire._id}
-              empire={empire}
-              starsOwned={systems.filter((s) => s.ownerEmpireId === empire._id).length}
-              homeworldId={resolveHomeworldSystemId(empire, systems)}
-              requestEmpireHomeworldFocus={requestEmpireHomeworldFocus}
-              showCredits={true}
-            />
-          ))}
+          {empires.map((empire) => {
+            const homeworldId = resolveHomeworldSystemId(empire, systems);
+            const homeworldName =
+              homeworldId === null ? null : (systemNameById.get(homeworldId) ?? null);
+            return (
+              <EmpireSnapshotListRow
+                key={empire._id}
+                empire={empire}
+                starsOwned={getStarsOwned(empire)}
+                homeworldId={homeworldId}
+                homeworldName={homeworldName}
+                requestEmpireHomeworldFocus={requestEmpireHomeworldFocus}
+                showCredits={true}
+              />
+            );
+          })}
         </ul>
       ) : null}
     </Card>

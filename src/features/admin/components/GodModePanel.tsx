@@ -3,6 +3,7 @@ import { useMutation, useQuery } from "convex/react";
 import { api } from "../../../../convex/_generated/api";
 import type { Id } from "../../../../convex/_generated/dataModel";
 import { Button } from "@/components/ui/button";
+import { gameModeSupportsTraderGameplay, type GameMode } from "@/features/games/gameMode";
 
 type Settings = {
   foodProdMult: number;
@@ -269,7 +270,14 @@ function SliderGroup({
   );
 }
 
-export function GodModePanel({ gameId }: { gameId: Id<"sim_games"> }) {
+export function GodModePanel({
+  gameId,
+  gameMode,
+}: {
+  gameId: Id<"sim_games">;
+  gameMode?: GameMode;
+}) {
+  const traderGameplayEnabled = gameModeSupportsTraderGameplay(gameMode);
   const serverSettings = useQuery(api.admin.mutations.getGameSettings, { gameId });
   const updateSettings = useMutation(api.admin.mutations.updateGameSettings);
   const resetSettings = useMutation(api.admin.mutations.resetGameSettings);
@@ -348,12 +356,23 @@ export function GodModePanel({ gameId }: { gameId: Id<"sim_games"> }) {
         settings={local}
         onChange={handleChange}
       />
-      <SliderGroup
-        title="Markets & Traders"
-        sliders={MARKET_SLIDERS}
-        settings={local}
-        onChange={handleChange}
-      />
+      {traderGameplayEnabled ? (
+        <SliderGroup
+          title="Markets & Traders"
+          sliders={MARKET_SLIDERS}
+          settings={local}
+          onChange={handleChange}
+        />
+      ) : (
+        <div className="space-y-3">
+          <p className="text-[10px] font-semibold uppercase tracking-widest text-st-muted border-b border-st-border pb-1">
+            Markets & Traders
+          </p>
+          <p className="text-xs text-st-muted">
+            Trader and market overrides are disabled for this game mode.
+          </p>
+        </div>
+      )}
       <SliderGroup
         title="Combat"
         sliders={COMBAT_SLIDERS}

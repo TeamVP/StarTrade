@@ -24,11 +24,13 @@ import {
   resolveOpeningStrike,
 } from "./combat";
 import { insertSimEvent } from "./eventLog";
+import { TRADER_EVENT_TYPES } from "./eventTypePolicies";
 import { applyFleetMoveOrders, cleanupFleetOrdersForTurn } from "./fleetOrders";
 import { applyGarrisonRoutes } from "./garrisonRoutes";
-import { reconcileSystemHolding } from "./systemHoldings";
+import { reconcileSystemHolding, resolveGameActorIdForEmpire } from "./systemHoldings";
 import { POPULATION_MIN_INHABITED_PEOPLE } from "./economy/population";
 import { findLinkBetweenSystems } from "../gal/linkUtils";
+import { getMissionByKey } from "../usr/missionCatalog";
 import { travelTurnsFromLinkCost } from "./fleetDispatch";
 import { evaluateGameFinalization } from "./finalization";
 import { recordGameTurnResolved } from "./helpers";
@@ -43,12 +45,24 @@ import {
 } from "./turnPreparationInvalidation";
 import {
   committedNextTurnStartedAt,
-  msUntilTurnBoundary,
-  msUntilTurnPreparationStart,
   scheduledNextTurnStartedAt,
   scheduledTurnPreparationAt,
   turnDurationHasElapsed,
 } from "./turnTiming";
+import { scheduleGameTurnWakeups } from "./wakeScheduler";
+import {
+  completedTraderVoyageHistoryTurnsToKeep,
+  compareTurnResolutionPhases,
+  economyTranscriptHistoryTurnsToKeep,
+  FIRST_TURN_RESOLUTION_PHASE,
+  gameUsesTraderEconomy,
+  gameRunsResolutionPhase,
+  liveEventHistoryTurnsToKeep,
+  nextTurnResolutionPhase,
+  parseTurnResolutionPhase,
+  resolutionPhasesBetween,
+  type TurnResolutionPhase,
+} from "./gameMode";
 
 /** Max en-route fleet rows scanned for arrivals (indexed `by_gameId_and_status`). */
 const MAX_ENROUTE_FLEETS_SCAN = 768;
@@ -58,6 +72,34 @@ const MAX_IDLE_FLEETS_SCAN = 1024;
 const PREPARATION_HISTORY_TURNS_TO_KEEP = 4;
 const PREPARATION_OP_PRUNE_BATCH_SIZE = 256;
 const PREPARATION_ROW_PRUNE_BATCH_SIZE = 64;
+const EVENT_PRUNE_BATCH_SIZE = 256;
+const ECONOMY_TRANSCRIPT_PRUNE_BATCH_SIZE = 256;
+const LEGACY_TRADER_ROW_PRUNE_BATCH_SIZE = 256;
+const TRADER_VOYAGE_PRUNE_BATCH_SIZE = 256;
+const LEGACY_TRADER_EVENT_PRUNE_BATCH_SIZE = 128;
+
+async function loadGameWithMissionModeHydrated(
+  ctx: MutationCtx,
+  gameId: Id<"sim_games">,
+): Promise<Doc<"sim_games"> | null> {
+  const game = await ctx.db.get(gameId);
+  if (game === null || game.mode !== undefined) {
+    return game;
+  }
+
+  const missionKey = game.missionKey ?? game.lobbyScenarioKey ?? undefined;
+  if (missionKey === undefined || missionKey === null) {
+    return game;
+  }
+
+  const mission = await getMissionByKey(ctx, missionKey);
+  if (mission === null) {
+    return game;
+  }
+
+  await ctx.db.patch(gameId, { mode: mission.mode });
+  return { ...game, mode: mission.mode };
+}
 
 async function loadEnRouteFleetsForArrivals(
   ctx: MutationCtx,
@@ -185,16 +227,24 @@ async function finishGameIfSingleEmpireRemains(
     nextTurnAutoResolveDelayRatio: undefined,
   });
 
+  const winnerGameActorId = await resolveGameActorIdForEmpire(ctx, {
+    gameId,
+    empireId: winner._id,
+  });
+
   await ctx.db.insert("sim_events", {
     gameId,
     turnNumber,
     eventType: "game_finished",
-    actorType: "empire",
-    actorId: winner._id,
+    actorType: winnerGameActorId !== null ? "game_actor" : "empire",
+    actorId: winnerGameActorId ?? winner._id,
     targetType: null,
     targetId: null,
     summary: `${winner.name} wins the game`,
-    payload: JSON.stringify({ winnerEmpireKey: winner.empireKey }),
+    payload: JSON.stringify({
+      winnerEmpireKey: winner.empireKey,
+      ...(winnerGameActorId !== null ? { winnerGameActorId } : {}),
+    }),
   });
 
   return winner;
@@ -408,6 +458,29 @@ type FleetGroup = {
   ships: number;
 };
 
+function primaryFleetForGroup(group: FleetGroup): Doc<"flt_fleets"> | null {
+  const ordered = [...group.fleets].sort(
+    (left, right) => right.strength - left.strength || left._id.localeCompare(right._id),
+  );
+  return ordered[0] ?? null;
+}
+
+function primaryGameActorIdForGroup(group: FleetGroup): Id<"sim_game_actors"> | null {
+  return primaryFleetForGroup(group)?.gameActorId ?? null;
+}
+
+function uniqueGameActorIdsForParticipants(
+  participants: BattleParticipant[],
+): Id<"sim_game_actors">[] {
+  return Array.from(
+    new Set(
+      participants
+        .map((participant) => participant.fleet.gameActorId ?? null)
+        .filter((actorId): actorId is Id<"sim_game_actors"> => actorId !== null),
+    ),
+  );
+}
+
 const MOTHERSHIP_DEFENSE_SHIPS = 50;
 
 type BattleSideRole = "attacker" | "defender";
@@ -612,6 +685,7 @@ async function loadIdleMothershipTargets(
     gameId: Id<"sim_games">;
     systemId: Id<"gal_systems">;
     empireId: Id<"emp_states">;
+    gameActorId?: Id<"sim_game_actors"> | null;
   },
 ): Promise<Doc<"col_colony_ships">[]> {
   const ships = await ctx.db
@@ -624,7 +698,11 @@ async function loadIdleMothershipTargets(
     )
     .take(32);
   return ships
-    .filter((ship) => ship.empireId === params.empireId)
+    .filter((ship) =>
+      params.gameActorId !== undefined && params.gameActorId !== null
+        ? ship.gameActorId === params.gameActorId
+        : ship.empireId === params.empireId,
+    )
     .sort((a, b) => a._id.localeCompare(b._id));
 }
 
@@ -835,12 +913,13 @@ async function absorbIdleGroupIntoParticipant(
 
   const strength = params.participant.ships + reinforcementShips;
   await ctx.db.patch("flt_fleets", params.participant.fleet._id, { strength });
+  const participantGameActorId = params.participant.fleet.gameActorId ?? null;
   await insertSimEvent(ctx, {
     gameId: params.gameId,
     turnNumber: params.turnNumber,
     eventType: "battle_reinforced",
-    actorType: "empire",
-    actorId: params.participant.empireId,
+    actorType: participantGameActorId !== null ? "game_actor" : "empire",
+    actorId: participantGameActorId ?? params.participant.empireId,
     targetType: "system",
     targetId: params.systemId,
     summary: `${params.systemName}: ${reinforcementShips} ${params.side} reinforcement ships joined the battle`,
@@ -926,12 +1005,13 @@ async function addIdleFleetsToActiveBattle(
       activeBattleId: params.battle._id,
     });
     attackers.push(participantFromFleet({ ...fleet, status: "engaged" }));
+    const idleGroupGameActorId = primaryGameActorIdForGroup(idleGroup);
     await insertSimEvent(ctx, {
       gameId: params.gameId,
       turnNumber: params.turnNumber,
       eventType: "battle_reinforced",
-      actorType: "empire",
-      actorId: idleGroup.empireId,
+      actorType: idleGroupGameActorId !== null ? "game_actor" : "empire",
+      actorId: idleGroupGameActorId ?? idleGroup.empireId,
       targetType: "system",
       targetId: params.system._id,
       summary: `${params.system.name}: ${idleGroup.ships} third-party attacking ships joined the battle`,
@@ -1019,6 +1099,7 @@ async function writeBattleRoundEvents(
     mothershipEvents?: MothershipDamageEvent[];
   },
 ): Promise<void> {
+  const attackerGameActorId = primaryGameActorIdForGroup(params.attacker);
   for (const round of params.rounds) {
     const mothershipEvents = params.mothershipEvents ?? [];
     const destroyedMotherships = mothershipEvents.filter((event) => event.destroyed);
@@ -1026,8 +1107,8 @@ async function writeBattleRoundEvents(
       gameId: params.gameId,
       turnNumber: params.turnNumber,
       eventType: "battle_round_resolved",
-      actorType: "empire",
-      actorId: params.attacker.empireId,
+      actorType: attackerGameActorId !== null ? "game_actor" : "empire",
+      actorId: attackerGameActorId ?? params.attacker.empireId,
       targetType: "system",
       targetId: params.system._id,
       summary:
@@ -1041,7 +1122,11 @@ async function writeBattleRoundEvents(
         battleId: params.battleId,
         systemId: params.system._id,
         attackerEmpireId: params.attacker.empireId,
+        ...(attackerGameActorId !== null ? { attackerGameActorId } : {}),
         defenderEmpireId: params.defender.empireId,
+        ...(primaryGameActorIdForGroup(params.defender) !== null
+          ? { defenderGameActorId: primaryGameActorIdForGroup(params.defender) }
+          : {}),
         mothershipEvents,
         ...round,
       },
@@ -1100,12 +1185,21 @@ async function finishBattle(
     system: Doc<"gal_systems">;
     eventTurn: number;
     winnerEmpireId: Id<"emp_states"> | null;
+    winnerGameActorId?: Id<"sim_game_actors">;
     winnerFleetId: Id<"flt_fleets"> | null;
     eventType: "system_conquered" | "system_held";
     summary: string;
     payload: Record<string, unknown>;
   },
 ): Promise<void> {
+  const resolvedWinnerGameActorId =
+    params.winnerEmpireId === null
+      ? null
+      : params.winnerGameActorId ??
+        (await resolveGameActorIdForEmpire(ctx, {
+          gameId: params.battle.gameId,
+          empireId: params.winnerEmpireId,
+        }));
   await ctx.db.patch("cmb_battles", params.battle._id, {
     status: "resolved",
     phase: "resolved",
@@ -1120,6 +1214,7 @@ async function finishBattle(
   if (params.winnerEmpireId !== null) {
     const ownerPatch: Partial<Doc<"gal_systems">> = {
       ownerEmpireId: params.winnerEmpireId,
+      ownerGameActorId: resolvedWinnerGameActorId ?? undefined,
       underAttack: false,
       recentBattleTurns: Math.max(params.system.recentBattleTurns ?? 0, 3),
     };
@@ -1129,6 +1224,9 @@ async function finishBattle(
         gameId: params.battle.gameId,
         systemId: params.system._id,
         winnerEmpireId: params.winnerEmpireId,
+        ...(resolvedWinnerGameActorId !== null
+          ? { winnerGameActorId: resolvedWinnerGameActorId }
+          : {}),
       });
     } else {
       ownerPatch.underAttack = false;
@@ -1149,8 +1247,16 @@ async function finishBattle(
     gameId: params.battle.gameId,
     turnNumber: params.eventTurn,
     eventType: params.eventType,
-    actorType: params.winnerEmpireId === null ? "system" : "empire",
-    actorId: params.winnerEmpireId ?? params.system._id,
+    actorType:
+      params.winnerEmpireId === null
+        ? "system"
+        : resolvedWinnerGameActorId !== null
+          ? "game_actor"
+          : "empire",
+    actorId:
+      params.winnerEmpireId === null
+        ? params.system._id
+        : resolvedWinnerGameActorId ?? params.winnerEmpireId,
     targetType: "system",
     targetId: params.system._id,
     summary: params.summary,
@@ -1173,8 +1279,15 @@ async function continueBattleWithNewDefender(
     roundNumber: number;
   },
 ): Promise<void> {
+  const newDefenderGameActorId =
+    params.newDefender.fleet.gameActorId ??
+    (await resolveGameActorIdForEmpire(ctx, {
+      gameId: params.battle.gameId,
+      empireId: params.newDefender.empireId,
+    }));
   await ctx.db.patch("gal_systems", params.system._id, {
     ownerEmpireId: params.newDefender.empireId,
+    ownerGameActorId: newDefenderGameActorId ?? undefined,
     underAttack: true,
     lastContestedTurn: params.eventTurn,
     taxBlockedUntilTurn: params.eventTurn + 1,
@@ -1184,6 +1297,7 @@ async function continueBattleWithNewDefender(
     gameId: params.battle.gameId,
     systemId: params.system._id,
     winnerEmpireId: params.newDefender.empireId,
+    ...(newDefenderGameActorId !== null ? { winnerGameActorId: newDefenderGameActorId } : {}),
   });
 
   await patchBattleParticipants(ctx, params.battle, {
@@ -1198,8 +1312,8 @@ async function continueBattleWithNewDefender(
     gameId: params.battle.gameId,
     turnNumber: params.eventTurn,
     eventType: "battle_defender_changed",
-    actorType: "empire",
-    actorId: params.newDefender.empireId,
+    actorType: params.newDefender.fleet.gameActorId !== undefined ? "game_actor" : "empire",
+    actorId: params.newDefender.fleet.gameActorId ?? params.newDefender.empireId,
     targetType: "system",
     targetId: params.system._id,
     summary: `${params.system.name}: the strongest surviving attacker became the new defender`,
@@ -1207,9 +1321,15 @@ async function continueBattleWithNewDefender(
       battleId: params.battle._id,
       systemId: params.system._id,
       defenderEmpireId: params.newDefender.empireId,
+      ...(params.newDefender.fleet.gameActorId !== undefined
+        ? { defenderGameActorId: params.newDefender.fleet.gameActorId }
+        : {}),
       defenderFleetId: params.newDefender.fleet._id,
       survivingShips: params.newDefender.ships,
       attackerEmpireIds: params.attackers.map((attacker) => attacker.empireId),
+      ...(uniqueGameActorIdsForParticipants(params.attackers).length > 0
+        ? { attackerGameActorIds: uniqueGameActorIdsForParticipants(params.attackers) }
+        : {}),
       attackerFleetIds: params.attackers.map((attacker) => attacker.fleet._id),
     },
   });
@@ -1349,6 +1469,9 @@ async function resolveActiveBattles(
           summary: `${system.name} was conquered after round ${round.roundNumber}`,
           payload: {
             winnerEmpireId: winner.empireId,
+            ...(winner.fleet.gameActorId !== undefined
+              ? { winnerGameActorId: winner.fleet.gameActorId }
+              : {}),
             previousOwnerEmpireId: battle.originalOwnerEmpireId,
             survivingShips: winner.ships,
           },
@@ -1381,6 +1504,12 @@ async function resolveActiveBattles(
         payload: {
           winnerEmpireId: survivingDefender.empireId,
           attackerEmpireIds: attackers.map((attacker) => attacker.empireId),
+          ...(survivingDefender.fleet.gameActorId !== undefined
+            ? { winnerGameActorId: survivingDefender.fleet.gameActorId }
+            : {}),
+          ...(uniqueGameActorIdsForParticipants(attackers).length > 0
+            ? { attackerGameActorIds: uniqueGameActorIdsForParticipants(attackers) }
+            : {}),
           survivingShips: survivingDefender.ships,
         },
       });
@@ -1396,6 +1525,12 @@ async function resolveActiveBattles(
         payload: {
           attackerEmpireIds: attackers.map((attacker) => attacker.empireId),
           defenderEmpireId: defender.empireId,
+          ...(defender.fleet.gameActorId !== undefined
+            ? { defenderGameActorId: defender.fleet.gameActorId }
+            : {}),
+          ...(uniqueGameActorIdsForParticipants(attackers).length > 0
+            ? { attackerGameActorIds: uniqueGameActorIdsForParticipants(attackers) }
+            : {}),
         },
       });
     } else if (survivingDefender !== null) {
@@ -1455,8 +1590,15 @@ async function startNewBattlesAndClaimUnopposedSystems(
       ) {
         const claimant = groups[0];
         const previousOwnerEmpireId = system.ownerEmpireId;
+        const claimantGameActorId =
+          primaryFleetForGroup(claimant)?.gameActorId ??
+          (await resolveGameActorIdForEmpire(ctx, {
+            gameId: params.gameId,
+            empireId: claimant.empireId,
+          }));
         await ctx.db.patch("gal_systems", system._id, {
           ownerEmpireId: claimant.empireId,
+          ownerGameActorId: claimantGameActorId ?? undefined,
           underAttack: false,
           taxBlockedUntilTurn: params.turnNumber + 1,
         });
@@ -1464,13 +1606,14 @@ async function startNewBattlesAndClaimUnopposedSystems(
           gameId: params.gameId,
           systemId: system._id,
           winnerEmpireId: claimant.empireId,
+          ...(claimantGameActorId !== null ? { winnerGameActorId: claimantGameActorId } : {}),
         });
         await insertSimEvent(ctx, {
           gameId: params.gameId,
           turnNumber: params.turnNumber,
           eventType: "system_claimed",
-          actorType: "empire",
-          actorId: claimant.empireId,
+          actorType: claimantGameActorId !== null ? "game_actor" : "empire",
+          actorId: claimantGameActorId ?? claimant.empireId,
           targetType: "system",
           targetId: system._id,
           summary: `${system.name} was claimed by an unopposed fleet`,
@@ -1541,6 +1684,7 @@ async function startNewBattlesAndClaimUnopposedSystems(
           gameId: params.gameId,
           systemId: system._id,
           empireId: participant.empireId,
+          gameActorId: participant.fleet.gameActorId,
         })
       ).length;
     }
@@ -1548,14 +1692,15 @@ async function startNewBattlesAndClaimUnopposedSystems(
       gameId: params.gameId,
       systemId: system._id,
       empireId: defenderGroup.empireId,
+      gameActorId: defenderFleet.gameActorId,
     });
 
     await insertSimEvent(ctx, {
       gameId: params.gameId,
       turnNumber: params.turnNumber,
       eventType: "battle_started",
-      actorType: "empire",
-      actorId: attacker.empireId,
+      actorType: attacker.fleet.gameActorId !== undefined ? "game_actor" : "empire",
+      actorId: attacker.fleet.gameActorId ?? attacker.empireId,
       targetType: "system",
       targetId: system._id,
       summary: `${system.name}: ${attackerShips} attacking ships engaged ${defender.ships} defenders`,
@@ -1564,7 +1709,16 @@ async function startNewBattlesAndClaimUnopposedSystems(
         systemId: system._id,
         attackerEmpireId: attacker.empireId,
         attackerEmpireIds: attackers.map((participant) => participant.empireId),
+        ...(attacker.fleet.gameActorId !== undefined
+          ? { attackerGameActorId: attacker.fleet.gameActorId }
+          : {}),
+        ...(uniqueGameActorIdsForParticipants(attackers).length > 0
+          ? { attackerGameActorIds: uniqueGameActorIdsForParticipants(attackers) }
+          : {}),
         defenderEmpireId: defenderGroup.empireId,
+        ...(defenderFleet.gameActorId !== undefined
+          ? { defenderGameActorId: defenderFleet.gameActorId }
+          : {}),
         attackerShips,
         defenderShips: defender.ships,
         attackerMotherships,
@@ -1618,6 +1772,12 @@ async function startNewBattlesAndClaimUnopposedSystems(
           payload: {
             winnerEmpireId: defenderGroup.empireId,
             attackerEmpireIds: attackers.map((participant) => participant.empireId),
+            ...(defenderFleet.gameActorId !== undefined
+              ? { winnerGameActorId: defenderFleet.gameActorId }
+              : {}),
+            ...(uniqueGameActorIdsForParticipants(attackers).length > 0
+              ? { attackerGameActorIds: uniqueGameActorIdsForParticipants(attackers) }
+              : {}),
             survivingShips: defender.ships,
           },
         });
@@ -1639,8 +1799,8 @@ async function startNewBattlesAndClaimUnopposedSystems(
         gameId: params.gameId,
         turnNumber: params.turnNumber,
         eventType: "battle_continues",
-        actorType: "empire",
-        actorId: nextPrimary.empireId,
+        actorType: nextPrimary.fleet.gameActorId !== undefined ? "game_actor" : "empire",
+        actorId: nextPrimary.fleet.gameActorId ?? nextPrimary.empireId,
         targetType: "system",
         targetId: system._id,
         summary: `${system.name}: attackers survived opening fire; battle continues next turn`,
@@ -1651,6 +1811,12 @@ async function startNewBattlesAndClaimUnopposedSystems(
           attackerFleetIds: survivingAttackers.map((participant) => participant.fleet._id),
           attackerEmpireId: nextPrimary.empireId,
           attackerEmpireIds: survivingAttackers.map((participant) => participant.empireId),
+          ...(nextPrimary.fleet.gameActorId !== undefined
+            ? { attackerGameActorId: nextPrimary.fleet.gameActorId }
+            : {}),
+          ...(uniqueGameActorIdsForParticipants(survivingAttackers).length > 0
+            ? { attackerGameActorIds: uniqueGameActorIdsForParticipants(survivingAttackers) }
+            : {}),
           attackerShips: opening.attackerShipsAfter,
         },
       });
@@ -1677,37 +1843,6 @@ export const appendEvent = internalMutation({
 
 /** If a turn stays `preparing` longer than this, cron may schedule another `resolveTurnJob`. */
 const TURN_RESOLUTION_STALE_MS = 3 * 60_000;
-const RESOLUTION_PHASES = [
-  "movement",
-  "economy",
-  "npc",
-  "trade",
-  "traderSetup",
-  "tradeSpawn",
-  "garrisons",
-  "finalize",
-] as const;
-type TurnResolutionPhase = (typeof RESOLUTION_PHASES)[number];
-
-function phaseIndex(phase: TurnResolutionPhase): number {
-  return RESOLUTION_PHASES.indexOf(phase);
-}
-
-function readTurnResolutionPhase(value: string | undefined): TurnResolutionPhase {
-  if (
-    value === "movement" ||
-    value === "economy" ||
-    value === "npc" ||
-    value === "trade" ||
-    value === "traderSetup" ||
-    value === "tradeSpawn" ||
-    value === "garrisons" ||
-    value === "finalize"
-  ) {
-    return value;
-  }
-  return "movement";
-}
 
 function isTurnPreparingState(state: Doc<"sim_turns">["state"]): boolean {
   return state === "preparing" || state === "resolving";
@@ -1769,6 +1904,173 @@ async function pruneHistoricalTurnPreparationData(
   return stalePreparations.length === PREPARATION_ROW_PRUNE_BATCH_SIZE;
 }
 
+async function pruneHistoricalSimEvents(
+  ctx: MutationCtx,
+  gameId: Id<"sim_games">,
+  firstRetainedTurn: number,
+): Promise<boolean> {
+  const staleEvents = await ctx.db
+    .query("sim_events")
+    .withIndex("by_gameId_and_turnNumber", (q) =>
+      q.eq("gameId", gameId).lt("turnNumber", firstRetainedTurn),
+    )
+    .take(EVENT_PRUNE_BATCH_SIZE);
+  for (const row of staleEvents) {
+    await ctx.db.delete("sim_events", row._id);
+  }
+  return staleEvents.length === EVENT_PRUNE_BATCH_SIZE;
+}
+
+async function pruneHistoricalCompletedTraderVoyages(
+  ctx: MutationCtx,
+  gameId: Id<"sim_games">,
+  firstRetainedTurn: number,
+): Promise<boolean> {
+  const staleDelivered = await ctx.db
+    .query("eco_bg_traders")
+    .withIndex("by_gameId_and_deliveredTurn", (q) =>
+      q.eq("gameId", gameId).lt("deliveredTurn", firstRetainedTurn),
+    )
+    .take(TRADER_VOYAGE_PRUNE_BATCH_SIZE);
+  for (const row of staleDelivered) {
+    await ctx.db.delete("eco_bg_traders", row._id);
+  }
+  if (staleDelivered.length === TRADER_VOYAGE_PRUNE_BATCH_SIZE) {
+    return true;
+  }
+
+  const cancelledBatch = await ctx.db
+    .query("eco_bg_traders")
+    .withIndex("by_gameId_and_status", (q) => q.eq("gameId", gameId).eq("status", "cancelled"))
+    .order("asc")
+    .take(TRADER_VOYAGE_PRUNE_BATCH_SIZE);
+  const staleCancelled = cancelledBatch.filter(
+    (row) => Math.max(row.etaTurn, row.dispatchedTurn) < firstRetainedTurn,
+  );
+  for (const row of staleCancelled) {
+    await ctx.db.delete("eco_bg_traders", row._id);
+  }
+  return staleCancelled.length === TRADER_VOYAGE_PRUNE_BATCH_SIZE;
+}
+
+async function pruneHistoricalEconomyMarketSnapshots(
+  ctx: MutationCtx,
+  gameId: Id<"sim_games">,
+  firstRetainedTurn: number,
+): Promise<boolean> {
+  const staleRows = await ctx.db
+    .query("eco_market_snapshots")
+    .withIndex("by_gameId_and_turnNumber", (q) =>
+      q.eq("gameId", gameId).lt("turnNumber", firstRetainedTurn),
+    )
+    .take(ECONOMY_TRANSCRIPT_PRUNE_BATCH_SIZE);
+  for (const row of staleRows) {
+    await ctx.db.delete("eco_market_snapshots", row._id);
+  }
+  return staleRows.length === ECONOMY_TRANSCRIPT_PRUNE_BATCH_SIZE;
+}
+
+async function pruneHistoricalEconomySystemOutputs(
+  ctx: MutationCtx,
+  gameId: Id<"sim_games">,
+  firstRetainedTurn: number,
+): Promise<boolean> {
+  const staleRows = await ctx.db
+    .query("eco_system_outputs")
+    .withIndex("by_gameId_and_turnNumber", (q) =>
+      q.eq("gameId", gameId).lt("turnNumber", firstRetainedTurn),
+    )
+    .take(ECONOMY_TRANSCRIPT_PRUNE_BATCH_SIZE);
+  for (const row of staleRows) {
+    await ctx.db.delete("eco_system_outputs", row._id);
+  }
+  return staleRows.length === ECONOMY_TRANSCRIPT_PRUNE_BATCH_SIZE;
+}
+
+async function pruneLegacyTraderRuns(
+  ctx: MutationCtx,
+  gameId: Id<"sim_games">,
+): Promise<boolean> {
+  const staleRows = await ctx.db
+    .query("trd_runs")
+    .withIndex("by_gameId_and_turnNumber", (q) => q.eq("gameId", gameId))
+    .take(LEGACY_TRADER_ROW_PRUNE_BATCH_SIZE);
+  for (const row of staleRows) {
+    await ctx.db.delete("trd_runs", row._id);
+  }
+  return staleRows.length === LEGACY_TRADER_ROW_PRUNE_BATCH_SIZE;
+}
+
+async function pruneLegacyTraderCharters(
+  ctx: MutationCtx,
+  gameId: Id<"sim_games">,
+): Promise<boolean> {
+  const staleRows = await ctx.db
+    .query("trd_charters")
+    .withIndex("by_gameId_and_status", (q) => q.eq("gameId", gameId))
+    .take(LEGACY_TRADER_ROW_PRUNE_BATCH_SIZE);
+  for (const row of staleRows) {
+    await ctx.db.delete("trd_charters", row._id);
+  }
+  return staleRows.length === LEGACY_TRADER_ROW_PRUNE_BATCH_SIZE;
+}
+
+async function pruneLegacyTraderIdentities(
+  ctx: MutationCtx,
+  gameId: Id<"sim_games">,
+): Promise<boolean> {
+  const staleRows = await ctx.db
+    .query("sim_trader_identities")
+    .withIndex("by_gameId", (q) => q.eq("gameId", gameId))
+    .take(LEGACY_TRADER_ROW_PRUNE_BATCH_SIZE);
+  for (const row of staleRows) {
+    await ctx.db.delete("sim_trader_identities", row._id);
+  }
+  return staleRows.length === LEGACY_TRADER_ROW_PRUNE_BATCH_SIZE;
+}
+
+async function pruneLegacyTraderVoyagesForNonTraderGame(
+  ctx: MutationCtx,
+  gameId: Id<"sim_games">,
+): Promise<boolean> {
+  let hitBatchLimit = false;
+  for (const status of ["enRoute", "delivered", "cancelled"] as const) {
+    const staleRows = await ctx.db
+      .query("eco_bg_traders")
+      .withIndex("by_gameId_and_status", (q) => q.eq("gameId", gameId).eq("status", status))
+      .take(LEGACY_TRADER_ROW_PRUNE_BATCH_SIZE);
+    for (const row of staleRows) {
+      await ctx.db.delete("eco_bg_traders", row._id);
+    }
+    if (staleRows.length === LEGACY_TRADER_ROW_PRUNE_BATCH_SIZE) {
+      hitBatchLimit = true;
+    }
+  }
+  return hitBatchLimit;
+}
+
+async function pruneLegacyTraderEventsForNonTraderGame(
+  ctx: MutationCtx,
+  gameId: Id<"sim_games">,
+): Promise<boolean> {
+  let hitBatchLimit = false;
+  for (const eventType of TRADER_EVENT_TYPES) {
+    const staleRows = await ctx.db
+      .query("sim_events")
+      .withIndex("by_gameId_and_eventType", (q) =>
+        q.eq("gameId", gameId).eq("eventType", eventType),
+      )
+      .take(LEGACY_TRADER_EVENT_PRUNE_BATCH_SIZE);
+    for (const row of staleRows) {
+      await ctx.db.delete("sim_events", row._id);
+    }
+    if (staleRows.length === LEGACY_TRADER_EVENT_PRUNE_BATCH_SIZE) {
+      hitBatchLimit = true;
+    }
+  }
+  return hitBatchLimit;
+}
+
 async function upsertTurnPreparationRow(
   ctx: MutationCtx,
   params: {
@@ -1825,7 +2127,7 @@ async function loadStagedPreparationPhase(
   turn: Doc<"sim_turns">;
   preparation: Doc<"sim_turn_preparations">;
 } | null> {
-  const game = await ctx.db.get("sim_games", params.gameId);
+  const game = await loadGameWithMissionModeHydrated(ctx, params.gameId);
   if (game === null) {
     return null;
   }
@@ -1854,15 +2156,14 @@ async function loadStagedPreparationPhase(
     return null;
   }
 
-  const currentPhase = readTurnResolutionPhase(
+  const currentPhase = parseTurnResolutionPhase(
     preparation.resolutionPhase ?? turn.resolutionPhase,
   );
-  const currentIdx = phaseIndex(currentPhase);
-  const expectedIdx = phaseIndex(params.phase);
-  if (currentIdx > expectedIdx) {
+  const phaseOrder = compareTurnResolutionPhases(currentPhase, params.phase);
+  if (phaseOrder > 0) {
     return null;
   }
-  if (currentIdx < expectedIdx) {
+  if (phaseOrder < 0) {
     throw new Error(`Turn resolution is waiting for ${currentPhase}.`);
   }
 
@@ -1877,7 +2178,7 @@ async function loadResolutionPhase(
     phase: TurnResolutionPhase;
   },
 ): Promise<{ game: Doc<"sim_games">; turn: Doc<"sim_turns"> } | null> {
-  const game = await ctx.db.get("sim_games", params.gameId);
+  const game = await loadGameWithMissionModeHydrated(ctx, params.gameId);
   if (game === null) {
     return null;
   }
@@ -1902,13 +2203,12 @@ async function loadResolutionPhase(
     return null;
   }
 
-  const currentPhase = readTurnResolutionPhase(turn.resolutionPhase);
-  const currentIdx = phaseIndex(currentPhase);
-  const expectedIdx = phaseIndex(params.phase);
-  if (currentIdx > expectedIdx) {
+  const currentPhase = parseTurnResolutionPhase(turn.resolutionPhase);
+  const phaseOrder = compareTurnResolutionPhases(currentPhase, params.phase);
+  if (phaseOrder > 0) {
     return null;
   }
-  if (currentIdx < expectedIdx) {
+  if (phaseOrder < 0) {
     throw new Error(`Turn resolution is waiting for ${currentPhase}.`);
   }
 
@@ -1932,6 +2232,15 @@ async function advanceResolutionPhase(
       resolutionPhase: nextPhase,
     });
   }
+}
+
+async function advanceToNextResolutionPhase(
+  ctx: MutationCtx,
+  game: Doc<"sim_games">,
+  turn: Doc<"sim_turns">,
+  currentPhase: TurnResolutionPhase,
+): Promise<void> {
+  await advanceResolutionPhase(ctx, turn, nextTurnResolutionPhase(game, currentPhase));
 }
 
 /**
@@ -2005,12 +2314,85 @@ export const postCommitMaintenance = internalMutation({
     nextTurn: v.number(),
   },
   handler: async (ctx, args): Promise<void> => {
+    const game = await loadGameWithMissionModeHydrated(ctx, args.gameId);
     const hasMoreHistoricalPreparationData = await pruneHistoricalTurnPreparationData(
       ctx,
       args.gameId,
       Math.max(1, args.nextTurn - PREPARATION_HISTORY_TURNS_TO_KEEP + 1),
     );
-    if (hasMoreHistoricalPreparationData) {
+    const liveEventTurnsToKeep = game !== null ? liveEventHistoryTurnsToKeep(game) : null;
+    const hasMoreHistoricalEvents =
+      game !== null && liveEventTurnsToKeep !== null
+        ? await pruneHistoricalSimEvents(
+            ctx,
+            args.gameId,
+            Math.max(1, args.nextTurn - liveEventTurnsToKeep + 1),
+          )
+        : false;
+    const traderVoyageTurnsToKeep =
+      game !== null ? completedTraderVoyageHistoryTurnsToKeep(game) : null;
+    const hasMoreHistoricalTraderVoyages =
+      game !== null && traderVoyageTurnsToKeep !== null
+        ? await pruneHistoricalCompletedTraderVoyages(
+            ctx,
+            args.gameId,
+            Math.max(1, args.nextTurn - traderVoyageTurnsToKeep + 1),
+          )
+        : false;
+    const economyTranscriptTurnsToKeep =
+      game !== null ? economyTranscriptHistoryTurnsToKeep(game) : null;
+    const firstRetainedEconomyTurn =
+      game !== null && economyTranscriptTurnsToKeep !== null
+        ? Math.max(1, args.nextTurn - economyTranscriptTurnsToKeep + 1)
+        : null;
+    const hasMoreHistoricalMarketSnapshots =
+      game !== null && firstRetainedEconomyTurn !== null
+        ? await pruneHistoricalEconomyMarketSnapshots(
+            ctx,
+            args.gameId,
+            firstRetainedEconomyTurn,
+          )
+        : false;
+    const hasMoreHistoricalSystemOutputs =
+      game !== null && firstRetainedEconomyTurn !== null
+        ? await pruneHistoricalEconomySystemOutputs(
+            ctx,
+            args.gameId,
+            firstRetainedEconomyTurn,
+          )
+        : false;
+    const hasMoreLegacyTraderRuns =
+      game !== null && !gameUsesTraderEconomy(game)
+        ? await pruneLegacyTraderRuns(ctx, args.gameId)
+        : false;
+    const hasMoreLegacyTraderCharters =
+      game !== null && !gameUsesTraderEconomy(game)
+        ? await pruneLegacyTraderCharters(ctx, args.gameId)
+        : false;
+    const hasMoreLegacyTraderIdentities =
+      game !== null && !gameUsesTraderEconomy(game)
+        ? await pruneLegacyTraderIdentities(ctx, args.gameId)
+        : false;
+    const hasMoreLegacyTraderVoyages =
+      game !== null && !gameUsesTraderEconomy(game)
+        ? await pruneLegacyTraderVoyagesForNonTraderGame(ctx, args.gameId)
+        : false;
+    const hasMoreLegacyTraderEvents =
+      game !== null && !gameUsesTraderEconomy(game)
+        ? await pruneLegacyTraderEventsForNonTraderGame(ctx, args.gameId)
+        : false;
+    if (
+      hasMoreHistoricalPreparationData ||
+      hasMoreHistoricalEvents ||
+      hasMoreHistoricalTraderVoyages ||
+      hasMoreHistoricalMarketSnapshots ||
+      hasMoreHistoricalSystemOutputs ||
+      hasMoreLegacyTraderRuns ||
+      hasMoreLegacyTraderCharters ||
+      hasMoreLegacyTraderIdentities ||
+      hasMoreLegacyTraderVoyages ||
+      hasMoreLegacyTraderEvents
+    ) {
       await ctx.scheduler.runAfter(0, internal.sim.internal.postCommitMaintenance, {
         gameId: args.gameId,
         nextTurn: args.nextTurn,
@@ -2031,13 +2413,55 @@ export const postCommitFinalizationCheck = internalMutation({
   },
 });
 
+export const observeScheduledWake = internalMutation({
+  args: {
+    gameId: v.id("sim_games"),
+    generation: v.number(),
+    wakeKind: v.union(v.literal("prepare"), v.literal("boundary")),
+  },
+  handler: async (
+    ctx,
+    args,
+  ): Promise<{ accepted: boolean; turnNumber: number }> => {
+    const game = await ctx.db.get("sim_games", args.gameId);
+    if (game === null) {
+      return { accepted: false, turnNumber: 0 };
+    }
+
+    if (game.schedulerGeneration !== args.generation) {
+      return { accepted: false, turnNumber: game.currentTurn };
+    }
+    if (game.status !== "running") {
+      return { accepted: false, turnNumber: game.currentTurn };
+    }
+    if (game.simCronTurnsDisabled === true) {
+      return { accepted: false, turnNumber: game.currentTurn };
+    }
+
+    const now = Date.now();
+    if (game.turnPausedUntilMs !== undefined && now < game.turnPausedUntilMs) {
+      return { accepted: false, turnNumber: game.currentTurn };
+    }
+
+    await ctx.db.patch("sim_games", args.gameId, {
+      lastWakeObservedAt: now,
+      nextPreparationWakeAt:
+        args.wakeKind === "prepare" ? undefined : game.nextPreparationWakeAt,
+      nextBoundaryWakeAt:
+        args.wakeKind === "boundary" ? undefined : game.nextBoundaryWakeAt,
+    });
+
+    return { accepted: true, turnNumber: game.currentTurn };
+  },
+});
+
 export const beginTurnResolution = internalMutation({
   args: { gameId: v.id("sim_games") },
   handler: async (
     ctx,
     args,
   ): Promise<{ started: boolean; turnNumber: number; alreadyResolving: boolean }> => {
-    const game = await ctx.db.get("sim_games", args.gameId);
+    const game = await loadGameWithMissionModeHydrated(ctx, args.gameId);
     if (game === null) {
       return { started: false, turnNumber: 0, alreadyResolving: false };
     }
@@ -2073,7 +2497,7 @@ export const beginTurnResolution = internalMutation({
         resolvedAt: null,
         state: "preparing",
         resolvingStartedAt: now,
-        resolutionPhase: "movement",
+        resolutionPhase: FIRST_TURN_RESOLUTION_PHASE,
       });
       await upsertTurnPreparationRow(ctx, {
         gameId: args.gameId,
@@ -2084,7 +2508,7 @@ export const beginTurnResolution = internalMutation({
         startedAt: now,
         preparedAt: undefined,
         committedAt: undefined,
-        resolutionPhase: "movement",
+        resolutionPhase: FIRST_TURN_RESOLUTION_PHASE,
         summaryJson: undefined,
       });
       return { started: true, turnNumber, alreadyResolving: false };
@@ -2126,7 +2550,7 @@ export const beginTurnResolution = internalMutation({
         await ctx.db.patch("sim_turns", turn._id, {
           state: "preparing",
           resolvingStartedAt: activePreparationStartedAt,
-          resolutionPhase: readTurnResolutionPhase(preparation?.resolutionPhase),
+          resolutionPhase: parseTurnResolutionPhase(preparation?.resolutionPhase),
           preparedAt: undefined,
         });
       }
@@ -2137,7 +2561,7 @@ export const beginTurnResolution = internalMutation({
       await ctx.db.patch("sim_turns", turn._id, {
         state: "preparing",
         resolvingStartedAt: now,
-        resolutionPhase: "movement",
+        resolutionPhase: FIRST_TURN_RESOLUTION_PHASE,
         preparedAt: undefined,
       });
     } else {
@@ -2155,7 +2579,7 @@ export const beginTurnResolution = internalMutation({
       startedAt: now,
       preparedAt: undefined,
       committedAt: undefined,
-      resolutionPhase: "movement",
+      resolutionPhase: FIRST_TURN_RESOLUTION_PHASE,
       summaryJson: undefined,
     });
     return { started: true, turnNumber, alreadyResolving: false };
@@ -2170,7 +2594,7 @@ export const prepareTurnWithStaging = internalMutation({
   ): Promise<{ skipped: boolean; preparedTurn: number; opCount: number }> => {
     const phase = await loadStagedPreparationPhase(ctx, {
       ...args,
-      phase: "movement",
+      phase: FIRST_TURN_RESOLUTION_PHASE,
     });
     if (phase === null) {
       return {
@@ -2231,7 +2655,7 @@ export const prepareTurnWithStaging = internalMutation({
     });
     await mergeIdleFleetsAtSameBody(stagedCtx, args.gameId, movementFleetIdsWithOrdersThisTurn);
 
-    await advanceResolutionPhase(ctx, phase.turn, "economy");
+    await advanceToNextResolutionPhase(ctx, phase.game, phase.turn, FIRST_TURN_RESOLUTION_PHASE);
 
     const economyOrders = await stagedCtx.db
       .query("flt_orders")
@@ -2249,39 +2673,58 @@ export const prepareTurnWithStaging = internalMutation({
       settings,
     });
 
-    await advanceResolutionPhase(ctx, phase.turn, "npc");
+    await advanceToNextResolutionPhase(ctx, phase.game, phase.turn, "economy");
     await applyNpcStrategy(stagedCtx, {
       gameId: args.gameId,
       turnNumber: t,
     });
 
-    await advanceResolutionPhase(ctx, phase.turn, "trade");
-    await deliverBackgroundTrade(stagedCtx, {
-      gameId: args.gameId,
-      turnNumber: t,
-    });
+    const phasesBeforeGarrisons = resolutionPhasesBetween(
+      phase.game,
+      "npc",
+      "garrisons",
+    );
+    for (const stagedPhase of phasesBeforeGarrisons) {
+      await advanceResolutionPhase(ctx, phase.turn, stagedPhase);
 
-    await advanceResolutionPhase(ctx, phase.turn, "traderSetup");
-    await setupBackgroundTradeNpcs(stagedCtx, { gameId: args.gameId });
+      if (stagedPhase === "trade") {
+        await deliverBackgroundTrade(stagedCtx, {
+          gameId: args.gameId,
+          turnNumber: t,
+        });
+        continue;
+      }
 
-    await advanceResolutionPhase(ctx, phase.turn, "tradeSpawn");
-    await spawnBackgroundTrade(stagedCtx, {
-      gameId: args.gameId,
-      turnNumber: t,
-      traderShipCostMult: settings.traderShipCostMult,
-    });
-    await maybeAdjustAutomatedNpcTraderLimits(stagedCtx, {
-      gameId: args.gameId,
-      completedTurn: t,
-    });
+      if (stagedPhase === "traderSetup") {
+        await setupBackgroundTradeNpcs(stagedCtx, { gameId: args.gameId });
+        continue;
+      }
 
-    await advanceResolutionPhase(ctx, phase.turn, "garrisons");
+      if (stagedPhase === "tradeSpawn") {
+        await spawnBackgroundTrade(stagedCtx, {
+          gameId: args.gameId,
+          turnNumber: t,
+          traderShipCostMult: settings.traderShipCostMult,
+        });
+        await maybeAdjustAutomatedNpcTraderLimits(stagedCtx, {
+          gameId: args.gameId,
+          completedTurn: t,
+        });
+      }
+    }
+
+    await advanceToNextResolutionPhase(
+      ctx,
+      phase.game,
+      phase.turn,
+      phasesBeforeGarrisons[phasesBeforeGarrisons.length - 1] ?? "npc",
+    );
     await applyGarrisonRoutes(stagedCtx, {
       gameId: args.gameId,
       turnNumber: t,
     });
 
-    await advanceResolutionPhase(ctx, phase.turn, "finalize");
+    await advanceToNextResolutionPhase(ctx, phase.game, phase.turn, "garrisons");
     await cleanupFleetOrdersForTurn(stagedCtx, {
       gameId: args.gameId,
       turnNumber: t,
@@ -2357,7 +2800,10 @@ export const prepareTurnWithStaging = internalMutation({
 export const resolveTurnMovementPhase = internalMutation({
   args: { gameId: v.id("sim_games"), turnNumber: v.number() },
   handler: async (ctx, args): Promise<{ skipped: boolean }> => {
-    const phase = await loadResolutionPhase(ctx, { ...args, phase: "movement" });
+    const phase = await loadResolutionPhase(ctx, {
+      ...args,
+      phase: FIRST_TURN_RESOLUTION_PHASE,
+    });
     if (phase === null) return { skipped: true };
 
     const { game, turn } = phase;
@@ -2406,7 +2852,7 @@ export const resolveTurnMovementPhase = internalMutation({
     });
     await mergeIdleFleetsAtSameBody(ctx, args.gameId, fleetIdsWithOrdersThisTurn);
 
-    await advanceResolutionPhase(ctx, turn, "economy");
+    await advanceToNextResolutionPhase(ctx, game, turn, FIRST_TURN_RESOLUTION_PHASE);
     return { skipped: false };
   },
 });
@@ -2435,7 +2881,7 @@ export const resolveTurnEconomyPhase = internalMutation({
       settings,
     });
 
-    await advanceResolutionPhase(ctx, phase.turn, "npc");
+    await advanceToNextResolutionPhase(ctx, phase.game, phase.turn, "economy");
     return { skipped: false };
   },
 });
@@ -2451,7 +2897,7 @@ export const resolveTurnNpcPhase = internalMutation({
       turnNumber: args.turnNumber,
     });
 
-    await advanceResolutionPhase(ctx, phase.turn, "trade");
+    await advanceToNextResolutionPhase(ctx, phase.game, phase.turn, "npc");
     return { skipped: false };
   },
 });
@@ -2462,12 +2908,17 @@ export const resolveTurnTradePhase = internalMutation({
     const phase = await loadResolutionPhase(ctx, { ...args, phase: "trade" });
     if (phase === null) return { skipped: true };
 
+    if (!gameRunsResolutionPhase(phase.game, "trade")) {
+      await advanceToNextResolutionPhase(ctx, phase.game, phase.turn, "trade");
+      return { skipped: false };
+    }
+
     await deliverBackgroundTrade(ctx, {
       gameId: args.gameId,
       turnNumber: args.turnNumber,
     });
 
-    await advanceResolutionPhase(ctx, phase.turn, "traderSetup");
+    await advanceToNextResolutionPhase(ctx, phase.game, phase.turn, "trade");
     return { skipped: false };
   },
 });
@@ -2478,9 +2929,14 @@ export const resolveTurnTraderSetupPhase = internalMutation({
     const phase = await loadResolutionPhase(ctx, { ...args, phase: "traderSetup" });
     if (phase === null) return { skipped: true };
 
+    if (!gameRunsResolutionPhase(phase.game, "traderSetup")) {
+      await advanceToNextResolutionPhase(ctx, phase.game, phase.turn, "traderSetup");
+      return { skipped: false };
+    }
+
     await setupBackgroundTradeNpcs(ctx, { gameId: args.gameId });
 
-    await advanceResolutionPhase(ctx, phase.turn, "tradeSpawn");
+    await advanceToNextResolutionPhase(ctx, phase.game, phase.turn, "traderSetup");
     return { skipped: false };
   },
 });
@@ -2490,6 +2946,11 @@ export const resolveTurnTradeSpawnPhase = internalMutation({
   handler: async (ctx, args): Promise<{ skipped: boolean }> => {
     const phase = await loadResolutionPhase(ctx, { ...args, phase: "tradeSpawn" });
     if (phase === null) return { skipped: true };
+
+    if (!gameRunsResolutionPhase(phase.game, "tradeSpawn")) {
+      await advanceToNextResolutionPhase(ctx, phase.game, phase.turn, "tradeSpawn");
+      return { skipped: false };
+    }
 
     const settings = await loadGameSettings(ctx, args.gameId);
     await ctx.scheduler.runAfter(
@@ -2506,7 +2967,7 @@ export const resolveTurnTradeSpawnPhase = internalMutation({
       completedTurn: args.turnNumber,
     });
 
-    await advanceResolutionPhase(ctx, phase.turn, "garrisons");
+    await advanceToNextResolutionPhase(ctx, phase.game, phase.turn, "tradeSpawn");
     return { skipped: false };
   },
 });
@@ -2522,7 +2983,7 @@ export const resolveTurnGarrisonsPhase = internalMutation({
       turnNumber: args.turnNumber,
     });
 
-    await advanceResolutionPhase(ctx, phase.turn, "finalize");
+    await advanceToNextResolutionPhase(ctx, phase.game, phase.turn, "garrisons");
     return { skipped: false };
   },
 });
@@ -2584,7 +3045,7 @@ export const commitPreparedTurn = internalMutation({
     ctx,
     args,
   ): Promise<{ skipped: boolean; committed: boolean; resolvedTurn: number; nextTurn: number }> => {
-    const game = await ctx.db.get("sim_games", args.gameId);
+    const game = await loadGameWithMissionModeHydrated(ctx, args.gameId);
     if (game === null) {
       return {
         skipped: true,
@@ -2796,25 +3257,12 @@ export const commitPreparedTurn = internalMutation({
         payload: JSON.stringify({ resolvedTurn: t, nextTurn }),
       });
 
-      await ctx.scheduler.runAfter(
-        msUntilTurnPreparationStart({
-          nowMs: resolvedAt,
-          turnStartedAtMs: nextTurnStartedAt,
-          turnDurationMs: game.turnDurationMs,
-        }),
-        internal.sim.actions.attemptResolveTurnBoundary,
-        { gameId: args.gameId },
-      );
-
-      await ctx.scheduler.runAfter(
-        msUntilTurnBoundary({
-          nowMs: resolvedAt,
-          turnStartedAtMs: nextTurnStartedAt,
-          turnDurationMs: game.turnDurationMs,
-        }),
-        internal.sim.actions.attemptResolveTurnBoundary,
-        { gameId: args.gameId },
-      );
+      await scheduleGameTurnWakeups(ctx, {
+        gameId: args.gameId,
+        turnStartedAtMs: nextTurnStartedAt,
+        turnDurationMs: game.turnDurationMs,
+        nowMs: resolvedAt,
+      });
 
       await ctx.scheduler.runAfter(0, internal.sim.internal.postCommitMaintenance, {
         gameId: args.gameId,
@@ -2834,7 +3282,7 @@ export const commitPreparedTurn = internalMutation({
 export const resolveTurn = internalMutation({
   args: { gameId: v.id("sim_games") },
   handler: async (ctx, args): Promise<{ resolvedTurn: number; nextTurn: number }> => {
-    const game = await ctx.db.get("sim_games", args.gameId);
+    const game = await loadGameWithMissionModeHydrated(ctx, args.gameId);
     if (game === null) {
       throw new Error("Game not found.");
     }
@@ -2899,17 +3347,19 @@ export const resolveTurn = internalMutation({
       settings,
     });
 
-    // Background traders run after economy so per-system foodPrice values are current.
-    await applyBackgroundTrade(ctx, {
-      gameId: args.gameId,
-      turnNumber: t,
-      traderShipCostMult: settings.traderShipCostMult,
-    });
+    if (gameUsesTraderEconomy(game)) {
+      // Background traders run after economy so per-system foodPrice values are current.
+      await applyBackgroundTrade(ctx, {
+        gameId: args.gameId,
+        turnNumber: t,
+        traderShipCostMult: settings.traderShipCostMult,
+      });
 
-    await maybeAdjustAutomatedNpcTraderLimits(ctx, {
-      gameId: args.gameId,
-      completedTurn: t,
-    });
+      await maybeAdjustAutomatedNpcTraderLimits(ctx, {
+        gameId: args.gameId,
+        completedTurn: t,
+      });
+    }
 
     await ctx.scheduler.runAfter(
       0,

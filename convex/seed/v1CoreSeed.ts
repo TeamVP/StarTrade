@@ -15,6 +15,7 @@ export async function seedLegacyV1Core(
   mapScale: number,
   mapKey: string,
   empireColorPrefLookup: Record<string, string> = {},
+  seedTraderIdentities = true,
 ): Promise<{ systems: number; empires: number; mapKey: string }> {
   const systemAlpha = await ctx.db.insert("gal_systems", {
     gameId,
@@ -170,7 +171,9 @@ export async function seedLegacyV1Core(
     status: "idle",
   });
 
-  await seedNpcTraderIdentitiesForGame(ctx, gameId);
+  if (seedTraderIdentities) {
+    await seedNpcTraderIdentitiesForGame(ctx, gameId);
+  }
 
   return {
     systems: 3,

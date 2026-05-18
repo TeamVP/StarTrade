@@ -2,6 +2,13 @@ import { query } from "../_generated/server";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { v } from "convex/values";
 import type { Doc, Id } from "../_generated/dataModel";
+import { gameUsesTraderEconomy, loadGameWithResolvedMode } from "../sim/gameMode";
+
+function resolveGameRuntimeVersion(
+  runtimeVersion: "v1_empire" | "v2_game_actor" | null | undefined,
+): "v1_empire" | "v2_game_actor" {
+  return runtimeVersion ?? "v1_empire";
+}
 
 /**
  * Full-game economy snapshot for map admins: empires, systems with holdings + idle fleet totals,
@@ -26,9 +33,23 @@ export const adminEconomySnapshot = query({
       return { kind: "forbidden" as const };
     }
 
-    const game = await ctx.db.get("sim_games", args.gameId);
+    const game = await loadGameWithResolvedMode(ctx, args.gameId);
     if (game === null) {
       return { kind: "not_found" as const };
+    }
+
+    if (!gameUsesTraderEconomy(game)) {
+      return {
+        kind: "disabled" as const,
+        game: {
+          _id: game._id,
+          name: game.name,
+          mode: game.mode ?? "conquest_core",
+          status: game.status,
+          currentTurn: game.currentTurn,
+          mapKey: game.mapKey,
+        },
+      };
     }
 
     const empires = await ctx.db
@@ -46,9 +67,44 @@ export const adminEconomySnapshot = query({
       .withIndex("by_gameId", (q) => q.eq("gameId", args.gameId))
       .take(512);
 
-    const holdingBySystemId = new Map<Id<"gal_systems">, Doc<"emp_system_holdings">>();
+    const runtimeVersion = resolveGameRuntimeVersion(game.runtimeVersion);
+    const actors =
+      runtimeVersion === "v2_game_actor"
+        ? await ctx.db
+            .query("sim_game_actors")
+            .withIndex("by_gameId", (q) => q.eq("gameId", args.gameId))
+            .collect()
+        : [];
+    const actorById = new Map(actors.map((actor) => [actor._id, actor] as const));
+    const actorByLegacyEmpireId = new Map(
+      actors
+        .filter((actor) => actor.legacyEmpireId !== null)
+        .map((actor) => [actor.legacyEmpireId!, actor] as const),
+    );
+
+    const holdingBySystemId = new Map<
+      Id<"gal_systems">,
+      Doc<"emp_system_holdings"> & {
+        runtimeVersion: "v1_empire" | "v2_game_actor";
+        actorId: Id<"sim_game_actors"> | null;
+        actorSlotNumber: number | null;
+        actorLabel: string | null;
+        actorDisplayName: string | null;
+      }
+    >();
     for (const h of holdings) {
-      holdingBySystemId.set(h.systemId, h);
+      const actor =
+        (h.gameActorId !== undefined ? actorById.get(h.gameActorId) : null) ??
+        actorByLegacyEmpireId.get(h.empireId) ??
+        null;
+      holdingBySystemId.set(h.systemId, {
+        ...h,
+        runtimeVersion,
+        actorId: actor?._id ?? null,
+        actorSlotNumber: actor?.slotNumber ?? null,
+        actorLabel: actor?.factionLabelSnapshot ?? null,
+        actorDisplayName: actor?.displayNameSnapshot ?? null,
+      });
     }
 
     const fleets = await ctx.db
@@ -65,11 +121,34 @@ export const adminEconomySnapshot = query({
       );
     }
 
-    const systems = systemsRaw.map((system) => ({
-      ...system,
-      idleFleetStrength: idleStrengthBySystem.get(system._id) ?? 0,
-      holding: holdingBySystemId.get(system._id) ?? null,
-    }));
+    const systems = systemsRaw.map((system) => {
+      const ownerActor =
+        (system.ownerGameActorId !== undefined ? actorById.get(system.ownerGameActorId) : null) ??
+        (system.ownerEmpireId !== null ? actorByLegacyEmpireId.get(system.ownerEmpireId) : null) ??
+        null;
+      return {
+        ...system,
+        runtimeVersion,
+        ownerActorId: ownerActor?._id ?? null,
+        ownerActorSlotNumber: ownerActor?.slotNumber ?? null,
+        ownerActorLabel: ownerActor?.factionLabelSnapshot ?? null,
+        ownerActorDisplayName: ownerActor?.displayNameSnapshot ?? null,
+        idleFleetStrength: idleStrengthBySystem.get(system._id) ?? 0,
+        holding: holdingBySystemId.get(system._id) ?? null,
+      };
+    });
+
+    const empiresWithActors = empires.map((empire) => {
+      const actor = actorByLegacyEmpireId.get(empire._id) ?? null;
+      return {
+        ...empire,
+        runtimeVersion,
+        actorId: actor?._id ?? null,
+        actorSlotNumber: actor?.slotNumber ?? null,
+        actorLabel: actor?.factionLabelSnapshot ?? null,
+        actorDisplayName: actor?.displayNameSnapshot ?? null,
+      };
+    });
 
     const marketSnapshots = await ctx.db
       .query("eco_market_snapshots")
@@ -87,7 +166,7 @@ export const adminEconomySnapshot = query({
         currentTurn: game.currentTurn,
         mapKey: game.mapKey,
       },
-      empires,
+      empires: empiresWithActors,
       systems,
       marketSnapshots: marketSnapshots.map((row) => ({
         commodity: row.commodity,

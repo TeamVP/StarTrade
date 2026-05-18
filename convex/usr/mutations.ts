@@ -7,7 +7,8 @@ import { assignStarterOwnerEmpireSeat } from "../sim/mutations";
 import { gameAllowsPlayerActions, touchGameMeaningfulActivity } from "../sim/helpers";
 import { evaluateGameFinalization } from "../sim/finalization";
 import { invalidateOpenTurnPreparation } from "../sim/turnPreparationInvalidation";
-import { getMissionByKey, listMissions } from "./missionCatalog";
+import { persistLoadedGameMode } from "../sim/gameMode";
+import { getMissionByKey, listMissions, missionIsAvailableForTier } from "./missionCatalog";
 import {
   buildStrategyFromBaseAndOverrides,
   canonicalizeStrategyJson,
@@ -83,15 +84,59 @@ async function assertEmpireSeatForGame(
       q.eq("gameId", params.gameId).eq("userId", params.userId),
     )
     .unique();
-  if (
-    binding === null ||
-    !binding.isActive ||
-    binding.role !== "empire" ||
-    binding.empireId === null
-  ) {
+  if (binding === null || !binding.isActive || binding.role !== "empire") {
     throw new Error("You need an active empire seat in this game.");
   }
-  return binding.empireId;
+  if (binding.empireId !== null) {
+    return binding.empireId;
+  }
+
+  const game = await ctx.db.get("sim_games", params.gameId);
+  const runtimeVersion = game?.runtimeVersion ?? "v1_empire";
+  if (runtimeVersion === "v2_game_actor") {
+    const actor = await ctx.db
+      .query("sim_game_actors")
+      .withIndex("by_gameId_and_controllerUserId", (q) =>
+        q.eq("gameId", params.gameId).eq("controllerUserId", params.userId),
+      )
+      .unique();
+    if (actor?.legacyEmpireId !== null && actor?.legacyEmpireId !== undefined) {
+      return actor.legacyEmpireId;
+    }
+  }
+
+  throw new Error("You need an active empire seat in this game.");
+}
+
+async function resolveEmpireIdForRole(
+  ctx: MutationCtx,
+  params: {
+    gameId: Id<"sim_games">;
+    userId: Id<"users">;
+    role: "observer" | "empire" | "trader" | "admin";
+    empireId: Id<"emp_states"> | null;
+  },
+): Promise<Id<"emp_states"> | null> {
+  if (params.role !== "empire") {
+    return null;
+  }
+  if (params.empireId !== null) {
+    return params.empireId;
+  }
+
+  const game = await ctx.db.get("sim_games", params.gameId);
+  const runtimeVersion = game?.runtimeVersion ?? "v1_empire";
+  if (runtimeVersion !== "v2_game_actor") {
+    return null;
+  }
+
+  const actor = await ctx.db
+    .query("sim_game_actors")
+    .withIndex("by_gameId_and_controllerUserId", (q) =>
+      q.eq("gameId", params.gameId).eq("controllerUserId", params.userId),
+    )
+    .unique();
+  return actor?.legacyEmpireId ?? null;
 }
 
 async function listActiveGameRoles(
@@ -109,7 +154,7 @@ async function listActiveGameRoles(
   return grouped.flat().filter((role) => role.isActive);
 }
 
-async function releaseUserFromGameForNewAttempt(
+export async function releaseUserFromGameForNewAttempt(
   ctx: MutationCtx,
   params: { game: Doc<"sim_games">; userId: Id<"users"> },
 ): Promise<void> {
@@ -129,8 +174,14 @@ async function releaseUserFromGameForNewAttempt(
     isActive: false,
   });
 
-  if (role.role === "empire" && role.empireId !== null) {
-    const empire = await ctx.db.get("emp_states", role.empireId);
+  const empireId = await resolveEmpireIdForRole(ctx, {
+    gameId: game._id,
+    userId,
+    role: role.role,
+    empireId: role.empireId,
+  });
+  if (empireId !== null) {
+    const empire = await ctx.db.get("emp_states", empireId);
     if (empire !== null && empire.gameId === game._id) {
       await ctx.db.patch("emp_states", empire._id, {
         controller: "npc",
@@ -152,7 +203,7 @@ async function releaseUserFromGameForNewAttempt(
   await touchGameMeaningfulActivity(ctx, game._id, { humanAction: true });
 }
 
-function shouldRefreshMissionGame(
+export function shouldRefreshMissionGame(
   game: Doc<"sim_games">,
   mission: Awaited<ReturnType<typeof listMissions>>[number],
 ): boolean {
@@ -665,8 +716,14 @@ export const resignFromGame = mutation({
       isActive: false,
     });
 
-    if (role.role === "empire" && role.empireId !== null) {
-      const empire = await ctx.db.get("emp_states", role.empireId);
+    const empireId = await resolveEmpireIdForRole(ctx, {
+      gameId: args.gameId,
+      userId,
+      role: role.role,
+      empireId: role.empireId,
+    });
+    if (empireId !== null) {
+      const empire = await ctx.db.get("emp_states", empireId);
       if (empire !== null && empire.gameId === args.gameId) {
         await ctx.db.patch("emp_states", empire._id, {
           controller: "npc",
@@ -721,9 +778,20 @@ export const ensureMyStarterGames = mutation({
       throw new Error("Authentication required.");
     }
 
+    const user = await ctx.db.get("users", userId);
+    if (user === null) {
+      throw new Error("User not found.");
+    }
+    const plan = user.plan ?? "free";
+
     const [missions, ownedGames] = await Promise.all([
-      listMissions(ctx, { publishedOnly: true, fallbackToBuiltIns: true }),
-      ctx.db.query("sim_games").withIndex("by_ownerUserId", (q) => q.eq("ownerUserId", userId)).collect(),
+      listMissions(ctx, { publishedOnly: true, fallbackToBuiltIns: true, allowedTier: plan }),
+      ctx.db
+        .query("sim_games")
+        .withIndex("by_ownerUserId", (q) => q.eq("ownerUserId", userId))
+        .collect()
+        .then((games) => Promise.all(games.map((game) => persistLoadedGameMode(ctx, game))))
+        .then((games) => games.filter((game): game is NonNullable<typeof game> => game !== null)),
     ]);
 
     let created = 0;
@@ -759,6 +827,7 @@ export const ensureMyStarterGames = mutation({
       await ctx.runMutation(api.sim.mutations.createGame, {
         name: scenario.name,
         mapKey: scenario.mapKey,
+        mode: scenario.mode,
         seed: `${scenario.key}:${userId}:${Date.now()}`,
         npcEmpireKeys: scenario.scenario.npcEmpireKeys,
         automatedEmpireKeys: scenario.scenario.automatedEmpireKeys,
@@ -781,15 +850,25 @@ export const resetMyStarterGame = mutation({
       throw new Error("Authentication required.");
     }
 
+    const user = await ctx.db.get("users", userId);
+    if (user === null) {
+      throw new Error("User not found.");
+    }
+
     const scenario = await getMissionByKey(ctx, args.scenarioKey);
     if (scenario === null) {
       throw new Error("Unknown mission.");
+    }
+    if (!missionIsAvailableForTier(scenario, user.plan ?? "free")) {
+      throw new Error("Pro is required for that mission.");
     }
 
     const current = await ctx.db
       .query("sim_games")
       .withIndex("by_ownerUserId", (q) => q.eq("ownerUserId", userId))
       .collect()
+      .then((games) => Promise.all(games.map((game) => persistLoadedGameMode(ctx, game))))
+      .then((games) => games.filter((game): game is NonNullable<typeof game> => game !== null))
       .then((games) =>
         games.find((game) => (game.missionKey ?? game.lobbyScenarioKey) === scenario.key) ?? null,
       );
@@ -810,6 +889,7 @@ export const resetMyStarterGame = mutation({
     const gameId = await ctx.runMutation(api.sim.mutations.createGame, {
       name: scenario.name,
       mapKey: scenario.mapKey,
+      mode: scenario.mode,
       seed: `${scenario.key}:${userId}:${Date.now()}`,
       npcEmpireKeys: scenario.scenario.npcEmpireKeys,
       automatedEmpireKeys: scenario.scenario.automatedEmpireKeys,

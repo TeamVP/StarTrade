@@ -31,12 +31,19 @@ export function PlayerHomePage() {
   // Latch the last known empire ID so the map and empire panel stay intact
   // when the game ends and the empire record is cleaned up (game-end modal flow).
   const [lastKnownEmpireId, setLastKnownEmpireId] = useState<Id<"emp_states"> | null>(empireId);
+  const [lastKnownActorId, setLastKnownActorId] = useState<Id<"sim_game_actors"> | null>(
+    membership.actorId,
+  );
   useEffect(() => {
     if (empireId !== null) setLastKnownEmpireId(empireId);
   }, [empireId]);
+  useEffect(() => {
+    if (membership.actorId !== null) setLastKnownActorId(membership.actorId);
+  }, [membership.actorId]);
   // Use the real empireId when available; fall back to last-known only when we
   // previously had one (i.e. the player was not a spectator to begin with).
   const displayEmpireId = empireId ?? lastKnownEmpireId;
+  const displayActorId = membership.actorId ?? lastKnownActorId;
 
   const canCreateNewStarterGame =
     empireId === null &&
@@ -63,8 +70,8 @@ export function PlayerHomePage() {
   }
 
   const aside =
-    displayEmpireId !== null ? (
-      <EmpirePanel focusEmpireId={displayEmpireId} />
+    displayEmpireId !== null || displayActorId !== null ? (
+      <EmpirePanel focusEmpireId={displayEmpireId} focusActorId={displayActorId} />
     ) : (
       <Card className="p-4">
         <h2 className="text-sm font-semibold uppercase tracking-wide text-st-muted">

@@ -1,4 +1,5 @@
 import { parseAutomation } from "../sim/economy/applyNpcStrategy";
+import type { PublisherContentSource } from "./publisherAccess";
 
 type JsonPrimitive = string | number | boolean | null;
 type JsonValue = JsonPrimitive | JsonObject | JsonValue[];
@@ -10,6 +11,7 @@ export type PublicAutomationStrategy = {
   description: string;
   tags: string[];
   strategyJson: string;
+  source: PublisherContentSource;
   preview: {
     stance: string;
     earlyRush: boolean;
@@ -331,6 +333,7 @@ export const PUBLIC_AUTOMATION_STRATEGIES: PublicAutomationStrategy[] =
       description: entry.description,
       tags: entry.tags,
       strategyJson,
+      source: "official",
       preview: previewFromStrategyJson(strategyJson),
     };
   });

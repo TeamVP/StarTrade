@@ -9,6 +9,7 @@ export const WIPE_GAME_PHASES = [
   "eco_bg_traders",
   "sim_trader_identities",
   "sim_game_settings",
+  "sim_game_actors",
   "cmb_battles",
   "col_colony_ships",
   "flt_fleets",

@@ -3,24 +3,48 @@ import { Link } from "react-router-dom";
 import { ChevronRight } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { useActiveGame } from "@/features/galaxy/hooks/useActiveGame";
+import { gameModeSupportsTraderGameplay } from "@/features/games/gameMode";
 import { cn } from "@/lib/utils";
 
-const liveLinks = [
+type AdminLink = {
+  to: string;
+  label: string;
+  description: string;
+  requiresTraderGameplay?: boolean;
+};
+
+const liveLinks: readonly AdminLink[] = [
   { to: "/admin/map", label: "Map", description: "Galaxy view and live turn panels." },
   { to: "/admin/games", label: "Games", description: "Running games and admin controls." },
   { to: "/admin/fleet", label: "Fleet", description: "Fleet movements, dispatch, and routing." },
   { to: "/admin/combat", label: "Combat", description: "Battle state and combat diagnostics." },
-  { to: "/admin/economy", label: "Economy", description: "Markets, production, and shortages." },
+  {
+    to: "/admin/economy",
+    label: "Economy",
+    description: "Markets, production, and shortages.",
+    requiresTraderGameplay: true,
+  },
   { to: "/admin/empires", label: "Empires", description: "Empire status, holdings, and systems." },
-  { to: "/admin/traders", label: "Traders", description: "Trader activity and logistics." },
+  {
+    to: "/admin/traders",
+    label: "Traders",
+    description: "Trader activity and logistics.",
+    requiresTraderGameplay: true,
+  },
   { to: "/admin/history", label: "History", description: "Timeline and recorded events." },
   { to: "/admin/results", label: "Results", description: "Durable finished-game outcomes and leaderboards." },
   { to: "/admin/balance", label: "Balance", description: "Tune live game parameters." },
 ] as const;
 
-const adminLinks = [
+const adminLinks: readonly AdminLink[] = [
   { to: "/admin/db", label: "Database", description: "Database health, cleanup backlog, and maintenance actions." },
   { to: "/admin/users", label: "Users", description: "View auth users and create new user records." },
+  {
+    to: "/admin/moderation",
+    label: "Moderation",
+    description:
+      "Review actionable community missions and strategies, including draft, ownerless, and recent moderation queues.",
+  },
   {
     to: "/admin/strategies",
     label: "Strategies",
@@ -44,6 +68,7 @@ const adminLinks = [
     label: "Trader NPCs",
     description:
       "Manage NPC trader players, edit their metadata, and assign strategies from the library.",
+    requiresTraderGameplay: true,
   },
 ] as const;
 
@@ -62,6 +87,13 @@ function AdminLinkCard(props: { to: string; label: string; description: string }
 export function AdminHomePage() {
   const { activeGame } = useActiveGame();
   const [liveOpen, setLiveOpen] = useState(false);
+  const traderGameplayEnabled = gameModeSupportsTraderGameplay(activeGame?.mode);
+  const visibleLiveLinks = liveLinks.filter(
+    (link) => !link.requiresTraderGameplay || traderGameplayEnabled,
+  );
+  const visibleAdminLinks = adminLinks.filter(
+    (link) => !link.requiresTraderGameplay || traderGameplayEnabled,
+  );
 
   return (
     <div className="mx-auto max-w-[86.4rem] space-y-6 px-4 py-6">
@@ -93,7 +125,7 @@ export function AdminHomePage() {
         </button>
         {liveOpen ? (
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-            {liveLinks.map((link) => (
+            {visibleLiveLinks.map((link) => (
               <AdminLinkCard key={link.to} {...link} />
             ))}
           </div>
@@ -108,7 +140,7 @@ export function AdminHomePage() {
           </p>
         </div>
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-          {adminLinks.map((link) => (
+          {visibleAdminLinks.map((link) => (
             <AdminLinkCard key={link.to} {...link} />
           ))}
         </div>

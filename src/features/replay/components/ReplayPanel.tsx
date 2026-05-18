@@ -3,13 +3,28 @@ import { api } from "../../../../convex/_generated/api";
 import { Card } from "@/components/ui/card";
 import { useActiveGame } from "@/features/galaxy/hooks/useActiveGame";
 
+type RecentReplayEvent = {
+  _id: string;
+  turnNumber: number;
+  eventType: string;
+  summary: string;
+  actorType: string;
+  targetType: string | null;
+  actorLabel?: string | null;
+  targetLabel?: string | null;
+};
+
+function formatEventTypeLabel(eventType: string): string {
+  return eventType.split("_").join(" ");
+}
+
 export function ReplayPanel() {
   const { activeGame } = useActiveGame();
   const events =
-    useQuery(
+    (useQuery(
       api.sim.queries.listRecentEvents,
       activeGame ? { gameId: activeGame._id, limit: 12 } : "skip",
-    ) ?? [];
+    ) ?? []) as RecentReplayEvent[];
 
   return (
     <Card>
@@ -23,8 +38,19 @@ export function ReplayPanel() {
           {events.map((event) => (
             <li key={event._id} className="border-b border-st-border pb-2 last:border-0">
               <span className="text-st-muted">T{event.turnNumber}</span>{" "}
-              <span className="font-medium text-st-fg">{event.eventType}</span>
+              <span className="font-medium text-st-fg">{formatEventTypeLabel(event.eventType)}</span>
               <p className="text-st-muted">{event.summary}</p>
+              {(event.actorLabel !== undefined && event.actorLabel !== null) ||
+              (event.targetLabel !== undefined && event.targetLabel !== null) ? (
+                <p className="text-st-muted/80">
+                  {event.actorLabel ?? event.actorType}
+                  {event.targetLabel !== undefined && event.targetLabel !== null
+                    ? ` → ${event.targetLabel}`
+                    : event.targetType !== null
+                      ? ` → ${event.targetType}`
+                      : ""}
+                </p>
+              ) : null}
             </li>
           ))}
         </ul>

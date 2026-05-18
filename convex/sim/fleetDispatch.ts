@@ -75,6 +75,7 @@ export async function dispatchMoveFromFleet(
     const childId = await ctx.db.insert("flt_fleets", {
       gameId: params.gameId,
       empireId: fleet.empireId,
+      ...(fleet.gameActorId !== undefined ? { gameActorId: fleet.gameActorId } : {}),
       fleetKey: childFleetKey,
       name: childName,
       strength: ships,

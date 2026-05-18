@@ -21,8 +21,28 @@ import { NPC_EMPIRE_PLAYERS, normalizeNpcEmpireKeys } from "../seed/npcEmpirePla
 import {
   BUILT_IN_MISSION_SEED_ROWS,
   canonicalizeMissionScenarioJson,
+  getMissionByKey,
   parseMissionScenarioJson,
 } from "../usr/missionCatalog";
+import { gameUsesTraderEconomy, loadGameWithPersistedResolvedMode, loadGameWithResolvedMode } from "../sim/gameMode";
+import {
+  assertMayTransitionContentStatus,
+  isTerminalContentStatus,
+  resolvePublisherContentStatus,
+} from "../usr/publisherAccess";
+
+function withTraderSettingsReset<T extends typeof DEFAULT_GAME_SETTINGS>(settings: T): T {
+  return {
+    ...settings,
+    traderShipCostMult: DEFAULT_GAME_SETTINGS.traderShipCostMult,
+    traderMinActive: DEFAULT_GAME_SETTINGS.traderMinActive,
+    traderMaxActive: DEFAULT_GAME_SETTINGS.traderMaxActive,
+    traderShipHirePerTurn: DEFAULT_GAME_SETTINGS.traderShipHirePerTurn,
+    traderHireChancePct: DEFAULT_GAME_SETTINGS.traderHireChancePct,
+    traderDockingCost: DEFAULT_GAME_SETTINGS.traderDockingCost,
+    traderLimitsAutomated: DEFAULT_GAME_SETTINGS.traderLimitsAutomated,
+  };
+}
 
 const LEGACY_GAME_CLEANUP_SCAN_MULTIPLIER = 4;
 const PASSWORD_PROVIDER_ID = "password";
@@ -150,6 +170,31 @@ function normalizeMissionPrerequisites(prerequisiteMissionKeys: string[]): strin
   return normalized;
 }
 
+function normalizeModerationNote(note: string | undefined): string | undefined {
+  if (note === undefined) {
+    return undefined;
+  }
+  const normalized = note.trim();
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+function normalizeUniqueKeys<T extends string>(
+  values: T[],
+  normalizer: (value: string) => T,
+): T[] {
+  const seen = new Set<T>();
+  const normalized: T[] = [];
+  for (const value of values) {
+    const key = normalizer(value);
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    normalized.push(key);
+  }
+  return normalized;
+}
+
 async function normalizeMissionScenarioJson(ctx: MutationCtx, scenarioJson: string): Promise<string> {
   const normalized = canonicalizeMissionScenarioJson(scenarioJson);
   const scenario = parseMissionScenarioJson(normalized);
@@ -189,6 +234,47 @@ async function assertNpcStrategyKey(
     throw new Error("Selected strategy is not available to NPC players.");
   }
   return strategyKey;
+}
+
+async function assertAssignableContentOwner(
+  ctx: MutationCtx,
+  ownerUserId: Id<"users"> | null,
+): Promise<Id<"users"> | null> {
+  if (ownerUserId === null) {
+    return null;
+  }
+
+  const owner = await ctx.db.get("users", ownerUserId);
+  if (owner === null) {
+    throw new Error("Owner user not found.");
+  }
+  if (!(owner.admin ?? false) && !(owner.publisher ?? false)) {
+    throw new Error("Owner must have publisher or admin rights.");
+  }
+  return ownerUserId;
+}
+
+async function recordModerationEvent(
+  ctx: MutationCtx,
+  args: {
+    contentType: "mission" | "strategy";
+    contentKey: string;
+    actorUserId: Id<"users">;
+    action: "created" | "updated" | "bulk_status_updated" | "bulk_owner_updated" | "bulk_source_updated";
+    summary: string;
+    note?: string;
+  },
+) {
+  const note = normalizeModerationNote(args.note);
+  await ctx.db.insert("admin_content_moderation_events", {
+    contentType: args.contentType,
+    contentKey: args.contentKey,
+    actorUserId: args.actorUserId,
+    action: args.action,
+    summary: args.summary.trim(),
+    note,
+    createdAt: Date.now(),
+  });
 }
 
 async function findPasswordAccountByEmail(ctx: MutationCtx, email: string) {
@@ -257,7 +343,12 @@ const settingsValidator = v.object({
 export const getGameSettings = query({
   args: { gameId: v.id("sim_games") },
   handler: async (ctx, args) => {
-    return await loadGameSettings(ctx, args.gameId);
+    const settings = await loadGameSettings(ctx, args.gameId);
+    const game = await loadGameWithResolvedMode(ctx, args.gameId);
+    if (game === null || gameUsesTraderEconomy(game)) {
+      return settings;
+    }
+    return withTraderSettingsReset(settings);
   },
 });
 
@@ -274,13 +365,15 @@ export const updateGameSettings = mutation({
     const userId = await getAuthUserId(ctx);
     if (userId === null) throw new Error("Authentication required.");
     await assertGameAdmin(ctx, args.gameId, userId);
+    const game = await loadGameWithPersistedResolvedMode(ctx, args.gameId);
+    if (game === null) throw new Error("Game not found.");
 
     function clamp(v: number, lo: number, hi: number) {
       return Math.min(hi, Math.max(lo, v));
     }
 
     const s = args.settings;
-    const safe = {
+    const safeBase = {
       gameId: args.gameId,
       foodProdMult: clamp(s.foodProdMult, 0.1, 8),
       shipProdMult: clamp(s.shipProdMult, 0.1, 8),
@@ -308,6 +401,9 @@ export const updateGameSettings = mutation({
       combatFoodDamageMult: clamp(s.combatFoodDamageMult, 0, 5),
       traderLimitsAutomated: s.traderLimitsAutomated,
     };
+    const safe = gameUsesTraderEconomy(game)
+      ? safeBase
+      : withTraderSettingsReset(safeBase);
 
     const existing = await ctx.db
       .query("sim_game_settings")
@@ -620,9 +716,11 @@ export const createUser = mutation({
     email: v.optional(v.union(v.string(), v.null())),
     phone: v.optional(v.union(v.string(), v.null())),
     image: v.optional(v.union(v.string(), v.null())),
+    plan: v.optional(v.union(v.literal("free"), v.literal("pro"))),
     password: v.optional(v.union(v.string(), v.null())),
     isAnonymous: v.boolean(),
     admin: v.boolean(),
+    publisher: v.boolean(),
     emailVerified: v.boolean(),
     phoneVerified: v.boolean(),
   },
@@ -659,10 +757,12 @@ export const createUser = mutation({
       ...(email !== undefined ? { email } : {}),
       ...(phone !== undefined ? { phone } : {}),
       ...(image !== undefined ? { image } : {}),
+      ...(args.plan !== undefined ? { plan: args.plan } : {}),
       ...(args.emailVerified ? { emailVerificationTime: now } : {}),
       ...(args.phoneVerified ? { phoneVerificationTime: now } : {}),
       ...(args.isAnonymous ? { isAnonymous: true } : {}),
       ...(args.admin ? { admin: true } : {}),
+      ...(args.publisher ? { publisher: true } : {}),
     });
 
     if (email !== undefined && password !== undefined) {
@@ -688,8 +788,10 @@ export const updateUser = mutation({
     email: v.optional(v.union(v.string(), v.null())),
     phone: v.optional(v.union(v.string(), v.null())),
     image: v.optional(v.union(v.string(), v.null())),
+    plan: v.union(v.literal("free"), v.literal("pro")),
     isAnonymous: v.boolean(),
     admin: v.boolean(),
+    publisher: v.boolean(),
     emailVerified: v.boolean(),
     phoneVerified: v.boolean(),
   },
@@ -759,6 +861,8 @@ export const updateUser = mutation({
       nextUser.image = image;
     }
 
+    nextUser.plan = args.plan;
+
     if (args.emailVerified) {
       nextUser.emailVerificationTime = user.emailVerificationTime ?? now;
     } else {
@@ -781,6 +885,12 @@ export const updateUser = mutation({
       nextUser.admin = true;
     } else {
       delete nextUser.admin;
+    }
+
+    if (args.publisher) {
+      nextUser.publisher = true;
+    } else {
+      delete nextUser.publisher;
     }
 
     await ctx.db.replace("users", args.userId, nextUser);
@@ -1071,6 +1181,176 @@ export const backfillGameUrlCodes = mutation({
   },
 });
 
+export const backfillMetadataAccessBatch = mutation({
+  args: {
+    limit: v.optional(v.number()),
+    userCursor: v.optional(v.string()),
+    missionCursor: v.optional(v.string()),
+    strategyCursor: v.optional(v.string()),
+    gameCursor: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const viewerUserId = await getAuthUserId(ctx);
+    if (viewerUserId === null) {
+      throw new Error("Authentication required.");
+    }
+
+    const limit = Math.max(1, Math.min(Math.floor(args.limit ?? 32), 128));
+    let updatedUsers = 0;
+    let updatedGames = 0;
+    let updatedMissions = 0;
+    let updatedStrategies = 0;
+    let scannedUsers = 0;
+    let scannedGames = 0;
+    let scannedMissions = 0;
+    let scannedStrategies = 0;
+    let missionBackedGameModes = 0;
+    let fallbackGameModes = 0;
+
+    const updatedUserIds: Id<"users">[] = [];
+    const updatedGameIds: Id<"sim_games">[] = [];
+    const updatedMissionIds: Id<"sim_missions">[] = [];
+    const updatedStrategyIds: Id<"usr_automation_strategies">[] = [];
+
+    const usersPage = await ctx.db.query("users").order("desc").paginate({
+      cursor: args.userCursor ?? null,
+      numItems: limit,
+    });
+    scannedUsers = usersPage.page.length;
+    for (const user of usersPage.page) {
+      const patch: {
+        plan?: "free";
+        publisher?: false;
+      } = {};
+      if (user.plan === undefined) {
+        patch.plan = "free";
+      }
+      if (user.publisher === undefined) {
+        patch.publisher = false;
+      }
+      if (Object.keys(patch).length === 0) {
+        continue;
+      }
+      await ctx.db.patch("users", user._id, patch);
+      updatedUsers += 1;
+      updatedUserIds.push(user._id);
+    }
+
+    const missionsPage = await ctx.db.query("sim_missions").order("desc").paginate({
+      cursor: args.missionCursor ?? null,
+      numItems: limit,
+    });
+    scannedMissions = missionsPage.page.length;
+    for (const mission of missionsPage.page) {
+      const patch: {
+        ownerUserId?: null;
+        source?: "official";
+        status?: "draft" | "published" | "archived" | "deleted" | "admin_deleted";
+        mode?: "conquest_core" | "conquest_plus" | "trader_economy";
+        requiredTier?: "free" | "pro";
+      } = {};
+      if (mission.ownerUserId === undefined) {
+        patch.ownerUserId = null;
+      }
+      if (mission.source === undefined) {
+        patch.source = "official";
+      }
+      if (mission.status === undefined) {
+        patch.status = resolvePublisherContentStatus({
+          status: undefined,
+          published: mission.published,
+          defaultDraft: true,
+        });
+      }
+      if (mission.mode === undefined) {
+        patch.mode = "conquest_core";
+      }
+      if (mission.requiredTier === undefined) {
+        patch.requiredTier = "free";
+      }
+      if (Object.keys(patch).length === 0) {
+        continue;
+      }
+      await ctx.db.patch("sim_missions", mission._id, patch);
+      updatedMissions += 1;
+      updatedMissionIds.push(mission._id);
+    }
+
+    const strategiesPage = await ctx.db.query("usr_automation_strategies").order("desc").paginate({
+      cursor: args.strategyCursor ?? null,
+      numItems: limit,
+    });
+    scannedStrategies = strategiesPage.page.length;
+    for (const strategy of strategiesPage.page) {
+      const patch: {
+        ownerUserId?: null;
+        source?: "official";
+        status?: "published";
+      } = {};
+      if (strategy.ownerUserId === undefined) {
+        patch.ownerUserId = null;
+      }
+      if (strategy.source === undefined) {
+        patch.source = "official";
+      }
+      if (strategy.status === undefined) {
+        patch.status = "published";
+      }
+      if (Object.keys(patch).length === 0) {
+        continue;
+      }
+      await ctx.db.patch("usr_automation_strategies", strategy._id, patch);
+      updatedStrategies += 1;
+      updatedStrategyIds.push(strategy._id);
+    }
+
+    const gamesPage = await ctx.db.query("sim_games").order("desc").paginate({
+      cursor: args.gameCursor ?? null,
+      numItems: limit,
+    });
+    scannedGames = gamesPage.page.length;
+    for (const game of gamesPage.page) {
+      if (game.mode !== undefined) {
+        continue;
+      }
+      const missionKey = game.missionKey ?? game.lobbyScenarioKey ?? undefined;
+      const mission = missionKey === undefined || missionKey === null ? null : await getMissionByKey(ctx, missionKey);
+      const mode = mission?.mode ?? "trader_economy";
+      await ctx.db.patch("sim_games", game._id, { mode });
+      updatedGames += 1;
+      updatedGameIds.push(game._id);
+      if (mission !== null) {
+        missionBackedGameModes += 1;
+      } else {
+        fallbackGameModes += 1;
+      }
+    }
+
+    return {
+      limit,
+      scannedUsers,
+      scannedGames,
+      scannedMissions,
+      scannedStrategies,
+      updatedUsers,
+      updatedGames,
+      updatedMissions,
+      updatedStrategies,
+      missionBackedGameModes,
+      fallbackGameModes,
+      updatedUserIds,
+      updatedGameIds,
+      updatedMissionIds,
+      updatedStrategyIds,
+      nextUserCursor: usersPage.isDone ? null : usersPage.continueCursor,
+      nextMissionCursor: missionsPage.isDone ? null : missionsPage.continueCursor,
+      nextStrategyCursor: strategiesPage.isDone ? null : strategiesPage.continueCursor,
+      nextGameCursor: gamesPage.isDone ? null : gamesPage.continueCursor,
+      sweepComplete: usersPage.isDone && missionsPage.isDone && strategiesPage.isDone && gamesPage.isDone,
+    };
+  },
+});
+
 export const createAutomationStrategy = mutation({
   args: {
     key: v.string(),
@@ -1078,6 +1358,9 @@ export const createAutomationStrategy = mutation({
     description: v.string(),
     tags: v.array(v.string()),
     strategyJson: v.string(),
+    ownerUserId: v.optional(v.union(v.id("users"), v.null())),
+    source: v.optional(v.union(v.literal("official"), v.literal("community"))),
+    status: v.optional(v.union(v.literal("draft"), v.literal("published"))),
     availableForHumans: v.boolean(),
     availableForNpcs: v.boolean(),
   },
@@ -1094,17 +1377,34 @@ export const createAutomationStrategy = mutation({
     }
 
     const now = Date.now();
-    return await ctx.db.insert("usr_automation_strategies", {
+    const source = args.source ?? "official";
+    const status = args.status ?? (source === "community" ? "draft" : "published");
+    const ownerUserId = await assertAssignableContentOwner(ctx, args.ownerUserId ?? null);
+    if (source === "official" && ownerUserId !== null) {
+      throw new Error("Official strategies cannot have an owner.");
+    }
+    const strategyId = await ctx.db.insert("usr_automation_strategies", {
       key,
       name: args.name.trim(),
       description: normalizeStrategyDescription(args.description),
       tags: normalizeStrategyTags(args.tags),
       strategyJson: canonicalizeStrategyJson(args.strategyJson),
+      ownerUserId,
+      source,
+      status,
       availableForHumans: args.availableForHumans,
       availableForNpcs: args.availableForNpcs,
       createdAt: now,
       updatedAt: now,
     });
+    await recordModerationEvent(ctx, {
+      contentType: "strategy",
+      contentKey: key,
+      actorUserId: userId,
+      action: "created",
+      summary: `Created ${source} strategy with ${status} status.`,
+    });
+    return strategyId;
   },
 });
 
@@ -1115,6 +1415,18 @@ export const updateAutomationStrategy = mutation({
     description: v.optional(v.string()),
     tags: v.optional(v.array(v.string())),
     strategyJson: v.optional(v.string()),
+    ownerUserId: v.optional(v.union(v.id("users"), v.null())),
+    source: v.optional(v.union(v.literal("official"), v.literal("community"))),
+    status: v.optional(
+      v.union(
+        v.literal("draft"),
+        v.literal("published"),
+        v.literal("archived"),
+        v.literal("deleted"),
+        v.literal("admin_deleted"),
+      ),
+    ),
+    moderationNote: v.optional(v.string()),
     availableForHumans: v.optional(v.boolean()),
     availableForNpcs: v.optional(v.boolean()),
   },
@@ -1130,13 +1442,26 @@ export const updateAutomationStrategy = mutation({
       throw new Error("Strategy not found.");
     }
 
+    const currentStatus = resolvePublisherContentStatus({ status: existing.status });
+    if (isTerminalContentStatus(currentStatus)) {
+      throw new Error("This content is in a terminal status and can no longer be edited.");
+    }
+    assertMayTransitionContentStatus({
+      currentStatus,
+      nextStatus: args.status ?? currentStatus,
+      isAdmin: true,
+    });
+
     const patch: {
       name?: string;
       description?: string;
       tags?: string[];
       strategyJson?: string;
+      source?: "official" | "community";
+      status?: "draft" | "published" | "archived" | "deleted" | "admin_deleted";
       availableForHumans?: boolean;
       availableForNpcs?: boolean;
+      ownerUserId?: Id<"users"> | null;
       updatedAt: number;
     } = { updatedAt: Date.now() };
 
@@ -1152,15 +1477,217 @@ export const updateAutomationStrategy = mutation({
     if (args.strategyJson !== undefined) {
       patch.strategyJson = canonicalizeStrategyJson(args.strategyJson);
     }
+    if (args.ownerUserId !== undefined) {
+      patch.ownerUserId = await assertAssignableContentOwner(ctx, args.ownerUserId);
+    }
+    if (args.source !== undefined) {
+      patch.source = args.source;
+    }
+    if (args.status !== undefined) {
+      patch.status = args.status;
+    }
     if (args.availableForHumans !== undefined) {
       patch.availableForHumans = args.availableForHumans;
     }
     if (args.availableForNpcs !== undefined) {
       patch.availableForNpcs = args.availableForNpcs;
     }
+    if ((patch.source ?? existing.source ?? "official") === "official") {
+      patch.ownerUserId = null;
+    }
+
+    if (existing.ownerUserId === undefined) {
+      patch.ownerUserId = patch.ownerUserId ?? null;
+    }
+    if (existing.source === undefined) {
+      (patch as { source?: "official" }).source = "official";
+    }
+    if (existing.status === undefined) {
+      (patch as { status?: "published" }).status = "published";
+    }
 
     await ctx.db.patch("usr_automation_strategies", existing._id, patch);
+    const nextSource = patch.source ?? existing.source ?? "official";
+    const nextStatus = patch.status ?? resolvePublisherContentStatus({ status: existing.status });
+    const nextOwnerUserId =
+      patch.ownerUserId !== undefined
+        ? patch.ownerUserId
+        : existing.ownerUserId === undefined
+          ? null
+          : existing.ownerUserId;
+    await recordModerationEvent(ctx, {
+      contentType: "strategy",
+      contentKey: key,
+      actorUserId: userId,
+      action: "updated",
+      summary: `Updated strategy metadata to ${nextSource} / ${nextStatus}${nextOwnerUserId === null ? " / system owner" : " / assigned owner"}.`,
+      note: args.moderationNote,
+    });
     return { key };
+  },
+});
+
+export const bulkUpdateAutomationStrategyStatus = mutation({
+  args: {
+    keys: v.array(v.string()),
+    status: v.union(
+      v.literal("draft"),
+      v.literal("published"),
+      v.literal("archived"),
+      v.literal("deleted"),
+      v.literal("admin_deleted"),
+    ),
+    moderationNote: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (userId === null) {
+      throw new Error("Authentication required.");
+    }
+
+    const keys = normalizeUniqueKeys(args.keys, normalizeStrategyKey);
+    const updatedKeys: string[] = [];
+    const skippedKeys: string[] = [];
+
+    for (const key of keys) {
+      const existing = await getAutomationStrategyByKey(ctx, key);
+      if (existing === null) {
+        skippedKeys.push(key);
+        continue;
+      }
+
+      const currentStatus = resolvePublisherContentStatus({ status: existing.status });
+      if (isTerminalContentStatus(currentStatus)) {
+        skippedKeys.push(key);
+        continue;
+      }
+
+      try {
+        assertMayTransitionContentStatus({
+          currentStatus,
+          nextStatus: args.status,
+          isAdmin: true,
+        });
+      } catch {
+        skippedKeys.push(key);
+        continue;
+      }
+
+      await ctx.db.patch("usr_automation_strategies", existing._id, {
+        status: args.status,
+        updatedAt: Date.now(),
+      });
+      await recordModerationEvent(ctx, {
+        contentType: "strategy",
+        contentKey: key,
+        actorUserId: userId,
+        action: "bulk_status_updated",
+        summary: `Bulk updated status to ${args.status}.`,
+        note: args.moderationNote,
+      });
+      updatedKeys.push(key);
+    }
+
+    return { updatedKeys, skippedKeys };
+  },
+});
+
+export const bulkUpdateAutomationStrategyOwner = mutation({
+  args: {
+    keys: v.array(v.string()),
+    ownerUserId: v.union(v.id("users"), v.null()),
+    moderationNote: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (userId === null) {
+      throw new Error("Authentication required.");
+    }
+
+    const keys = normalizeUniqueKeys(args.keys, normalizeStrategyKey);
+    const ownerUserId = await assertAssignableContentOwner(ctx, args.ownerUserId);
+    const updatedKeys: string[] = [];
+    const skippedKeys: string[] = [];
+
+    for (const key of keys) {
+      const existing = await getAutomationStrategyByKey(ctx, key);
+      if (existing === null) {
+        skippedKeys.push(key);
+        continue;
+      }
+      if ((existing.source ?? "official") === "official" && ownerUserId !== null) {
+        skippedKeys.push(key);
+        continue;
+      }
+
+      await ctx.db.patch("usr_automation_strategies", existing._id, {
+        ownerUserId,
+        updatedAt: Date.now(),
+      });
+      await recordModerationEvent(ctx, {
+        contentType: "strategy",
+        contentKey: key,
+        actorUserId: userId,
+        action: "bulk_owner_updated",
+        summary: ownerUserId === null ? "Bulk cleared owner to system." : "Bulk reassigned owner.",
+        note: args.moderationNote,
+      });
+      updatedKeys.push(key);
+    }
+
+    return { updatedKeys, skippedKeys };
+  },
+});
+
+export const bulkUpdateAutomationStrategySource = mutation({
+  args: {
+    keys: v.array(v.string()),
+    source: v.union(v.literal("official"), v.literal("community")),
+    moderationNote: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (userId === null) {
+      throw new Error("Authentication required.");
+    }
+
+    const keys = normalizeUniqueKeys(args.keys, normalizeStrategyKey);
+    const updatedKeys: string[] = [];
+    const skippedKeys: string[] = [];
+
+    for (const key of keys) {
+      const existing = await getAutomationStrategyByKey(ctx, key);
+      if (existing === null) {
+        skippedKeys.push(key);
+        continue;
+      }
+
+      const currentStatus = resolvePublisherContentStatus({ status: existing.status });
+      if (isTerminalContentStatus(currentStatus)) {
+        skippedKeys.push(key);
+        continue;
+      }
+
+      await ctx.db.patch("usr_automation_strategies", existing._id, {
+        source: args.source,
+        ownerUserId: args.source === "official" ? null : (existing.ownerUserId ?? null),
+        updatedAt: Date.now(),
+      });
+      await recordModerationEvent(ctx, {
+        contentType: "strategy",
+        contentKey: key,
+        actorUserId: userId,
+        action: "bulk_source_updated",
+        summary:
+          args.source === "official"
+            ? "Bulk moved source to official and cleared owner."
+            : "Bulk moved source to community.",
+        note: args.moderationNote,
+      });
+      updatedKeys.push(key);
+    }
+
+    return { updatedKeys, skippedKeys };
   },
 });
 
@@ -1189,6 +1716,9 @@ export const seedMissingAutomationStrategies = mutation({
         description: strategy.description,
         tags: strategy.tags,
         strategyJson: strategy.strategyJson,
+        ownerUserId: null,
+        source: "official",
+        status: "published",
         availableForHumans: strategy.availableForHumans,
         availableForNpcs: strategy.availableForNpcs,
         createdAt: now,
@@ -1346,6 +1876,17 @@ export const createMission = mutation({
     name: v.string(),
     description: v.string(),
     mapKey: v.string(),
+    mode: v.optional(
+      v.union(
+        v.literal("conquest_core"),
+        v.literal("conquest_plus"),
+        v.literal("trader_economy"),
+      ),
+    ),
+    ownerUserId: v.optional(v.union(v.id("users"), v.null())),
+    source: v.optional(v.union(v.literal("official"), v.literal("community"))),
+    status: v.optional(v.union(v.literal("draft"), v.literal("published"))),
+    requiredTier: v.optional(v.union(v.literal("free"), v.literal("pro"))),
     level: v.number(),
     requiredWins: v.number(),
     prerequisiteMissionKeys: v.array(v.string()),
@@ -1374,21 +1915,44 @@ export const createMission = mutation({
     }
 
     const now = Date.now();
-    return await ctx.db.insert("sim_missions", {
+    const source = args.source ?? "official";
+    const status = args.status ?? resolvePublisherContentStatus({
+      status: undefined,
+      published: args.published,
+      defaultDraft: source === "community",
+    });
+    const ownerUserId = await assertAssignableContentOwner(ctx, args.ownerUserId ?? null);
+    if (source === "official" && ownerUserId !== null) {
+      throw new Error("Official missions cannot have an owner.");
+    }
+    const missionId = await ctx.db.insert("sim_missions", {
       key,
       name: normalizeMissionName(args.name),
       description: normalizeMissionDescription(args.description),
       mapKey: args.mapKey.trim(),
+      ownerUserId,
+      source,
+      status,
+      mode: args.mode ?? "conquest_core",
+      requiredTier: args.requiredTier ?? "free",
       level: normalizeMissionLevel(args.level),
       requiredWins: normalizeMissionRequiredWins(args.requiredWins),
       prerequisiteMissionKeys: normalizeMissionPrerequisites(args.prerequisiteMissionKeys),
-      published: args.published,
+      published: status === "published",
       sortOrder: normalizeMissionSortOrder(args.sortOrder),
       retentionClass: args.retentionClass,
       scenarioJson: await normalizeMissionScenarioJson(ctx, args.scenarioJson),
       createdAt: now,
       updatedAt: now,
     });
+    await recordModerationEvent(ctx, {
+      contentType: "mission",
+      contentKey: key,
+      actorUserId: userId,
+      action: "created",
+      summary: `Created ${source} mission with ${status} status.`,
+    });
+    return missionId;
   },
 });
 
@@ -1398,6 +1962,25 @@ export const updateMission = mutation({
     name: v.optional(v.string()),
     description: v.optional(v.string()),
     mapKey: v.optional(v.string()),
+    mode: v.optional(
+      v.union(
+        v.literal("conquest_core"),
+        v.literal("conquest_plus"),
+        v.literal("trader_economy"),
+      ),
+    ),
+    ownerUserId: v.optional(v.union(v.id("users"), v.null())),
+    source: v.optional(v.union(v.literal("official"), v.literal("community"))),
+    status: v.optional(
+      v.union(
+        v.literal("draft"),
+        v.literal("published"),
+        v.literal("archived"),
+        v.literal("deleted"),
+        v.literal("admin_deleted"),
+      ),
+    ),
+    requiredTier: v.optional(v.union(v.literal("free"), v.literal("pro"))),
     level: v.optional(v.number()),
     requiredWins: v.optional(v.number()),
     prerequisiteMissionKeys: v.optional(v.array(v.string())),
@@ -1411,6 +1994,7 @@ export const updateMission = mutation({
       ),
     ),
     scenarioJson: v.optional(v.string()),
+    moderationNote: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
@@ -1427,10 +2011,27 @@ export const updateMission = mutation({
       throw new Error("Mission not found.");
     }
 
+    const currentStatus = resolvePublisherContentStatus({
+      status: existing.status,
+      published: existing.published,
+      defaultDraft: true,
+    });
+    if (isTerminalContentStatus(currentStatus)) {
+      throw new Error("This content is in a terminal status and can no longer be edited.");
+    }
+    assertMayTransitionContentStatus({
+      currentStatus,
+      nextStatus: args.status ?? currentStatus,
+      isAdmin: true,
+    });
+
     const patch: {
       name?: string;
       description?: string;
       mapKey?: string;
+      source?: "official" | "community";
+      mode?: "conquest_core" | "conquest_plus" | "trader_economy";
+      requiredTier?: "free" | "pro";
       level?: number;
       requiredWins?: number;
       prerequisiteMissionKeys?: string[];
@@ -1438,6 +2039,8 @@ export const updateMission = mutation({
       sortOrder?: number;
       retentionClass?: "discarded" | "official" | "archived_debug";
       scenarioJson?: string;
+      ownerUserId?: Id<"users"> | null;
+      status?: "draft" | "published" | "archived" | "deleted" | "admin_deleted";
       updatedAt: number;
     } = { updatedAt: Date.now() };
 
@@ -1450,6 +2053,18 @@ export const updateMission = mutation({
     if (args.mapKey !== undefined) {
       patch.mapKey = args.mapKey.trim();
     }
+    if (args.ownerUserId !== undefined) {
+      patch.ownerUserId = await assertAssignableContentOwner(ctx, args.ownerUserId);
+    }
+    if (args.source !== undefined) {
+      patch.source = args.source;
+    }
+    if (args.mode !== undefined) {
+      patch.mode = args.mode;
+    }
+    if (args.requiredTier !== undefined) {
+      patch.requiredTier = args.requiredTier;
+    }
     if (args.level !== undefined) {
       patch.level = normalizeMissionLevel(args.level);
     }
@@ -1461,6 +2076,15 @@ export const updateMission = mutation({
     }
     if (args.published !== undefined) {
       patch.published = args.published;
+      patch.status = resolvePublisherContentStatus({
+        status: undefined,
+        published: args.published,
+        defaultDraft: true,
+      });
+    }
+    if (args.status !== undefined) {
+      patch.status = args.status;
+      patch.published = args.status === "published";
     }
     if (args.sortOrder !== undefined) {
       patch.sortOrder = normalizeMissionSortOrder(args.sortOrder);
@@ -1471,9 +2095,230 @@ export const updateMission = mutation({
     if (args.scenarioJson !== undefined) {
       patch.scenarioJson = await normalizeMissionScenarioJson(ctx, args.scenarioJson);
     }
+    if ((patch.source ?? existing.source ?? "official") === "official") {
+      patch.ownerUserId = null;
+    }
+
+    if (existing.ownerUserId === undefined) {
+      patch.ownerUserId = patch.ownerUserId ?? null;
+    }
+    if (existing.source === undefined) {
+      patch.source = "official";
+    }
+    if (existing.status === undefined && args.published === undefined) {
+      patch.status = resolvePublisherContentStatus({
+        status: undefined,
+        published: existing.published,
+        defaultDraft: true,
+      });
+    }
 
     await ctx.db.patch("sim_missions", existing._id, patch);
+    const nextSource = patch.source ?? existing.source ?? "official";
+    const nextStatus =
+      patch.status ??
+      resolvePublisherContentStatus({
+        status: existing.status,
+        published: existing.published,
+        defaultDraft: true,
+      });
+    const nextOwnerUserId =
+      patch.ownerUserId !== undefined
+        ? patch.ownerUserId
+        : existing.ownerUserId === undefined
+          ? null
+          : existing.ownerUserId;
+    await recordModerationEvent(ctx, {
+      contentType: "mission",
+      contentKey: key,
+      actorUserId: userId,
+      action: "updated",
+      summary: `Updated mission metadata to ${nextSource} / ${nextStatus}${nextOwnerUserId === null ? " / system owner" : " / assigned owner"}.`,
+      note: args.moderationNote,
+    });
     return { key };
+  },
+});
+
+export const bulkUpdateMissionStatus = mutation({
+  args: {
+    keys: v.array(v.string()),
+    status: v.union(
+      v.literal("draft"),
+      v.literal("published"),
+      v.literal("archived"),
+      v.literal("deleted"),
+      v.literal("admin_deleted"),
+    ),
+    moderationNote: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (userId === null) {
+      throw new Error("Authentication required.");
+    }
+
+    const keys = normalizeUniqueKeys(args.keys, normalizeMissionKey);
+    const updatedKeys: string[] = [];
+    const skippedKeys: string[] = [];
+
+    for (const key of keys) {
+      const existing = await ctx.db
+        .query("sim_missions")
+        .withIndex("by_key", (q) => q.eq("key", key))
+        .unique();
+      if (existing === null) {
+        skippedKeys.push(key);
+        continue;
+      }
+
+      const currentStatus = resolvePublisherContentStatus({
+        status: existing.status,
+        published: existing.published,
+        defaultDraft: true,
+      });
+      if (isTerminalContentStatus(currentStatus)) {
+        skippedKeys.push(key);
+        continue;
+      }
+
+      try {
+        assertMayTransitionContentStatus({
+          currentStatus,
+          nextStatus: args.status,
+          isAdmin: true,
+        });
+      } catch {
+        skippedKeys.push(key);
+        continue;
+      }
+
+      await ctx.db.patch("sim_missions", existing._id, {
+        status: args.status,
+        published: args.status === "published",
+        updatedAt: Date.now(),
+      });
+      await recordModerationEvent(ctx, {
+        contentType: "mission",
+        contentKey: key,
+        actorUserId: userId,
+        action: "bulk_status_updated",
+        summary: `Bulk updated status to ${args.status}.`,
+        note: args.moderationNote,
+      });
+      updatedKeys.push(key);
+    }
+
+    return { updatedKeys, skippedKeys };
+  },
+});
+
+export const bulkUpdateMissionOwner = mutation({
+  args: {
+    keys: v.array(v.string()),
+    ownerUserId: v.union(v.id("users"), v.null()),
+    moderationNote: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (userId === null) {
+      throw new Error("Authentication required.");
+    }
+
+    const keys = normalizeUniqueKeys(args.keys, normalizeMissionKey);
+    const ownerUserId = await assertAssignableContentOwner(ctx, args.ownerUserId);
+    const updatedKeys: string[] = [];
+    const skippedKeys: string[] = [];
+
+    for (const key of keys) {
+      const existing = await ctx.db
+        .query("sim_missions")
+        .withIndex("by_key", (q) => q.eq("key", key))
+        .unique();
+      if (existing === null) {
+        skippedKeys.push(key);
+        continue;
+      }
+      if ((existing.source ?? "official") === "official" && ownerUserId !== null) {
+        skippedKeys.push(key);
+        continue;
+      }
+
+      await ctx.db.patch("sim_missions", existing._id, {
+        ownerUserId,
+        updatedAt: Date.now(),
+      });
+      await recordModerationEvent(ctx, {
+        contentType: "mission",
+        contentKey: key,
+        actorUserId: userId,
+        action: "bulk_owner_updated",
+        summary: ownerUserId === null ? "Bulk cleared owner to system." : "Bulk reassigned owner.",
+        note: args.moderationNote,
+      });
+      updatedKeys.push(key);
+    }
+
+    return { updatedKeys, skippedKeys };
+  },
+});
+
+export const bulkUpdateMissionSource = mutation({
+  args: {
+    keys: v.array(v.string()),
+    source: v.union(v.literal("official"), v.literal("community")),
+    moderationNote: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (userId === null) {
+      throw new Error("Authentication required.");
+    }
+
+    const keys = normalizeUniqueKeys(args.keys, normalizeMissionKey);
+    const updatedKeys: string[] = [];
+    const skippedKeys: string[] = [];
+
+    for (const key of keys) {
+      const existing = await ctx.db
+        .query("sim_missions")
+        .withIndex("by_key", (q) => q.eq("key", key))
+        .unique();
+      if (existing === null) {
+        skippedKeys.push(key);
+        continue;
+      }
+
+      const currentStatus = resolvePublisherContentStatus({
+        status: existing.status,
+        published: existing.published,
+        defaultDraft: true,
+      });
+      if (isTerminalContentStatus(currentStatus)) {
+        skippedKeys.push(key);
+        continue;
+      }
+
+      await ctx.db.patch("sim_missions", existing._id, {
+        source: args.source,
+        ownerUserId: args.source === "official" ? null : (existing.ownerUserId ?? null),
+        updatedAt: Date.now(),
+      });
+      await recordModerationEvent(ctx, {
+        contentType: "mission",
+        contentKey: key,
+        actorUserId: userId,
+        action: "bulk_source_updated",
+        summary:
+          args.source === "official"
+            ? "Bulk moved source to official and cleared owner."
+            : "Bulk moved source to community.",
+        note: args.moderationNote,
+      });
+      updatedKeys.push(key);
+    }
+
+    return { updatedKeys, skippedKeys };
   },
 });
 
@@ -1504,6 +2349,9 @@ export const seedMissingMissions = mutation({
         name: mission.name,
         description: mission.description,
         mapKey: mission.mapKey,
+        ownerUserId: mission.ownerUserId,
+        source: mission.source,
+        status: mission.status,
         level: mission.level,
         requiredWins: mission.requiredWins,
         prerequisiteMissionKeys: mission.prerequisiteMissionKeys,

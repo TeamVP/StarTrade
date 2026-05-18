@@ -5,6 +5,7 @@ import { seedLegacyV1Core } from "../seed/v1CoreSeed";
 import { seedV1MediumMap } from "../seed/v1MediumSeed";
 import { seedV1TwentyMap } from "../seed/v1TwentySeed";
 import { loadEmpireColorPrefLookup } from "../seed/empireColorPrefLookup";
+import { gameUsesTraderEconomy, loadGameWithPersistedResolvedMode } from "../sim/gameMode";
 import { wipeGamePhaseBatch, wipePhaseAtIndex } from "../sim/wipeGame";
 
 export const seedGameData = internalMutation({
@@ -33,11 +34,12 @@ export const seedGameData = internalMutation({
       throw new Error("Game is already seeded.");
     }
 
-    const game = await ctx.db.get("sim_games", args.gameId);
+    const game = await loadGameWithPersistedResolvedMode(ctx, args.gameId);
     if (game === null) {
       throw new Error("Game not found.");
     }
     const npcEmpireKeys = game.npcEmpireKeys ?? [];
+    const seedTraderIdentities = gameUsesTraderEconomy(game);
 
     const empireColorPrefLookup = await loadEmpireColorPrefLookup(
       ctx,
@@ -52,6 +54,7 @@ export const seedGameData = internalMutation({
         game.seed,
         npcEmpireKeys,
         empireColorPrefLookup,
+        seedTraderIdentities,
       );
     }
 
@@ -63,6 +66,7 @@ export const seedGameData = internalMutation({
         game.seed,
         npcEmpireKeys,
         empireColorPrefLookup,
+        seedTraderIdentities,
       );
     }
 
@@ -70,6 +74,7 @@ export const seedGameData = internalMutation({
       await ctx.scheduler.runAfter(0, internal.seed.spiralSeedAction.runFullSpiralSeed, {
         gameId: args.gameId,
         colorPrefsUserId: args.colorPrefsUserId,
+        seedTraders: seedTraderIdentities,
       });
       return { systems: 200, empires: 0, mapKey: args.mapKey };
     }
@@ -81,6 +86,7 @@ export const seedGameData = internalMutation({
       mapScale,
       args.mapKey,
       empireColorPrefLookup,
+      seedTraderIdentities,
     );
   },
 });
