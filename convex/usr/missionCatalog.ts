@@ -2,8 +2,10 @@ import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
 import {
   isPublishedContentStatus,
+  resolvePublisherContentReviewStatus,
   resolvePublisherContentSource,
   resolvePublisherContentStatus,
+  type PublisherContentReviewStatus,
   type PublisherContentSource,
   type PublisherContentStatus,
 } from "./publisherAccess";
@@ -50,6 +52,7 @@ export type MissionCatalogRow = {
   mapKey: string;
   ownerUserId: Id<"users"> | null;
   source: PublisherContentSource;
+  reviewStatus: PublisherContentReviewStatus;
   status: PublisherContentStatus;
   mode: MissionMode;
   requiredTier: AccessTier;
@@ -75,7 +78,7 @@ export type MissionCatalogRow = {
 
 export type MissionCatalogSeedRow = Omit<
   MissionCatalogRow,
-  "mapTier" | "scenario" | "preview"
+  "mapTier" | "scenario" | "preview" | "reviewStatus"
 >;
 
 export function missionIsAvailableForTier(
@@ -329,6 +332,10 @@ export function toMissionCatalogRow(record: MissionCatalogRecord): MissionCatalo
     mapKey: record.mapKey,
     ownerUserId: record.ownerUserId ?? null,
     source: resolvePublisherContentSource(record.source),
+    reviewStatus: resolvePublisherContentReviewStatus({
+      source: record.source,
+      reviewStatus: record.reviewStatus,
+    }),
     status,
     mode: resolveMissionMode(record.mode),
     requiredTier: resolveRequiredTier(record.requiredTier),
@@ -576,6 +583,10 @@ export function getBuiltInMissionByKey(key: string): MissionCatalogRow | null {
     ...record,
     ownerUserId: record.ownerUserId,
     source: record.source,
+    reviewStatus: resolvePublisherContentReviewStatus({
+      source: record.source,
+      reviewStatus: undefined,
+    }),
     status: record.status,
     mode: resolveMissionMode(record.mode),
     requiredTier: resolveRequiredTier(record.requiredTier),
@@ -613,6 +624,10 @@ export async function listMissions(
           const scenario = parseMissionScenarioJson(mission.scenarioJson);
           return {
             ...mission,
+            reviewStatus: resolvePublisherContentReviewStatus({
+              source: mission.source,
+              reviewStatus: undefined,
+            }),
             mode: resolveMissionMode(mission.mode),
             requiredTier: resolveRequiredTier(mission.requiredTier),
             mapTier: mapTierFromMapKey(mission.mapKey),

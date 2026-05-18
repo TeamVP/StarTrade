@@ -27,6 +27,7 @@ import {
 import { gameUsesTraderEconomy, loadGameWithPersistedResolvedMode, loadGameWithResolvedMode } from "../sim/gameMode";
 import {
   assertMayTransitionContentStatus,
+  resolvePublisherContentReviewStatus,
   isTerminalContentStatus,
   resolvePublisherContentStatus,
 } from "../usr/publisherAccess";
@@ -1245,6 +1246,7 @@ export const backfillMetadataAccessBatch = mutation({
       const patch: {
         ownerUserId?: null;
         source?: "official";
+        reviewStatus?: "unreviewed" | "needs_changes" | "approved";
         status?: "draft" | "published" | "archived" | "deleted" | "admin_deleted";
         mode?: "conquest_core" | "conquest_plus" | "trader_economy";
         requiredTier?: "free" | "pro";
@@ -1254,6 +1256,12 @@ export const backfillMetadataAccessBatch = mutation({
       }
       if (mission.source === undefined) {
         patch.source = "official";
+      }
+      if (mission.reviewStatus === undefined) {
+        patch.reviewStatus = resolvePublisherContentReviewStatus({
+          source: mission.source,
+          reviewStatus: undefined,
+        });
       }
       if (mission.status === undefined) {
         patch.status = resolvePublisherContentStatus({
@@ -1285,6 +1293,7 @@ export const backfillMetadataAccessBatch = mutation({
       const patch: {
         ownerUserId?: null;
         source?: "official";
+        reviewStatus?: "unreviewed" | "needs_changes" | "approved";
         status?: "published";
       } = {};
       if (strategy.ownerUserId === undefined) {
@@ -1292,6 +1301,12 @@ export const backfillMetadataAccessBatch = mutation({
       }
       if (strategy.source === undefined) {
         patch.source = "official";
+      }
+      if (strategy.reviewStatus === undefined) {
+        patch.reviewStatus = resolvePublisherContentReviewStatus({
+          source: strategy.source,
+          reviewStatus: undefined,
+        });
       }
       if (strategy.status === undefined) {
         patch.status = "published";
@@ -1360,6 +1375,9 @@ export const createAutomationStrategy = mutation({
     strategyJson: v.string(),
     ownerUserId: v.optional(v.union(v.id("users"), v.null())),
     source: v.optional(v.union(v.literal("official"), v.literal("community"))),
+    reviewStatus: v.optional(
+      v.union(v.literal("unreviewed"), v.literal("needs_changes"), v.literal("approved")),
+    ),
     status: v.optional(v.union(v.literal("draft"), v.literal("published"))),
     availableForHumans: v.boolean(),
     availableForNpcs: v.boolean(),
@@ -1379,6 +1397,10 @@ export const createAutomationStrategy = mutation({
     const now = Date.now();
     const source = args.source ?? "official";
     const status = args.status ?? (source === "community" ? "draft" : "published");
+    const reviewStatus = resolvePublisherContentReviewStatus({
+      source,
+      reviewStatus: args.reviewStatus,
+    });
     const ownerUserId = await assertAssignableContentOwner(ctx, args.ownerUserId ?? null);
     if (source === "official" && ownerUserId !== null) {
       throw new Error("Official strategies cannot have an owner.");
@@ -1391,6 +1413,7 @@ export const createAutomationStrategy = mutation({
       strategyJson: canonicalizeStrategyJson(args.strategyJson),
       ownerUserId,
       source,
+      reviewStatus,
       status,
       availableForHumans: args.availableForHumans,
       availableForNpcs: args.availableForNpcs,
@@ -1417,6 +1440,9 @@ export const updateAutomationStrategy = mutation({
     strategyJson: v.optional(v.string()),
     ownerUserId: v.optional(v.union(v.id("users"), v.null())),
     source: v.optional(v.union(v.literal("official"), v.literal("community"))),
+    reviewStatus: v.optional(
+      v.union(v.literal("unreviewed"), v.literal("needs_changes"), v.literal("approved")),
+    ),
     status: v.optional(
       v.union(
         v.literal("draft"),
@@ -1458,6 +1484,7 @@ export const updateAutomationStrategy = mutation({
       tags?: string[];
       strategyJson?: string;
       source?: "official" | "community";
+      reviewStatus?: "unreviewed" | "needs_changes" | "approved";
       status?: "draft" | "published" | "archived" | "deleted" | "admin_deleted";
       availableForHumans?: boolean;
       availableForNpcs?: boolean;
@@ -1483,6 +1510,9 @@ export const updateAutomationStrategy = mutation({
     if (args.source !== undefined) {
       patch.source = args.source;
     }
+    if (args.reviewStatus !== undefined) {
+      patch.reviewStatus = args.reviewStatus;
+    }
     if (args.status !== undefined) {
       patch.status = args.status;
     }
@@ -1494,6 +1524,7 @@ export const updateAutomationStrategy = mutation({
     }
     if ((patch.source ?? existing.source ?? "official") === "official") {
       patch.ownerUserId = null;
+      patch.reviewStatus = "approved";
     }
 
     if (existing.ownerUserId === undefined) {
@@ -1501,6 +1532,12 @@ export const updateAutomationStrategy = mutation({
     }
     if (existing.source === undefined) {
       (patch as { source?: "official" }).source = "official";
+    }
+    if (existing.reviewStatus === undefined) {
+      patch.reviewStatus = patch.reviewStatus ?? resolvePublisherContentReviewStatus({
+        source: patch.source ?? existing.source,
+        reviewStatus: existing.reviewStatus,
+      });
     }
     if (existing.status === undefined) {
       (patch as { status?: "published" }).status = "published";
@@ -1670,6 +1707,13 @@ export const bulkUpdateAutomationStrategySource = mutation({
 
       await ctx.db.patch("usr_automation_strategies", existing._id, {
         source: args.source,
+        reviewStatus:
+          args.source === "official"
+            ? "approved"
+            : resolvePublisherContentReviewStatus({
+                source: args.source,
+                reviewStatus: existing.reviewStatus,
+              }),
         ownerUserId: args.source === "official" ? null : (existing.ownerUserId ?? null),
         updatedAt: Date.now(),
       });
@@ -1718,6 +1762,7 @@ export const seedMissingAutomationStrategies = mutation({
         strategyJson: strategy.strategyJson,
         ownerUserId: null,
         source: "official",
+        reviewStatus: "approved",
         status: "published",
         availableForHumans: strategy.availableForHumans,
         availableForNpcs: strategy.availableForNpcs,
@@ -1885,6 +1930,9 @@ export const createMission = mutation({
     ),
     ownerUserId: v.optional(v.union(v.id("users"), v.null())),
     source: v.optional(v.union(v.literal("official"), v.literal("community"))),
+    reviewStatus: v.optional(
+      v.union(v.literal("unreviewed"), v.literal("needs_changes"), v.literal("approved")),
+    ),
     status: v.optional(v.union(v.literal("draft"), v.literal("published"))),
     requiredTier: v.optional(v.union(v.literal("free"), v.literal("pro"))),
     level: v.number(),
@@ -1921,6 +1969,10 @@ export const createMission = mutation({
       published: args.published,
       defaultDraft: source === "community",
     });
+    const reviewStatus = resolvePublisherContentReviewStatus({
+      source,
+      reviewStatus: args.reviewStatus,
+    });
     const ownerUserId = await assertAssignableContentOwner(ctx, args.ownerUserId ?? null);
     if (source === "official" && ownerUserId !== null) {
       throw new Error("Official missions cannot have an owner.");
@@ -1932,6 +1984,7 @@ export const createMission = mutation({
       mapKey: args.mapKey.trim(),
       ownerUserId,
       source,
+      reviewStatus,
       status,
       mode: args.mode ?? "conquest_core",
       requiredTier: args.requiredTier ?? "free",
@@ -1971,6 +2024,9 @@ export const updateMission = mutation({
     ),
     ownerUserId: v.optional(v.union(v.id("users"), v.null())),
     source: v.optional(v.union(v.literal("official"), v.literal("community"))),
+    reviewStatus: v.optional(
+      v.union(v.literal("unreviewed"), v.literal("needs_changes"), v.literal("approved")),
+    ),
     status: v.optional(
       v.union(
         v.literal("draft"),
@@ -2030,6 +2086,7 @@ export const updateMission = mutation({
       description?: string;
       mapKey?: string;
       source?: "official" | "community";
+      reviewStatus?: "unreviewed" | "needs_changes" | "approved";
       mode?: "conquest_core" | "conquest_plus" | "trader_economy";
       requiredTier?: "free" | "pro";
       level?: number;
@@ -2058,6 +2115,9 @@ export const updateMission = mutation({
     }
     if (args.source !== undefined) {
       patch.source = args.source;
+    }
+    if (args.reviewStatus !== undefined) {
+      patch.reviewStatus = args.reviewStatus;
     }
     if (args.mode !== undefined) {
       patch.mode = args.mode;
@@ -2097,6 +2157,7 @@ export const updateMission = mutation({
     }
     if ((patch.source ?? existing.source ?? "official") === "official") {
       patch.ownerUserId = null;
+      patch.reviewStatus = "approved";
     }
 
     if (existing.ownerUserId === undefined) {
@@ -2104,6 +2165,12 @@ export const updateMission = mutation({
     }
     if (existing.source === undefined) {
       patch.source = "official";
+    }
+    if (existing.reviewStatus === undefined) {
+      patch.reviewStatus = patch.reviewStatus ?? resolvePublisherContentReviewStatus({
+        source: patch.source ?? existing.source,
+        reviewStatus: existing.reviewStatus,
+      });
     }
     if (existing.status === undefined && args.published === undefined) {
       patch.status = resolvePublisherContentStatus({
@@ -2301,6 +2368,13 @@ export const bulkUpdateMissionSource = mutation({
 
       await ctx.db.patch("sim_missions", existing._id, {
         source: args.source,
+        reviewStatus:
+          args.source === "official"
+            ? "approved"
+            : resolvePublisherContentReviewStatus({
+                source: args.source,
+                reviewStatus: existing.reviewStatus,
+              }),
         ownerUserId: args.source === "official" ? null : (existing.ownerUserId ?? null),
         updatedAt: Date.now(),
       });
@@ -2351,6 +2425,7 @@ export const seedMissingMissions = mutation({
         mapKey: mission.mapKey,
         ownerUserId: mission.ownerUserId,
         source: mission.source,
+        reviewStatus: "approved",
         status: mission.status,
         level: mission.level,
         requiredWins: mission.requiredWins,

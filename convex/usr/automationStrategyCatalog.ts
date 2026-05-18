@@ -3,8 +3,10 @@ import type { Doc, Id } from "../_generated/dataModel";
 import type { PublicAutomationStrategy } from "./automationStrategyLibrary";
 import { summarizeAutomationStrategy } from "./automationStrategyLibrary";
 import {
+  resolvePublisherContentReviewStatus,
   resolvePublisherContentSource,
   resolvePublisherContentStatus,
+  type PublisherContentReviewStatus,
   type PublisherContentSource,
   type PublisherContentStatus,
 } from "./publisherAccess";
@@ -14,6 +16,7 @@ export type AutomationStrategyRecord = Doc<"usr_automation_strategies">;
 export type AutomationStrategyCatalogRow = PublicAutomationStrategy & {
   ownerUserId: Id<"users"> | null;
   source: PublisherContentSource;
+  reviewStatus: PublisherContentReviewStatus;
   status: PublisherContentStatus;
   availableForHumans: boolean;
   availableForNpcs: boolean;
@@ -42,6 +45,10 @@ export function toAutomationStrategyCatalogRow(
     ...toPublicAutomationStrategy(row),
     ownerUserId: row.ownerUserId ?? null,
     source: resolvePublisherContentSource(row.source),
+    reviewStatus: resolvePublisherContentReviewStatus({
+      source: row.source,
+      reviewStatus: row.reviewStatus,
+    }),
     status: resolvePublisherContentStatus({ status: row.status }),
     availableForHumans: row.availableForHumans,
     availableForNpcs: row.availableForNpcs,

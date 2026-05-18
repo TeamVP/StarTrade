@@ -131,6 +131,13 @@ export default defineSchema({
     mapKey: v.string(),
     ownerUserId: v.optional(v.union(v.id("users"), v.null())),
     source: v.optional(v.union(v.literal("official"), v.literal("community"))),
+    reviewStatus: v.optional(
+      v.union(
+        v.literal("unreviewed"),
+        v.literal("needs_changes"),
+        v.literal("approved"),
+      ),
+    ),
     status: v.optional(
       v.union(
         v.literal("draft"),
@@ -484,6 +491,13 @@ export default defineSchema({
     strategyJson: v.string(),
     ownerUserId: v.optional(v.union(v.id("users"), v.null())),
     source: v.optional(v.union(v.literal("official"), v.literal("community"))),
+    reviewStatus: v.optional(
+      v.union(
+        v.literal("unreviewed"),
+        v.literal("needs_changes"),
+        v.literal("approved"),
+      ),
+    ),
     status: v.optional(
       v.union(
         v.literal("draft"),

@@ -23,6 +23,7 @@ type StrategyCatalogRow = {
   ownerUserId: Id<"users"> | null;
   ownerLabel: string | null;
   source: "official" | "community";
+  reviewStatus: "unreviewed" | "needs_changes" | "approved";
   status: "draft" | "published" | "archived" | "deleted" | "admin_deleted";
   availableForHumans: boolean;
   availableForNpcs: boolean;
@@ -62,6 +63,18 @@ function statusTone(status: StrategyCatalogRow["status"]): string {
       return "border-red-500/40 bg-red-950/30 text-red-200";
     default:
       return "border-st-border text-st-muted";
+  }
+}
+
+function reviewTone(reviewStatus: StrategyCatalogRow["reviewStatus"]): string {
+  switch (reviewStatus) {
+    case "approved":
+      return "border-emerald-500/40 bg-emerald-950/30 text-emerald-200";
+    case "needs_changes":
+      return "border-rose-500/40 bg-rose-950/30 text-rose-200";
+    case "unreviewed":
+    default:
+      return "border-amber-500/40 bg-amber-950/30 text-amber-200";
   }
 }
 
@@ -113,6 +126,12 @@ function readStrategyOwnerFilter(value: string | null): "all" | "system" | Id<"u
   return value as Id<"users">;
 }
 
+function readStrategyReviewFilter(value: string | null): "all" | StrategyCatalogRow["reviewStatus"] {
+  return value === "unreviewed" || value === "needs_changes" || value === "approved"
+    ? value
+    : "all";
+}
+
 function StrategyCard(props: {
   strategy: StrategyCatalogRow;
   selected: boolean;
@@ -126,6 +145,7 @@ function StrategyCard(props: {
     strategyJson: string;
     ownerUserId: Id<"users"> | null;
     source: StrategyCatalogRow["source"];
+    reviewStatus: StrategyCatalogRow["reviewStatus"];
     status: StrategyCatalogRow["status"];
     moderationNote: string;
     availableForHumans: boolean;
@@ -138,6 +158,7 @@ function StrategyCard(props: {
   const [strategyJson, setStrategyJson] = useState(props.strategy.strategyJson);
   const [ownerUserId, setOwnerUserId] = useState<Id<"users"> | "">(props.strategy.ownerUserId ?? "");
   const [source, setSource] = useState<StrategyCatalogRow["source"]>(props.strategy.source);
+  const [reviewStatus, setReviewStatus] = useState<StrategyCatalogRow["reviewStatus"]>(props.strategy.reviewStatus);
   const [contentStatus, setContentStatus] = useState<StrategyCatalogRow["status"]>(props.strategy.status);
   const [availableForHumans, setAvailableForHumans] = useState(props.strategy.availableForHumans);
   const [availableForNpcs, setAvailableForNpcs] = useState(props.strategy.availableForNpcs);
@@ -163,6 +184,7 @@ function StrategyCard(props: {
         strategyJson,
         ownerUserId: source === "community" ? ownerUserId || null : null,
         source,
+        reviewStatus: source === "official" ? "approved" : reviewStatus,
         status: contentStatus,
         moderationNote,
         availableForHumans,
@@ -223,6 +245,9 @@ function StrategyCard(props: {
           <span className={`rounded border px-2 py-0.5 ${props.strategy.source === "community" ? "border-sky-500/40 bg-sky-950/30 text-sky-200" : "border-st-border"}`}>
             {props.strategy.source}
           </span>
+          <span className={`rounded border px-2 py-0.5 ${reviewTone(props.strategy.reviewStatus)}`}>
+            review {props.strategy.reviewStatus}
+          </span>
           <span className={`rounded border px-2 py-0.5 ${statusTone(props.strategy.status)}`}>
             {props.strategy.status}
           </span>
@@ -279,13 +304,19 @@ function StrategyCard(props: {
         />
       </label>
 
-      <div className="grid gap-3 md:grid-cols-3">
+      <div className="grid gap-3 md:grid-cols-4">
         <label className="grid gap-1 text-xs text-st-muted">
           <span>Source</span>
           <select
             value={source}
             disabled={readOnly}
-            onChange={(event) => setSource(event.target.value as StrategyCatalogRow["source"])}
+            onChange={(event) => {
+              const nextSource = event.target.value as StrategyCatalogRow["source"];
+              setSource(nextSource);
+              if (nextSource === "official") {
+                setReviewStatus("approved");
+              }
+            }}
             className="rounded border border-st-border bg-st-bg px-3 py-2 text-sm text-st-fg outline-none focus:border-st-accent"
           >
             <option value="official">official</option>
@@ -306,6 +337,19 @@ function StrategyCard(props: {
                 {ownerOptionLabel(owner)}
               </option>
             ))}
+          </select>
+        </label>
+        <label className="grid gap-1 text-xs text-st-muted">
+          <span>Review</span>
+          <select
+            value={source === "official" ? "approved" : reviewStatus}
+            disabled={readOnly || source === "official"}
+            onChange={(event) => setReviewStatus(event.target.value as StrategyCatalogRow["reviewStatus"])}
+            className="rounded border border-st-border bg-st-bg px-3 py-2 text-sm text-st-fg outline-none focus:border-st-accent"
+          >
+            <option value="unreviewed">unreviewed</option>
+            <option value="needs_changes">needs_changes</option>
+            <option value="approved">approved</option>
           </select>
         </label>
         <label className="grid gap-1 text-xs text-st-muted">
@@ -383,6 +427,7 @@ function CreateStrategyCard(props: {
     strategyJson: string;
     ownerUserId: Id<"users"> | null;
     source: StrategyCatalogRow["source"];
+    reviewStatus: StrategyCatalogRow["reviewStatus"];
     status: "draft" | "published";
     availableForHumans: boolean;
     availableForNpcs: boolean;
@@ -395,6 +440,7 @@ function CreateStrategyCard(props: {
   const [strategyJson, setStrategyJson] = useState("{}");
   const [ownerUserId, setOwnerUserId] = useState<Id<"users"> | "">("");
   const [source, setSource] = useState<StrategyCatalogRow["source"]>("official");
+  const [reviewStatus, setReviewStatus] = useState<StrategyCatalogRow["reviewStatus"]>("approved");
   const [contentStatus, setContentStatus] = useState<"draft" | "published">("published");
   const [availableForHumans, setAvailableForHumans] = useState(true);
   const [availableForNpcs, setAvailableForNpcs] = useState(true);
@@ -416,6 +462,7 @@ function CreateStrategyCard(props: {
         strategyJson,
         ownerUserId: source === "community" ? ownerUserId || null : null,
         source,
+        reviewStatus: source === "official" ? "approved" : reviewStatus,
         status: contentStatus,
         availableForHumans,
         availableForNpcs,
@@ -427,6 +474,7 @@ function CreateStrategyCard(props: {
       setStrategyJson("{}");
       setOwnerUserId("");
       setSource("official");
+      setReviewStatus("approved");
       setContentStatus("published");
       setAvailableForHumans(true);
       setAvailableForNpcs(true);
@@ -500,12 +548,18 @@ function CreateStrategyCard(props: {
           />
         </label>
 
-        <div className="grid gap-3 md:grid-cols-3">
+        <div className="grid gap-3 md:grid-cols-4">
           <label className="grid gap-1 text-xs text-st-muted">
             <span>Source</span>
             <select
               value={source}
-              onChange={(event) => setSource(event.target.value as StrategyCatalogRow["source"])}
+              onChange={(event) => {
+                const nextSource = event.target.value as StrategyCatalogRow["source"];
+                setSource(nextSource);
+                if (nextSource === "official") {
+                  setReviewStatus("approved");
+                }
+              }}
               className="rounded border border-st-border bg-st-bg px-3 py-2 text-sm text-st-fg outline-none focus:border-st-accent"
             >
               <option value="official">official</option>
@@ -526,6 +580,19 @@ function CreateStrategyCard(props: {
                   {ownerOptionLabel(owner)}
                 </option>
               ))}
+            </select>
+          </label>
+          <label className="grid gap-1 text-xs text-st-muted">
+            <span>Review</span>
+            <select
+              value={source === "official" ? "approved" : reviewStatus}
+              disabled={source === "official"}
+              onChange={(event) => setReviewStatus(event.target.value as StrategyCatalogRow["reviewStatus"])}
+              className="rounded border border-st-border bg-st-bg px-3 py-2 text-sm text-st-fg outline-none focus:border-st-accent"
+            >
+              <option value="unreviewed">unreviewed</option>
+              <option value="needs_changes">needs_changes</option>
+              <option value="approved">approved</option>
             </select>
           </label>
           <label className="grid gap-1 text-xs text-st-muted">
@@ -593,6 +660,9 @@ export function AdminStrategiesPage() {
   const [statusFilter, setStatusFilter] = useState<"all" | StrategyCatalogRow["status"]>(() =>
     readStrategyStatusFilter(searchParams.get("status")),
   );
+  const [reviewFilter, setReviewFilter] = useState<"all" | StrategyCatalogRow["reviewStatus"]>(() =>
+    readStrategyReviewFilter(searchParams.get("review")),
+  );
   const [ownerFilter, setOwnerFilter] = useState<"all" | "system" | Id<"users">>(() =>
     readStrategyOwnerFilter(searchParams.get("owner")),
   );
@@ -615,6 +685,7 @@ export function AdminStrategiesPage() {
     setSearchText(searchParams.get("search") ?? "");
     setSourceFilter(readStrategySourceFilter(searchParams.get("source")));
     setStatusFilter(readStrategyStatusFilter(searchParams.get("status")));
+    setReviewFilter(readStrategyReviewFilter(searchParams.get("review")));
     setOwnerFilter(readStrategyOwnerFilter(searchParams.get("owner")));
   }, [searchParams]);
 
@@ -640,6 +711,9 @@ export function AdminStrategiesPage() {
         if (statusFilter !== "all" && strategy.status !== statusFilter) {
           return false;
         }
+        if (reviewFilter !== "all" && strategy.reviewStatus !== reviewFilter) {
+          return false;
+        }
         if (ownerFilter === "system" && strategy.ownerUserId !== null) {
           return false;
         }
@@ -660,7 +734,7 @@ export function AdminStrategiesPage() {
           .toLowerCase()
           .includes(normalizedSearchText);
       }),
-    [strategies, sourceFilter, statusFilter, ownerFilter, normalizedSearchText],
+    [strategies, sourceFilter, statusFilter, reviewFilter, ownerFilter, normalizedSearchText],
   );
   const visibleKeys = useMemo(() => filteredStrategies.map((strategy) => strategy.key), [filteredStrategies]);
   const selectedVisibleCount = useMemo(
@@ -818,7 +892,7 @@ export function AdminStrategiesPage() {
               </p>
             </div>
 
-            <div className="grid gap-3 lg:grid-cols-[minmax(0,2fr)_repeat(3,minmax(0,1fr))]">
+            <div className="grid gap-3 lg:grid-cols-[minmax(0,2fr)_repeat(4,minmax(0,1fr))]">
               <input
                 value={searchText}
                 onChange={(event) => setSearchText(event.target.value)}
@@ -845,6 +919,16 @@ export function AdminStrategiesPage() {
                 <option value="archived">Archived</option>
                 <option value="deleted">Deleted</option>
                 <option value="admin_deleted">Admin deleted</option>
+              </select>
+              <select
+                value={reviewFilter}
+                onChange={(event) => setReviewFilter(event.target.value as typeof reviewFilter)}
+                className="rounded border border-st-border bg-st-bg px-3 py-2 text-sm text-st-fg"
+              >
+                <option value="all">All review states</option>
+                <option value="unreviewed">Unreviewed</option>
+                <option value="needs_changes">Needs changes</option>
+                <option value="approved">Approved</option>
               </select>
               <select
                 value={ownerFilter}

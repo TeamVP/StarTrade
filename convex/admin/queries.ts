@@ -186,8 +186,10 @@ export const getDatabaseHealth = query({
       missingMissionMode: missions.filter((mission) => mission.mode === undefined).length,
       missingMissionRequiredTier: missions.filter((mission) => mission.requiredTier === undefined).length,
       missingMissionSource: missions.filter((mission) => mission.source === undefined).length,
+      missingMissionReviewStatus: missions.filter((mission) => mission.reviewStatus === undefined).length,
       missingMissionStatus: missions.filter((mission) => mission.status === undefined).length,
       missingStrategySource: strategies.filter((strategy) => strategy.source === undefined).length,
+      missingStrategyReviewStatus: strategies.filter((strategy) => strategy.reviewStatus === undefined).length,
       missingStrategyStatus: strategies.filter((strategy) => strategy.status === undefined).length,
     };
 

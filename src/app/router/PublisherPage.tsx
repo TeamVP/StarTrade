@@ -24,6 +24,7 @@ type PublisherMissionRow = {
   ownerUserId: Id<"users"> | null;
   ownerLabel: string | null;
   source: "official" | "community";
+  reviewStatus: "unreviewed" | "needs_changes" | "approved";
   status: "draft" | "published" | "archived" | "deleted" | "admin_deleted";
   mode: "conquest_core" | "conquest_plus" | "trader_economy";
   requiredTier: "free" | "pro";
@@ -66,6 +67,7 @@ type PublisherStrategyRow = {
   source: "official" | "community";
   ownerUserId: Id<"users"> | null;
   ownerLabel: string | null;
+  reviewStatus: "unreviewed" | "needs_changes" | "approved";
   status: "draft" | "published" | "archived" | "deleted" | "admin_deleted";
   availableForHumans: boolean;
   availableForNpcs: boolean;
@@ -114,6 +116,18 @@ function statusTone(status: PublisherMissionRow["status"] | PublisherStrategyRow
       return "border-red-500/40 bg-red-950/30 text-red-200";
     default:
       return "border-st-border bg-st-bg text-st-muted";
+  }
+}
+
+function reviewTone(reviewStatus: PublisherMissionRow["reviewStatus"] | PublisherStrategyRow["reviewStatus"]): string {
+  switch (reviewStatus) {
+    case "approved":
+      return "border-emerald-500/40 bg-emerald-950/30 text-emerald-200";
+    case "needs_changes":
+      return "border-rose-500/40 bg-rose-950/30 text-rose-200";
+    case "unreviewed":
+    default:
+      return "border-amber-500/40 bg-amber-950/30 text-amber-200";
   }
 }
 
@@ -391,6 +405,9 @@ function EditableStrategyCard(props: {
         </div>
         <div className="flex flex-wrap gap-2">
           <span className="rounded border border-sky-500/40 bg-sky-950/30 px-2 py-1 text-xs text-sky-200">Community</span>
+          <span className={`rounded border px-2 py-1 text-xs ${reviewTone(props.strategy.reviewStatus)}`}>
+            review {props.strategy.reviewStatus}
+          </span>
           <span className={`rounded border px-2 py-1 text-xs ${statusTone(props.strategy.status)}`}>{props.strategy.status}</span>
         </div>
       </div>
@@ -497,6 +514,9 @@ function EditableMissionCard(props: {
         </div>
         <div className="flex flex-wrap gap-2">
           <span className="rounded border border-sky-500/40 bg-sky-950/30 px-2 py-1 text-xs text-sky-200">Community</span>
+          <span className={`rounded border px-2 py-1 text-xs ${reviewTone(props.mission.reviewStatus)}`}>
+            review {props.mission.reviewStatus}
+          </span>
           <span className={`rounded border px-2 py-1 text-xs ${statusTone(props.mission.status)}`}>{props.mission.status}</span>
         </div>
       </div>

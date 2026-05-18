@@ -1,4 +1,4 @@
-import { FormEvent, useDeferredValue, useEffect, useMemo, useState } from "react";
+import { FormEvent, useDeferredValue, useMemo, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { useSearchParams } from "react-router-dom";
 import { api } from "../../../convex/_generated/api";
@@ -22,6 +22,7 @@ type MissionRow = {
   ownerUserId: Id<"users"> | null;
   ownerLabel: string | null;
   source: "official" | "community";
+  reviewStatus: "unreviewed" | "needs_changes" | "approved";
   status: "draft" | "published" | "archived" | "deleted" | "admin_deleted";
   mode: "conquest_core" | "conquest_plus" | "trader_economy";
   requiredTier: "free" | "pro";
@@ -70,6 +71,18 @@ function statusTone(status: MissionRow["status"]): string {
       return "border-red-500/40 bg-red-950/30 text-red-200";
     default:
       return "border-st-border text-st-muted";
+  }
+}
+
+function reviewTone(reviewStatus: MissionRow["reviewStatus"]): string {
+  switch (reviewStatus) {
+    case "approved":
+      return "border-emerald-500/40 bg-emerald-950/30 text-emerald-200";
+    case "needs_changes":
+      return "border-rose-500/40 bg-rose-950/30 text-rose-200";
+    case "unreviewed":
+    default:
+      return "border-amber-500/40 bg-amber-950/30 text-amber-200";
   }
 }
 
@@ -169,6 +182,12 @@ function readMissionOwnerFilter(value: string | null): "all" | "system" | Id<"us
     return "system";
   }
   return value as Id<"users">;
+}
+
+function readMissionReviewFilter(value: string | null): "all" | MissionRow["reviewStatus"] {
+  return value === "unreviewed" || value === "needs_changes" || value === "approved"
+    ? value
+    : "all";
 }
 
 function normalizeNullableString(value: string): string | null {
@@ -587,7 +606,7 @@ function MissionScenarioEditor(props: {
         (config) => config.targetEmpireKey === seededEmpireKey,
       );
       const nextConfig = {
-        ...(existingIndex === -1 ? createEmptyConfig() : scenario.empireConfigs[existingIndex]!),
+        ...(existingIndex === -1 ? createEmptyConfig() : scenario.empireConfigs[existingIndex]),
         targetEmpireKey: seededEmpireKey,
         targetNpcPlayerKey: npcKey,
         controller: "npc" as const,
@@ -1136,6 +1155,7 @@ function MissionCard(props: {
     mapKey: string;
     ownerUserId: Id<"users"> | null;
     source: MissionRow["source"];
+    reviewStatus: MissionRow["reviewStatus"];
     status: MissionRow["status"];
     mode: MissionRow["mode"];
     requiredTier: MissionRow["requiredTier"];
@@ -1154,6 +1174,7 @@ function MissionCard(props: {
   const [mapKey, setMapKey] = useState(props.mission.mapKey);
   const [ownerUserId, setOwnerUserId] = useState<Id<"users"> | "">(props.mission.ownerUserId ?? "");
   const [source, setSource] = useState<MissionRow["source"]>(props.mission.source);
+  const [reviewStatus, setReviewStatus] = useState<MissionRow["reviewStatus"]>(props.mission.reviewStatus);
   const [contentStatus, setContentStatus] = useState<MissionRow["status"]>(props.mission.status);
   const [mode, setMode] = useState<MissionRow["mode"]>(props.mission.mode);
   const [requiredTier, setRequiredTier] = useState<MissionRow["requiredTier"]>(props.mission.requiredTier);
@@ -1188,6 +1209,7 @@ function MissionCard(props: {
         mapKey,
         ownerUserId: source === "community" ? ownerUserId || null : null,
         source,
+        reviewStatus: source === "official" ? "approved" : reviewStatus,
         status: contentStatus,
         mode,
         requiredTier,
@@ -1237,6 +1259,9 @@ function MissionCard(props: {
             </span>
             <span className={`rounded border px-2 py-0.5 text-xs ${props.mission.source === "community" ? "border-sky-500/40 bg-sky-950/30 text-sky-200" : "border-st-border text-st-muted"}`}>
               {props.mission.source}
+            </span>
+            <span className={`rounded border px-2 py-0.5 text-xs ${reviewTone(props.mission.reviewStatus)}`}>
+              review {props.mission.reviewStatus}
             </span>
             <span className={`rounded border px-2 py-0.5 text-xs ${statusTone(props.mission.status)}`}>
               {props.mission.status}
@@ -1329,13 +1354,19 @@ function MissionCard(props: {
         />
       </label>
 
-      <div className="grid gap-3 md:grid-cols-3">
+      <div className="grid gap-3 md:grid-cols-4">
         <label className="grid gap-1 text-xs text-st-muted">
           <span>Source</span>
           <select
             value={source}
             disabled={readOnly}
-            onChange={(event) => setSource(event.target.value as MissionRow["source"])}
+            onChange={(event) => {
+              const nextSource = event.target.value as MissionRow["source"];
+              setSource(nextSource);
+              if (nextSource === "official") {
+                setReviewStatus("approved");
+              }
+            }}
             className="rounded border border-st-border bg-st-bg px-3 py-2 text-sm text-st-fg outline-none focus:border-st-accent"
           >
             <option value="official">official</option>
@@ -1356,6 +1387,19 @@ function MissionCard(props: {
                 {ownerOptionLabel(owner)}
               </option>
             ))}
+          </select>
+        </label>
+        <label className="grid gap-1 text-xs text-st-muted">
+          <span>Review</span>
+          <select
+            value={source === "official" ? "approved" : reviewStatus}
+            disabled={readOnly || source === "official"}
+            onChange={(event) => setReviewStatus(event.target.value as MissionRow["reviewStatus"])}
+            className="rounded border border-st-border bg-st-bg px-3 py-2 text-sm text-st-fg outline-none focus:border-st-accent"
+          >
+            <option value="unreviewed">unreviewed</option>
+            <option value="needs_changes">needs_changes</option>
+            <option value="approved">approved</option>
           </select>
         </label>
         <label className="grid gap-1 text-xs text-st-muted">
@@ -1482,6 +1526,7 @@ function CreateMissionCard(props: {
     mapKey: string;
     ownerUserId: Id<"users"> | null;
     source: MissionRow["source"];
+    reviewStatus: MissionRow["reviewStatus"];
     status: "draft" | "published";
     mode: MissionRow["mode"];
     requiredTier: MissionRow["requiredTier"];
@@ -1500,6 +1545,7 @@ function CreateMissionCard(props: {
   const [mapKey, setMapKey] = useState("v1-twenty");
   const [ownerUserId, setOwnerUserId] = useState<Id<"users"> | "">("");
   const [source, setSource] = useState<MissionRow["source"]>("official");
+  const [reviewStatus, setReviewStatus] = useState<MissionRow["reviewStatus"]>("approved");
   const [contentStatus, setContentStatus] = useState<"draft" | "published">("published");
   const [mode, setMode] = useState<MissionRow["mode"]>("conquest_core");
   const [requiredTier, setRequiredTier] = useState<MissionRow["requiredTier"]>("free");
@@ -1537,6 +1583,7 @@ function CreateMissionCard(props: {
         mapKey,
         ownerUserId: source === "community" ? ownerUserId || null : null,
         source,
+        reviewStatus: source === "official" ? "approved" : reviewStatus,
         status: contentStatus,
         mode,
         requiredTier,
@@ -1554,6 +1601,7 @@ function CreateMissionCard(props: {
       setMapKey("v1-twenty");
       setOwnerUserId("");
       setSource("official");
+      setReviewStatus("approved");
       setContentStatus("published");
       setMode("conquest_core");
       setRequiredTier("free");
@@ -1644,12 +1692,18 @@ function CreateMissionCard(props: {
           </label>
         </div>
 
-        <div className="grid gap-3 md:grid-cols-3">
+        <div className="grid gap-3 md:grid-cols-4">
           <label className="grid gap-1 text-xs text-st-muted">
             <span>Source</span>
             <select
               value={source}
-              onChange={(event) => setSource(event.target.value as MissionRow["source"])}
+              onChange={(event) => {
+                const nextSource = event.target.value as MissionRow["source"];
+                setSource(nextSource);
+                if (nextSource === "official") {
+                  setReviewStatus("approved");
+                }
+              }}
               className="rounded border border-st-border bg-st-bg px-3 py-2 text-sm text-st-fg outline-none focus:border-st-accent"
             >
               <option value="official">official</option>
@@ -1670,6 +1724,19 @@ function CreateMissionCard(props: {
                   {ownerOptionLabel(owner)}
                 </option>
               ))}
+            </select>
+          </label>
+          <label className="grid gap-1 text-xs text-st-muted">
+            <span>Review</span>
+            <select
+              value={source === "official" ? "approved" : reviewStatus}
+              disabled={source === "official"}
+              onChange={(event) => setReviewStatus(event.target.value as MissionRow["reviewStatus"])}
+              className="rounded border border-st-border bg-st-bg px-3 py-2 text-sm text-st-fg outline-none focus:border-st-accent"
+            >
+              <option value="unreviewed">unreviewed</option>
+              <option value="needs_changes">needs_changes</option>
+              <option value="approved">approved</option>
             </select>
           </label>
           <label className="grid gap-1 text-xs text-st-muted">
@@ -1817,6 +1884,9 @@ export function AdminMissionsPage() {
   const [statusFilter, setStatusFilter] = useState<"all" | MissionRow["status"]>(() =>
     readMissionStatusFilter(searchParams.get("status")),
   );
+  const [reviewFilter, setReviewFilter] = useState<"all" | MissionRow["reviewStatus"]>(() =>
+    readMissionReviewFilter(searchParams.get("review")),
+  );
   const [ownerFilter, setOwnerFilter] = useState<"all" | "system" | Id<"users">>(() =>
     readMissionOwnerFilter(searchParams.get("owner")),
   );
@@ -1835,14 +1905,10 @@ export function AdminMissionsPage() {
   const [bulkSourceError, setBulkSourceError] = useState<string | null>(null);
   const [bulkModerationNote, setBulkModerationNote] = useState("");
 
-  useEffect(() => {
-    setSearchText(searchParams.get("search") ?? "");
-    setSourceFilter(readMissionSourceFilter(searchParams.get("source")));
-    setStatusFilter(readMissionStatusFilter(searchParams.get("status")));
-    setOwnerFilter(readMissionOwnerFilter(searchParams.get("owner")));
-  }, [searchParams]);
-
-  const missions = missionsQuery?.authorized ? (missionsQuery.missions as MissionRow[]) : [];
+  const missions = useMemo(
+    () => (missionsQuery?.authorized ? (missionsQuery.missions as MissionRow[]) : []),
+    [missionsQuery],
+  );
   const deferredSearchText = useDeferredValue(searchText);
   const normalizedSearchText = normalizeSearchText(deferredSearchText);
   const selectedKeySet = useMemo(() => new Set(selectedKeys), [selectedKeys]);
@@ -1875,6 +1941,9 @@ export function AdminMissionsPage() {
         if (statusFilter !== "all" && mission.status !== statusFilter) {
           return false;
         }
+        if (reviewFilter !== "all" && mission.reviewStatus !== reviewFilter) {
+          return false;
+        }
         if (ownerFilter === "system" && mission.ownerUserId !== null) {
           return false;
         }
@@ -1897,7 +1966,7 @@ export function AdminMissionsPage() {
           .toLowerCase()
           .includes(normalizedSearchText);
       }),
-    [missions, sourceFilter, statusFilter, ownerFilter, normalizedSearchText],
+    [missions, sourceFilter, statusFilter, reviewFilter, ownerFilter, normalizedSearchText],
   );
   const visibleKeys = useMemo(() => filteredMissions.map((mission) => mission.key), [filteredMissions]);
   const selectedVisibleCount = useMemo(
@@ -2072,7 +2141,7 @@ export function AdminMissionsPage() {
             </Button>
           </div>
         </div>
-        <div className="grid gap-3 lg:grid-cols-[minmax(0,2fr)_repeat(3,minmax(0,1fr))]">
+        <div className="grid gap-3 lg:grid-cols-[minmax(0,2fr)_repeat(4,minmax(0,1fr))]">
           <input
             value={searchText}
             onChange={(event) => setSearchText(event.target.value)}
@@ -2099,6 +2168,16 @@ export function AdminMissionsPage() {
             <option value="archived">Archived</option>
             <option value="deleted">Deleted</option>
             <option value="admin_deleted">Admin deleted</option>
+          </select>
+          <select
+            value={reviewFilter}
+            onChange={(event) => setReviewFilter(event.target.value as typeof reviewFilter)}
+            className="rounded border border-st-border bg-st-bg px-3 py-2 text-sm text-st-fg"
+          >
+            <option value="all">All review states</option>
+            <option value="unreviewed">Unreviewed</option>
+            <option value="needs_changes">Needs changes</option>
+            <option value="approved">Approved</option>
           </select>
           <select
             value={ownerFilter}

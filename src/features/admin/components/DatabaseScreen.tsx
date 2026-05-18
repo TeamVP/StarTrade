@@ -280,8 +280,10 @@ export function DatabaseScreen() {
           <div>Missions missing mode: <span className="font-medium text-st-fg">{overview?.metadataCounts.missingMissionMode ?? "-"}</span></div>
           <div>Missions missing tier: <span className="font-medium text-st-fg">{overview?.metadataCounts.missingMissionRequiredTier ?? "-"}</span></div>
           <div>Missions missing source: <span className="font-medium text-st-fg">{overview?.metadataCounts.missingMissionSource ?? "-"}</span></div>
+          <div>Missions missing review: <span className="font-medium text-st-fg">{overview?.metadataCounts.missingMissionReviewStatus ?? "-"}</span></div>
           <div>Missions missing status: <span className="font-medium text-st-fg">{overview?.metadataCounts.missingMissionStatus ?? "-"}</span></div>
           <div>Strategies missing source: <span className="font-medium text-st-fg">{overview?.metadataCounts.missingStrategySource ?? "-"}</span></div>
+          <div>Strategies missing review: <span className="font-medium text-st-fg">{overview?.metadataCounts.missingStrategyReviewStatus ?? "-"}</span></div>
           <div>Strategies missing status: <span className="font-medium text-st-fg">{overview?.metadataCounts.missingStrategyStatus ?? "-"}</span></div>
         </div>
         {metadataResult !== null ? (

@@ -9,6 +9,11 @@ export type PublisherContentStatus =
   | "deleted"
   | "admin_deleted";
 
+export type PublisherContentReviewStatus =
+  | "unreviewed"
+  | "needs_changes"
+  | "approved";
+
 export type PublisherViewer = {
   userId: Id<"users">;
   admin: boolean;
@@ -36,6 +41,18 @@ export function resolvePublisherContentStatus(args: {
     return args.published ? "published" : "draft";
   }
   return args.defaultDraft === true ? "draft" : "published";
+}
+
+export function resolvePublisherContentReviewStatus(args: {
+  source: PublisherContentSource | undefined;
+  reviewStatus: PublisherContentReviewStatus | undefined;
+}): PublisherContentReviewStatus {
+  if (args.reviewStatus !== undefined) {
+    return args.reviewStatus;
+  }
+  return resolvePublisherContentSource(args.source) === "official"
+    ? "approved"
+    : "unreviewed";
 }
 
 export function isPublishedContentStatus(status: PublisherContentStatus): boolean {

@@ -20,6 +20,7 @@ type QueueMissionRow = {
   ownerUserId: Id<"users"> | null;
   ownerLabel: string | null;
   source: "official" | "community";
+  reviewStatus: "unreviewed" | "needs_changes" | "approved";
   status: "draft" | "published" | "archived" | "deleted" | "admin_deleted";
   mode: "conquest_core" | "conquest_plus" | "trader_economy";
   requiredTier: "free" | "pro";
@@ -34,6 +35,7 @@ type QueueStrategyRow = {
   ownerUserId: Id<"users"> | null;
   ownerLabel: string | null;
   source: "official" | "community";
+  reviewStatus: "unreviewed" | "needs_changes" | "approved";
   status: "draft" | "published" | "archived" | "deleted" | "admin_deleted";
   updatedAt: number;
   moderationHistory: ModerationEvent[];
@@ -47,6 +49,7 @@ type QueueEntry = {
   ownerUserId: Id<"users"> | null;
   ownerLabel: string | null;
   source: "official" | "community";
+  reviewStatus: "unreviewed" | "needs_changes" | "approved";
   status: "draft" | "published" | "archived" | "deleted" | "admin_deleted";
   updatedAt: number;
   moderationHistory: ModerationEvent[];
@@ -58,6 +61,7 @@ function buildCatalogLink(entry: QueueEntry) {
   const params = new URLSearchParams();
   params.set("search", entry.key);
   params.set("source", entry.source);
+  params.set("review", entry.reviewStatus);
   params.set("status", entry.status);
   if (entry.ownerUserId === null) {
     params.set("owner", "system");
@@ -178,10 +182,11 @@ export function AdminModerationPage() {
           ownerUserId: mission.ownerUserId,
           ownerLabel: mission.ownerLabel,
           source: mission.source,
+          reviewStatus: mission.reviewStatus,
           status: mission.status,
           updatedAt: mission.updatedAt,
           moderationHistory: mission.moderationHistory,
-          metaLabel: `${mission.mode} · ${mission.requiredTier}`,
+          metaLabel: `${mission.mode} · ${mission.requiredTier} · review ${mission.reviewStatus}`,
           destinationPath: "/admin/mission",
         }))
       : [];
@@ -194,10 +199,11 @@ export function AdminModerationPage() {
           ownerUserId: strategy.ownerUserId,
           ownerLabel: strategy.ownerLabel,
           source: strategy.source,
+          reviewStatus: strategy.reviewStatus,
           status: strategy.status,
           updatedAt: strategy.updatedAt,
           moderationHistory: strategy.moderationHistory,
-          metaLabel: "Automation strategy",
+          metaLabel: `Automation strategy · review ${strategy.reviewStatus}`,
           destinationPath: "/admin/strategies",
         }))
       : [];
@@ -215,11 +221,22 @@ export function AdminModerationPage() {
     [entries],
   );
 
-  const draftEntries = useMemo(
+  const unreviewedEntries = useMemo(
     () =>
       filterEntries(
         actionableCommunityEntries
-          .filter((entry) => entry.status === "draft")
+          .filter((entry) => entry.reviewStatus === "unreviewed")
+          .sort((left, right) => latestModerationAt(right) - latestModerationAt(left)),
+        normalizedSearchText,
+      ),
+    [actionableCommunityEntries, normalizedSearchText],
+  );
+
+  const changesRequestedEntries = useMemo(
+    () =>
+      filterEntries(
+        actionableCommunityEntries
+          .filter((entry) => entry.reviewStatus === "needs_changes")
           .sort((left, right) => latestModerationAt(right) - latestModerationAt(left)),
         normalizedSearchText,
       ),
@@ -237,10 +254,11 @@ export function AdminModerationPage() {
     [actionableCommunityEntries, normalizedSearchText],
   );
 
-  const recentReviewEntries = useMemo(
+  const recentApprovedEntries = useMemo(
     () =>
       filterEntries(
         actionableCommunityEntries
+          .filter((entry) => entry.reviewStatus === "approved")
           .slice()
           .sort((left, right) => latestModerationAt(right) - latestModerationAt(left))
           .slice(0, 12),
@@ -287,7 +305,10 @@ export function AdminModerationPage() {
             Actionable community: <span className="font-medium text-st-fg">{actionableCommunityEntries.length}</span>
           </div>
           <div className="rounded border border-st-border bg-st-bg px-3 py-2 text-sm text-st-muted">
-            Drafts: <span className="font-medium text-st-fg">{draftEntries.length}</span>
+            Needs review: <span className="font-medium text-st-fg">{unreviewedEntries.length}</span>
+          </div>
+          <div className="rounded border border-st-border bg-st-bg px-3 py-2 text-sm text-st-muted">
+            Needs changes: <span className="font-medium text-st-fg">{changesRequestedEntries.length}</span>
           </div>
           <div className="rounded border border-st-border bg-st-bg px-3 py-2 text-sm text-st-muted">
             Ownerless: <span className="font-medium text-st-fg">{ownerlessEntries.length}</span>
@@ -296,10 +317,17 @@ export function AdminModerationPage() {
       </Card>
 
       <QueueSection
-        title="Draft Review"
-        description="Community draft rows are the clearest first-pass moderation queue because they are not yet public but are already actionable."
-        entries={draftEntries}
-        emptyLabel="No draft community rows match the current search."
+        title="Needs Review"
+        description="These community rows have not yet received an explicit moderation review decision."
+        entries={unreviewedEntries}
+        emptyLabel="No unreviewed community rows match the current search."
+      />
+
+      <QueueSection
+        title="Needs Changes"
+        description="These community rows were reviewed but need more work before they should move forward."
+        entries={changesRequestedEntries}
+        emptyLabel="No community rows with requested changes match the current search."
       />
 
       <QueueSection
@@ -310,10 +338,10 @@ export function AdminModerationPage() {
       />
 
       <QueueSection
-        title="Recent Community Activity"
-        description="The most recently moderated or updated community rows are surfaced here for follow-up review without scanning the full catalogs."
-        entries={recentReviewEntries}
-        emptyLabel="No recent community moderation rows match the current search."
+        title="Recently Approved"
+        description="Recently approved community rows stay visible here for follow-up review without scanning the full catalogs."
+        entries={recentApprovedEntries}
+        emptyLabel="No recently approved community rows match the current search."
       />
     </div>
   );
