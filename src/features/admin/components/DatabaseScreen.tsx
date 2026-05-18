@@ -142,7 +142,6 @@ export function DatabaseScreen() {
           { label: "col_colony_ships", stat: selected.colonyShips },
           { label: "cmb_battles", stat: selected.cmbBattles },
           { label: "eco_market_snapshots", stat: selected.ecoMarketSnapshots },
-          { label: "eco_system_outputs", stat: selected.ecoSystemOutputs },
           { label: "eco_bg_traders", stat: selected.ecoBgTraders },
           { label: "sim_game_results", stat: selected.simGameResults },
           { label: "emp_results", stat: selected.empResults },
@@ -152,7 +151,6 @@ export function DatabaseScreen() {
     ? [
         { label: "sim_trader_identities", stat: legacyTraderData.simTraderIdentities },
         { label: "eco_market_snapshots", stat: legacyTraderData.ecoMarketSnapshots },
-        { label: "eco_system_outputs", stat: legacyTraderData.ecoSystemOutputs },
         { label: "eco_bg_traders", stat: legacyTraderData.ecoBgTraders },
         { label: "sim_events (bg_trader_*)", stat: legacyTraderData.simEvents },
         { label: "trd_charters", stat: legacyTraderData.trdCharters },
@@ -285,6 +283,13 @@ export function DatabaseScreen() {
           <div>Strategies missing source: <span className="font-medium text-st-fg">{overview?.metadataCounts.missingStrategySource ?? "-"}</span></div>
           <div>Strategies missing review: <span className="font-medium text-st-fg">{overview?.metadataCounts.missingStrategyReviewStatus ?? "-"}</span></div>
           <div>Strategies missing status: <span className="font-medium text-st-fg">{overview?.metadataCounts.missingStrategyStatus ?? "-"}</span></div>
+        </div>
+        <div className="mt-4 grid gap-2 md:grid-cols-2 xl:grid-cols-5 text-sm text-st-muted">
+          <div>Last auto run: <span className="font-medium text-st-fg">{formatDateTime(overview?.metadataSweep.lastRunAt ?? null)}</span></div>
+          <div>Last completed sweep: <span className="font-medium text-st-fg">{formatDateTime(overview?.metadataSweep.lastSweepCompletedAt ?? null)}</span></div>
+          <div>Last updated rows: <span className="font-medium text-st-fg">{overview?.metadataSweep.lastUpdatedRows ?? "-"}</span></div>
+          <div>Last mission-backed modes: <span className="font-medium text-st-fg">{overview?.metadataSweep.lastMissionBackedGameModes ?? "-"}</span></div>
+          <div>Last fallback modes: <span className="font-medium text-st-fg">{overview?.metadataSweep.lastFallbackGameModes ?? "-"}</span></div>
         </div>
         {metadataResult !== null ? (
           <p className="mt-3 text-sm text-st-muted">{metadataResult}</p>

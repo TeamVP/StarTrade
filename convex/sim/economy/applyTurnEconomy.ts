@@ -605,33 +605,6 @@ export async function applyTurnEconomy(
     empireOwnedPop.set(ownerId, (empireOwnedPop.get(ownerId) ?? 0) + newPop);
     empireOwnedFood.set(ownerId, (empireOwnedFood.get(ownerId) ?? 0) + newFoodStock);
 
-    if (persistEconomyHistory) {
-      await ctx.db.insert("eco_system_outputs", {
-        gameId: params.gameId,
-        systemId: system._id,
-        turnNumber: params.turnNumber,
-        commodity: "food",
-        produced: foodProducedTotal,
-        consumed: foodDemand,
-      });
-      await ctx.db.insert("eco_system_outputs", {
-        gameId: params.gameId,
-        systemId: system._id,
-        turnNumber: params.turnNumber,
-        commodity: "ships",
-        produced: shipsProduced,
-        consumed: garrisonShips > 0 ? Math.ceil(garrisonShips * WEAPONS_CONSUMPTION_RATE) : 0,
-      });
-      await ctx.db.insert("eco_system_outputs", {
-        gameId: params.gameId,
-        systemId: system._id,
-        turnNumber: params.turnNumber,
-        commodity: "research",
-        produced: researchProduced,
-        consumed: 0,
-      });
-    }
-
     nOwnedSystems += 1;
     aggFoodPressure +=
       (stockpileDemand + FOOD_DEMAND_BUFFER - newFoodStock) / stockpileDemand;

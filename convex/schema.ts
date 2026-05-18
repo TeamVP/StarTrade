@@ -194,6 +194,19 @@ export default defineSchema({
     .index("by_contentType_and_contentKey_and_createdAt", ["contentType", "contentKey", "createdAt"])
     .index("by_actorUserId_and_createdAt", ["actorUserId", "createdAt"]),
 
+  admin_metadata_backfill_state: defineTable({
+    key: v.string(),
+    userCursor: v.optional(v.union(v.string(), v.null())),
+    missionCursor: v.optional(v.union(v.string(), v.null())),
+    strategyCursor: v.optional(v.union(v.string(), v.null())),
+    gameCursor: v.optional(v.union(v.string(), v.null())),
+    lastRunAt: v.optional(v.number()),
+    lastSweepCompletedAt: v.optional(v.number()),
+    lastUpdatedRows: v.optional(v.number()),
+    lastFallbackGameModes: v.optional(v.number()),
+    lastMissionBackedGameModes: v.optional(v.number()),
+  }).index("by_key", ["key"]),
+
   sim_game_results: defineTable({
     gameId: v.id("sim_games"),
     urlCode: v.optional(v.union(v.string(), v.null())),
@@ -1006,9 +1019,7 @@ export default defineSchema({
     commodity: v.string(),
     unitPrice: v.number(),
     volume: v.number(),
-  })
-    .index("by_gameId_and_turnNumber", ["gameId", "turnNumber"])
-    .index("by_gameId_and_commodity", ["gameId", "commodity"]),
+  }).index("by_gameId_and_turnNumber", ["gameId", "turnNumber"]),
 
   eco_system_outputs: defineTable({
     gameId: v.id("sim_games"),

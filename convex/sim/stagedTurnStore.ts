@@ -27,7 +27,6 @@ type StageIndexFilter = {
 
 const STAGED_INSERT_ONLY_TABLES = new Set<StagedSimTableName>([
   "eco_market_snapshots",
-  "eco_system_outputs",
   "sim_events",
 ]);
 
@@ -42,7 +41,6 @@ const STAGED_INSERT_APPLY_ORDER: readonly StagedSimTableName[] = [
   "emp_states",
   "emp_system_holdings",
   "gal_systems",
-  "eco_system_outputs",
   "eco_market_snapshots",
   "flt_orders",
   "sim_events",

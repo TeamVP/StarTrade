@@ -7,6 +7,10 @@ import { seedV1TwentyMap } from "../seed/v1TwentySeed";
 import { loadEmpireColorPrefLookup } from "../seed/empireColorPrefLookup";
 import { gameUsesTraderEconomy, loadGameWithPersistedResolvedMode } from "../sim/gameMode";
 import { wipeGamePhaseBatch, wipePhaseAtIndex } from "../sim/wipeGame";
+import { runMetadataBackfillBatch } from "./metadataBackfill";
+
+const METADATA_BACKFILL_STATE_KEY = "default";
+const METADATA_BACKFILL_MAX_PASSES = 4;
 
 export const seedGameData = internalMutation({
   args: {
@@ -130,5 +134,88 @@ export const continueWipeGame = internalMutation({
       });
     }
     return { complete: false };
+  },
+});
+
+export const runMetadataBackfillSweep = internalMutation({
+  args: {
+    limit: v.optional(v.number()),
+    maxPasses: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const existingState = await ctx.db
+      .query("admin_metadata_backfill_state")
+      .withIndex("by_key", (q) => q.eq("key", METADATA_BACKFILL_STATE_KEY))
+      .unique();
+
+    const limit = args.limit ?? 32;
+    const maxPasses = Math.max(1, Math.min(Math.floor(args.maxPasses ?? METADATA_BACKFILL_MAX_PASSES), 16));
+    let result = await runMetadataBackfillBatch(ctx, {
+      limit,
+      userCursor: existingState?.userCursor ?? null,
+      missionCursor: existingState?.missionCursor ?? null,
+      strategyCursor: existingState?.strategyCursor ?? null,
+      gameCursor: existingState?.gameCursor ?? null,
+    });
+
+    let passesRun = 1;
+    while (!result.sweepComplete && passesRun < maxPasses) {
+      const nextPass = await runMetadataBackfillBatch(ctx, {
+        limit,
+        userCursor: result.nextUserCursor,
+        missionCursor: result.nextMissionCursor,
+        strategyCursor: result.nextStrategyCursor,
+        gameCursor: result.nextGameCursor,
+      });
+      result = {
+        limit: nextPass.limit,
+        scannedUsers: result.scannedUsers + nextPass.scannedUsers,
+        scannedGames: result.scannedGames + nextPass.scannedGames,
+        scannedMissions: result.scannedMissions + nextPass.scannedMissions,
+        scannedStrategies: result.scannedStrategies + nextPass.scannedStrategies,
+        updatedUsers: result.updatedUsers + nextPass.updatedUsers,
+        updatedGames: result.updatedGames + nextPass.updatedGames,
+        updatedMissions: result.updatedMissions + nextPass.updatedMissions,
+        updatedStrategies: result.updatedStrategies + nextPass.updatedStrategies,
+        missionBackedGameModes: result.missionBackedGameModes + nextPass.missionBackedGameModes,
+        fallbackGameModes: result.fallbackGameModes + nextPass.fallbackGameModes,
+        updatedUserIds: [...result.updatedUserIds, ...nextPass.updatedUserIds],
+        updatedGameIds: [...result.updatedGameIds, ...nextPass.updatedGameIds],
+        updatedMissionIds: [...result.updatedMissionIds, ...nextPass.updatedMissionIds],
+        updatedStrategyIds: [...result.updatedStrategyIds, ...nextPass.updatedStrategyIds],
+        nextUserCursor: nextPass.nextUserCursor,
+        nextMissionCursor: nextPass.nextMissionCursor,
+        nextStrategyCursor: nextPass.nextStrategyCursor,
+        nextGameCursor: nextPass.nextGameCursor,
+        sweepComplete: nextPass.sweepComplete,
+      };
+      passesRun += 1;
+    }
+
+    const updatedRows =
+      result.updatedUsers + result.updatedGames + result.updatedMissions + result.updatedStrategies;
+    const now = Date.now();
+    const nextState = {
+      userCursor: result.nextUserCursor,
+      missionCursor: result.nextMissionCursor,
+      strategyCursor: result.nextStrategyCursor,
+      gameCursor: result.nextGameCursor,
+      lastRunAt: now,
+      lastSweepCompletedAt: result.sweepComplete ? now : (existingState?.lastSweepCompletedAt ?? undefined),
+      lastUpdatedRows: updatedRows,
+      lastFallbackGameModes: result.fallbackGameModes,
+      lastMissionBackedGameModes: result.missionBackedGameModes,
+    };
+
+    if (existingState === null) {
+      await ctx.db.insert("admin_metadata_backfill_state", {
+        key: METADATA_BACKFILL_STATE_KEY,
+        ...nextState,
+      });
+    } else {
+      await ctx.db.patch("admin_metadata_backfill_state", existingState._id, nextState);
+    }
+
+    return result;
   },
 });

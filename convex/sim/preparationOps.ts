@@ -5,7 +5,6 @@ export const STAGED_SIM_TABLES = [
   "col_colony_ships",
   "eco_bg_traders",
   "eco_market_snapshots",
-  "eco_system_outputs",
   "emp_states",
   "emp_system_holdings",
   "flt_fleets",

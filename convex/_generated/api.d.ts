@@ -11,6 +11,7 @@
 import type * as admin_actions from "../admin/actions.js";
 import type * as admin_gameFinalization from "../admin/gameFinalization.js";
 import type * as admin_internal from "../admin/internal.js";
+import type * as admin_metadataBackfill from "../admin/metadataBackfill.js";
 import type * as admin_mutations from "../admin/mutations.js";
 import type * as admin_queries from "../admin/queries.js";
 import type * as ai_internal from "../ai/internal.js";
@@ -111,6 +112,7 @@ declare const fullApi: ApiFromModules<{
   "admin/actions": typeof admin_actions;
   "admin/gameFinalization": typeof admin_gameFinalization;
   "admin/internal": typeof admin_internal;
+  "admin/metadataBackfill": typeof admin_metadataBackfill;
   "admin/mutations": typeof admin_mutations;
   "admin/queries": typeof admin_queries;
   "ai/internal": typeof ai_internal;

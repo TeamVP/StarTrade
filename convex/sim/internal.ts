@@ -1973,13 +1973,10 @@ async function pruneHistoricalEconomyMarketSnapshots(
 async function pruneHistoricalEconomySystemOutputs(
   ctx: MutationCtx,
   gameId: Id<"sim_games">,
-  firstRetainedTurn: number,
 ): Promise<boolean> {
   const staleRows = await ctx.db
     .query("eco_system_outputs")
-    .withIndex("by_gameId_and_turnNumber", (q) =>
-      q.eq("gameId", gameId).lt("turnNumber", firstRetainedTurn),
-    )
+    .withIndex("by_gameId_and_turnNumber", (q) => q.eq("gameId", gameId))
     .take(ECONOMY_TRANSCRIPT_PRUNE_BATCH_SIZE);
   for (const row of staleRows) {
     await ctx.db.delete("eco_system_outputs", row._id);
@@ -2354,11 +2351,10 @@ export const postCommitMaintenance = internalMutation({
           )
         : false;
     const hasMoreHistoricalSystemOutputs =
-      game !== null && firstRetainedEconomyTurn !== null
+      game !== null
         ? await pruneHistoricalEconomySystemOutputs(
             ctx,
             args.gameId,
-            firstRetainedEconomyTurn,
           )
         : false;
     const hasMoreLegacyTraderRuns =

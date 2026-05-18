@@ -21,7 +21,6 @@ import { NPC_EMPIRE_PLAYERS, normalizeNpcEmpireKeys } from "../seed/npcEmpirePla
 import {
   BUILT_IN_MISSION_SEED_ROWS,
   canonicalizeMissionScenarioJson,
-  getMissionByKey,
   parseMissionScenarioJson,
 } from "../usr/missionCatalog";
 import { gameUsesTraderEconomy, loadGameWithPersistedResolvedMode, loadGameWithResolvedMode } from "../sim/gameMode";
@@ -31,6 +30,7 @@ import {
   isTerminalContentStatus,
   resolvePublisherContentStatus,
 } from "../usr/publisherAccess";
+import { runMetadataBackfillBatch } from "./metadataBackfill";
 
 function withTraderSettingsReset<T extends typeof DEFAULT_GAME_SETTINGS>(settings: T): T {
   return {
@@ -1196,173 +1196,7 @@ export const backfillMetadataAccessBatch = mutation({
       throw new Error("Authentication required.");
     }
 
-    const limit = Math.max(1, Math.min(Math.floor(args.limit ?? 32), 128));
-    let updatedUsers = 0;
-    let updatedGames = 0;
-    let updatedMissions = 0;
-    let updatedStrategies = 0;
-    let scannedUsers = 0;
-    let scannedGames = 0;
-    let scannedMissions = 0;
-    let scannedStrategies = 0;
-    let missionBackedGameModes = 0;
-    let fallbackGameModes = 0;
-
-    const updatedUserIds: Id<"users">[] = [];
-    const updatedGameIds: Id<"sim_games">[] = [];
-    const updatedMissionIds: Id<"sim_missions">[] = [];
-    const updatedStrategyIds: Id<"usr_automation_strategies">[] = [];
-
-    const usersPage = await ctx.db.query("users").order("desc").paginate({
-      cursor: args.userCursor ?? null,
-      numItems: limit,
-    });
-    scannedUsers = usersPage.page.length;
-    for (const user of usersPage.page) {
-      const patch: {
-        plan?: "free";
-        publisher?: false;
-      } = {};
-      if (user.plan === undefined) {
-        patch.plan = "free";
-      }
-      if (user.publisher === undefined) {
-        patch.publisher = false;
-      }
-      if (Object.keys(patch).length === 0) {
-        continue;
-      }
-      await ctx.db.patch("users", user._id, patch);
-      updatedUsers += 1;
-      updatedUserIds.push(user._id);
-    }
-
-    const missionsPage = await ctx.db.query("sim_missions").order("desc").paginate({
-      cursor: args.missionCursor ?? null,
-      numItems: limit,
-    });
-    scannedMissions = missionsPage.page.length;
-    for (const mission of missionsPage.page) {
-      const patch: {
-        ownerUserId?: null;
-        source?: "official";
-        reviewStatus?: "unreviewed" | "needs_changes" | "approved";
-        status?: "draft" | "published" | "archived" | "deleted" | "admin_deleted";
-        mode?: "conquest_core" | "conquest_plus" | "trader_economy";
-        requiredTier?: "free" | "pro";
-      } = {};
-      if (mission.ownerUserId === undefined) {
-        patch.ownerUserId = null;
-      }
-      if (mission.source === undefined) {
-        patch.source = "official";
-      }
-      if (mission.reviewStatus === undefined) {
-        patch.reviewStatus = resolvePublisherContentReviewStatus({
-          source: mission.source,
-          reviewStatus: undefined,
-        });
-      }
-      if (mission.status === undefined) {
-        patch.status = resolvePublisherContentStatus({
-          status: undefined,
-          published: mission.published,
-          defaultDraft: true,
-        });
-      }
-      if (mission.mode === undefined) {
-        patch.mode = "conquest_core";
-      }
-      if (mission.requiredTier === undefined) {
-        patch.requiredTier = "free";
-      }
-      if (Object.keys(patch).length === 0) {
-        continue;
-      }
-      await ctx.db.patch("sim_missions", mission._id, patch);
-      updatedMissions += 1;
-      updatedMissionIds.push(mission._id);
-    }
-
-    const strategiesPage = await ctx.db.query("usr_automation_strategies").order("desc").paginate({
-      cursor: args.strategyCursor ?? null,
-      numItems: limit,
-    });
-    scannedStrategies = strategiesPage.page.length;
-    for (const strategy of strategiesPage.page) {
-      const patch: {
-        ownerUserId?: null;
-        source?: "official";
-        reviewStatus?: "unreviewed" | "needs_changes" | "approved";
-        status?: "published";
-      } = {};
-      if (strategy.ownerUserId === undefined) {
-        patch.ownerUserId = null;
-      }
-      if (strategy.source === undefined) {
-        patch.source = "official";
-      }
-      if (strategy.reviewStatus === undefined) {
-        patch.reviewStatus = resolvePublisherContentReviewStatus({
-          source: strategy.source,
-          reviewStatus: undefined,
-        });
-      }
-      if (strategy.status === undefined) {
-        patch.status = "published";
-      }
-      if (Object.keys(patch).length === 0) {
-        continue;
-      }
-      await ctx.db.patch("usr_automation_strategies", strategy._id, patch);
-      updatedStrategies += 1;
-      updatedStrategyIds.push(strategy._id);
-    }
-
-    const gamesPage = await ctx.db.query("sim_games").order("desc").paginate({
-      cursor: args.gameCursor ?? null,
-      numItems: limit,
-    });
-    scannedGames = gamesPage.page.length;
-    for (const game of gamesPage.page) {
-      if (game.mode !== undefined) {
-        continue;
-      }
-      const missionKey = game.missionKey ?? game.lobbyScenarioKey ?? undefined;
-      const mission = missionKey === undefined || missionKey === null ? null : await getMissionByKey(ctx, missionKey);
-      const mode = mission?.mode ?? "trader_economy";
-      await ctx.db.patch("sim_games", game._id, { mode });
-      updatedGames += 1;
-      updatedGameIds.push(game._id);
-      if (mission !== null) {
-        missionBackedGameModes += 1;
-      } else {
-        fallbackGameModes += 1;
-      }
-    }
-
-    return {
-      limit,
-      scannedUsers,
-      scannedGames,
-      scannedMissions,
-      scannedStrategies,
-      updatedUsers,
-      updatedGames,
-      updatedMissions,
-      updatedStrategies,
-      missionBackedGameModes,
-      fallbackGameModes,
-      updatedUserIds,
-      updatedGameIds,
-      updatedMissionIds,
-      updatedStrategyIds,
-      nextUserCursor: usersPage.isDone ? null : usersPage.continueCursor,
-      nextMissionCursor: missionsPage.isDone ? null : missionsPage.continueCursor,
-      nextStrategyCursor: strategiesPage.isDone ? null : strategiesPage.continueCursor,
-      nextGameCursor: gamesPage.isDone ? null : gamesPage.continueCursor,
-      sweepComplete: usersPage.isDone && missionsPage.isDone && strategiesPage.isDone && gamesPage.isDone,
-    };
+    return await runMetadataBackfillBatch(ctx, args);
   },
 });
 

@@ -18,4 +18,11 @@ crons.interval(
   {},
 );
 
+crons.interval(
+  "backfill StarStrat metadata",
+  { minutes: 15 },
+  internal.admin.internal.runMetadataBackfillSweep,
+  {},
+);
+
 export default crons;

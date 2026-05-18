@@ -165,7 +165,7 @@ export function economyTranscriptHistoryTurnsToKeep(
   if (game.retentionClass === "archived_debug" || !gameUsesTraderEconomy(game)) {
     return null;
   }
-  return 24;
+  return 1;
 }
 
 export function gameRunsResolutionPhase(

@@ -179,6 +179,10 @@ export const getDatabaseHealth = query({
     const users = await ctx.db.query("users").order("desc").take(SAMPLE_GAMES_LIMIT);
     const missions = await ctx.db.query("sim_missions").collect();
     const strategies = await ctx.db.query("usr_automation_strategies").collect();
+    const metadataSweepState = await ctx.db
+      .query("admin_metadata_backfill_state")
+      .withIndex("by_key", (q) => q.eq("key", "default"))
+      .unique();
     const metadataCounts = {
       missingGameMode: games.filter((game) => game.mode === undefined).length,
       missingUserPlan: users.filter((user) => user.plan === undefined).length,
@@ -272,17 +276,6 @@ export const getDatabaseHealth = query({
         await ctx.db
           .query("eco_market_snapshots")
           .withIndex("by_gameId_and_turnNumber", (q) => q.eq("gameId", gameId))
-          .take(TABLE_SAMPLE_LIMIT + 1),
-      );
-    }
-
-    async function countLegacyEcoSystemOutputs(
-      gameId: NonNullable<typeof selectedGame>["_id"],
-    ) {
-      return boundedCountFromRows(
-        await ctx.db
-          .query("eco_system_outputs")
-          .withIndex("by_gameId_and_systemId", (q) => q.eq("gameId", gameId))
           .take(TABLE_SAMPLE_LIMIT + 1),
       );
     }
@@ -468,14 +461,6 @@ export const getDatabaseHealth = query({
                     .take(TABLE_SAMPLE_LIMIT + 1),
                 )
               : disabledTableStat,
-            ecoSystemOutputs: gameUsesTraderEconomy(selectedGame)
-              ? boundedCountFromRows(
-                  await ctx.db
-                    .query("eco_system_outputs")
-                    .withIndex("by_gameId_and_systemId", (q) => q.eq("gameId", selectedGame._id))
-                    .take(TABLE_SAMPLE_LIMIT + 1),
-                )
-              : disabledTableStat,
             ecoBgTraders: gameUsesTraderEconomy(selectedGame)
               ? boundedCountFromRows(
                   await ctx.db
@@ -505,9 +490,6 @@ export const getDatabaseHealth = query({
                   ecoMarketSnapshots: await countLegacyEcoMarketSnapshots(
                     selectedGame._id,
                   ),
-                  ecoSystemOutputs: await countLegacyEcoSystemOutputs(
-                    selectedGame._id,
-                  ),
                   ecoBgTraders: await countLegacyEcoBgTraders(
                     selectedGame._id,
                   ),
@@ -530,6 +512,13 @@ export const getDatabaseHealth = query({
         retentionCounts,
         finalizationCounts,
         metadataCounts,
+        metadataSweep: {
+          lastRunAt: metadataSweepState?.lastRunAt ?? null,
+          lastSweepCompletedAt: metadataSweepState?.lastSweepCompletedAt ?? null,
+          lastUpdatedRows: metadataSweepState?.lastUpdatedRows ?? null,
+          lastFallbackGameModes: metadataSweepState?.lastFallbackGameModes ?? null,
+          lastMissionBackedGameModes: metadataSweepState?.lastMissionBackedGameModes ?? null,
+        },
         cleanupCandidates,
         cleanupCandidateCount: cleanupCandidates.length,
       },

@@ -293,25 +293,6 @@ async function attachCaptainFields(
   });
 }
 
-export const getCommodityHistory = query({
-  args: {
-    gameId: v.id("sim_games"),
-    commodity: v.string(),
-    limit: v.number(),
-  },
-  handler: async (ctx, args) => {
-    const game = await loadGameWithResolvedMode(ctx, args.gameId);
-    if (game === null || !gameUsesTraderEconomy(game)) return [];
-    return await ctx.db
-      .query("eco_market_snapshots")
-      .withIndex("by_gameId_and_commodity", (q) =>
-        q.eq("gameId", args.gameId).eq("commodity", args.commodity),
-      )
-      .order("desc")
-      .take(args.limit);
-  },
-});
-
 /**
  * Returns traders that should be visible on the galaxy map: voyages still in
  * transit plus ships that delivered during the current turn resolution. The
