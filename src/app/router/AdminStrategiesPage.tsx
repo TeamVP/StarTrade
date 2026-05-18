@@ -132,6 +132,46 @@ function readStrategyReviewFilter(value: string | null): "all" | StrategyCatalog
     : "all";
 }
 
+const MODERATION_NOTE_PRESETS = [
+  "Approved after moderation review.",
+  "Needs changes before approval.",
+  "Metadata normalized for catalog consistency.",
+  "Ownership/source updated by admin moderation.",
+] as const;
+
+function applyModerationNotePreset(currentNote: string, preset: string): string {
+  const trimmed = currentNote.trim();
+  if (trimmed.length === 0) {
+    return preset;
+  }
+  if (trimmed.includes(preset)) {
+    return currentNote;
+  }
+  return `${trimmed}\n${preset}`;
+}
+
+function ModerationNotePresets(props: {
+  disabled?: boolean;
+  onSelect: (preset: string) => void;
+}) {
+  return (
+    <div className="flex flex-wrap gap-2">
+      {MODERATION_NOTE_PRESETS.map((preset) => (
+        <Button
+          key={preset}
+          type="button"
+          variant="outline"
+          disabled={props.disabled}
+          onClick={() => props.onSelect(preset)}
+          className="h-auto px-2 py-1 text-[11px]"
+        >
+          {preset}
+        </Button>
+      ))}
+    </div>
+  );
+}
+
 function StrategyCard(props: {
   strategy: StrategyCatalogRow;
   selected: boolean;
@@ -394,6 +434,10 @@ function StrategyCard(props: {
 
       <label className="grid gap-1 text-xs text-st-muted">
         <span>Moderation note (optional)</span>
+        <ModerationNotePresets
+          disabled={readOnly}
+          onSelect={(preset) => setModerationNote((current) => applyModerationNotePreset(current, preset))}
+        />
         <textarea
           value={moderationNote}
           disabled={readOnly}
@@ -741,6 +785,21 @@ export function AdminStrategiesPage() {
       }),
     [strategies, sourceFilter, statusFilter, reviewFilter, ownerFilter, normalizedSearchText],
   );
+  const strategySummary = useMemo(
+    () => ({
+      humanVisible: strategies.filter((strategy) => strategy.availableForHumans).length,
+      npcVisible: strategies.filter((strategy) => strategy.availableForNpcs).length,
+      official: strategies.filter((strategy) => strategy.source === "official").length,
+      community: strategies.filter((strategy) => strategy.source === "community").length,
+      unreviewed: strategies.filter((strategy) => strategy.reviewStatus === "unreviewed").length,
+      needsChanges: strategies.filter((strategy) => strategy.reviewStatus === "needs_changes").length,
+      approved: strategies.filter((strategy) => strategy.reviewStatus === "approved").length,
+      ownerlessCommunity: strategies.filter(
+        (strategy) => strategy.source === "community" && strategy.ownerUserId === null,
+      ).length,
+    }),
+    [strategies],
+  );
   const visibleKeys = useMemo(() => filteredStrategies.map((strategy) => strategy.key), [filteredStrategies]);
   const selectedVisibleCount = useMemo(
     () => visibleKeys.filter((key) => selectedKeySet.has(key)).length,
@@ -1050,6 +1109,9 @@ export function AdminStrategiesPage() {
 
               <label className="grid gap-1 text-xs text-st-muted">
                 <span>Bulk moderation note (optional)</span>
+                <ModerationNotePresets
+                  onSelect={(preset) => setBulkModerationNote((current) => applyModerationNotePreset(current, preset))}
+                />
                 <textarea
                   value={bulkModerationNote}
                   onChange={(event) => setBulkModerationNote(event.target.value)}
@@ -1086,18 +1148,30 @@ export function AdminStrategiesPage() {
             {bulkSourceResult !== null ? <p className="text-sm text-emerald-300">{bulkSourceResult}</p> : null}
             {bulkSourceError !== null ? <p className="text-sm text-red-300">{bulkSourceError}</p> : null}
 
-            <div className="grid gap-2 sm:grid-cols-2">
+            <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
               <div className="rounded border border-st-border bg-st-bg px-3 py-2 text-sm text-st-muted">
-                Human-visible: <span className="font-medium text-st-fg">{strategies.filter((strategy) => strategy.availableForHumans).length}</span>
+                Human-visible: <span className="font-medium text-st-fg">{strategySummary.humanVisible}</span>
               </div>
               <div className="rounded border border-st-border bg-st-bg px-3 py-2 text-sm text-st-muted">
-                NPC-visible: <span className="font-medium text-st-fg">{strategies.filter((strategy) => strategy.availableForNpcs).length}</span>
+                NPC-visible: <span className="font-medium text-st-fg">{strategySummary.npcVisible}</span>
               </div>
               <div className="rounded border border-st-border bg-st-bg px-3 py-2 text-sm text-st-muted">
-                Official: <span className="font-medium text-st-fg">{strategies.filter((strategy) => strategy.source === "official").length}</span>
+                Official: <span className="font-medium text-st-fg">{strategySummary.official}</span>
               </div>
               <div className="rounded border border-st-border bg-st-bg px-3 py-2 text-sm text-st-muted">
-                Community: <span className="font-medium text-st-fg">{strategies.filter((strategy) => strategy.source === "community").length}</span>
+                Community: <span className="font-medium text-st-fg">{strategySummary.community}</span>
+              </div>
+              <div className="rounded border border-st-border bg-st-bg px-3 py-2 text-sm text-st-muted">
+                Needs review: <span className="font-medium text-st-fg">{strategySummary.unreviewed}</span>
+              </div>
+              <div className="rounded border border-st-border bg-st-bg px-3 py-2 text-sm text-st-muted">
+                Needs changes: <span className="font-medium text-st-fg">{strategySummary.needsChanges}</span>
+              </div>
+              <div className="rounded border border-st-border bg-st-bg px-3 py-2 text-sm text-st-muted">
+                Approved: <span className="font-medium text-st-fg">{strategySummary.approved}</span>
+              </div>
+              <div className="rounded border border-st-border bg-st-bg px-3 py-2 text-sm text-st-muted">
+                Ownerless community: <span className="font-medium text-st-fg">{strategySummary.ownerlessCommunity}</span>
               </div>
             </div>
 

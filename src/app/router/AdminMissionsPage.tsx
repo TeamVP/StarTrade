@@ -190,6 +190,46 @@ function readMissionReviewFilter(value: string | null): "all" | MissionRow["revi
     : "all";
 }
 
+const MODERATION_NOTE_PRESETS = [
+  "Approved after moderation review.",
+  "Needs changes before approval.",
+  "Metadata normalized for catalog consistency.",
+  "Ownership/source updated by admin moderation.",
+] as const;
+
+function applyModerationNotePreset(currentNote: string, preset: string): string {
+  const trimmed = currentNote.trim();
+  if (trimmed.length === 0) {
+    return preset;
+  }
+  if (trimmed.includes(preset)) {
+    return currentNote;
+  }
+  return `${trimmed}\n${preset}`;
+}
+
+function ModerationNotePresets(props: {
+  disabled?: boolean;
+  onSelect: (preset: string) => void;
+}) {
+  return (
+    <div className="flex flex-wrap gap-2">
+      {MODERATION_NOTE_PRESETS.map((preset) => (
+        <Button
+          key={preset}
+          type="button"
+          variant="outline"
+          disabled={props.disabled}
+          onClick={() => props.onSelect(preset)}
+          className="h-auto px-2 py-1 text-[11px]"
+        >
+          {preset}
+        </Button>
+      ))}
+    </div>
+  );
+}
+
 function normalizeNullableString(value: string): string | null {
   const normalized = value.trim();
   return normalized.length === 0 ? null : normalized;
@@ -1492,6 +1532,10 @@ function MissionCard(props: {
 
       <label className="grid gap-1 text-xs text-st-muted">
         <span>Moderation note (optional)</span>
+        <ModerationNotePresets
+          disabled={readOnly}
+          onSelect={(preset) => setModerationNote((current) => applyModerationNotePreset(current, preset))}
+        />
         <textarea
           value={moderationNote}
           disabled={readOnly}
@@ -1973,6 +2017,21 @@ export function AdminMissionsPage() {
       }),
     [missions, sourceFilter, statusFilter, reviewFilter, ownerFilter, normalizedSearchText],
   );
+  const missionSummary = useMemo(
+    () => ({
+      official: missions.filter((mission) => mission.source === "official").length,
+      community: missions.filter((mission) => mission.source === "community").length,
+      unreviewed: missions.filter((mission) => mission.reviewStatus === "unreviewed").length,
+      needsChanges: missions.filter((mission) => mission.reviewStatus === "needs_changes").length,
+      approved: missions.filter((mission) => mission.reviewStatus === "approved").length,
+      ownerlessCommunity: missions.filter(
+        (mission) => mission.source === "community" && mission.ownerUserId === null,
+      ).length,
+      conquestCore: missions.filter((mission) => mission.mode === "conquest_core").length,
+      traderEconomy: missions.filter((mission) => mission.mode === "trader_economy").length,
+    }),
+    [missions],
+  );
   const visibleKeys = useMemo(() => filteredMissions.map((mission) => mission.key), [filteredMissions]);
   const selectedVisibleCount = useMemo(
     () => visibleKeys.filter((key) => selectedKeySet.has(key)).length,
@@ -2227,6 +2286,32 @@ export function AdminMissionsPage() {
             ))}
           </select>
         </div>
+        <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+          <div className="rounded border border-st-border bg-st-bg px-3 py-2 text-sm text-st-muted">
+            Official: <span className="font-medium text-st-fg">{missionSummary.official}</span>
+          </div>
+          <div className="rounded border border-st-border bg-st-bg px-3 py-2 text-sm text-st-muted">
+            Community: <span className="font-medium text-st-fg">{missionSummary.community}</span>
+          </div>
+          <div className="rounded border border-st-border bg-st-bg px-3 py-2 text-sm text-st-muted">
+            Needs review: <span className="font-medium text-st-fg">{missionSummary.unreviewed}</span>
+          </div>
+          <div className="rounded border border-st-border bg-st-bg px-3 py-2 text-sm text-st-muted">
+            Needs changes: <span className="font-medium text-st-fg">{missionSummary.needsChanges}</span>
+          </div>
+          <div className="rounded border border-st-border bg-st-bg px-3 py-2 text-sm text-st-muted">
+            Approved: <span className="font-medium text-st-fg">{missionSummary.approved}</span>
+          </div>
+          <div className="rounded border border-st-border bg-st-bg px-3 py-2 text-sm text-st-muted">
+            Ownerless community: <span className="font-medium text-st-fg">{missionSummary.ownerlessCommunity}</span>
+          </div>
+          <div className="rounded border border-st-border bg-st-bg px-3 py-2 text-sm text-st-muted">
+            Conquest core: <span className="font-medium text-st-fg">{missionSummary.conquestCore}</span>
+          </div>
+          <div className="rounded border border-st-border bg-st-bg px-3 py-2 text-sm text-st-muted">
+            Trader economy: <span className="font-medium text-st-fg">{missionSummary.traderEconomy}</span>
+          </div>
+        </div>
         <div className="space-y-3 rounded border border-st-border bg-st-bg/70 p-3">
           <div className="grid gap-3 lg:grid-cols-[minmax(0,1.3fr)_auto] lg:items-center">
             <p className="text-sm text-st-muted">
@@ -2298,6 +2383,9 @@ export function AdminMissionsPage() {
 
           <label className="grid gap-1 text-xs text-st-muted">
             <span>Bulk moderation note (optional)</span>
+            <ModerationNotePresets
+              onSelect={(preset) => setBulkModerationNote((current) => applyModerationNotePreset(current, preset))}
+            />
             <textarea
               value={bulkModerationNote}
               onChange={(event) => setBulkModerationNote(event.target.value)}
