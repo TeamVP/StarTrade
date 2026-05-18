@@ -13,6 +13,17 @@
   box-sizing: border-box;
 }
 
+/* Override browser autofill background so dark-themed inputs stay dark */
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus,
+input:-webkit-autofill:active {
+  /* Keep the browser from repainting its autofill background, which preserves the input's own dark border and radius. */
+  transition: background-color 5000s ease-in-out 0s;
+  -webkit-text-fill-color: #e2e8f0 !important;
+  caret-color: #e2e8f0;
+}
+
 html,
 body,
 #root {
