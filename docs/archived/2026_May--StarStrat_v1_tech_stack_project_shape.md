@@ -564,7 +564,7 @@ Use this as the source of truth for **what is in the repo today** versus **what 
 
 **Delivery**
 
-- [x] Source hosted on GitHub (`TeamVP/StarTrade`) with an initial commit describing the playable slice
+- [x] Source hosted on GitHub (`TeamVP/Starstrat`) with an initial commit describing the playable slice
 
 ---
 

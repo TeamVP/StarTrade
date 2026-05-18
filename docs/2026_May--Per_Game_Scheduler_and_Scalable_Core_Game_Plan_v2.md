@@ -1,15 +1,15 @@
 # Per-Game Scheduler and Scalable Core Game Plan V2
 
 This document supersedes the earlier scheduler/core-game plan in
-[2026_May--Per_Game_Scheduler_and_Scalable_Core_Game_Plan.md](2026_May--Per_Game_Scheduler_and_Scalable_Core_Game_Plan.md).
+[archived/2026_May--Per_Game_Scheduler_and_Scalable_Core_Game_Plan.md](archived/2026_May--Per_Game_Scheduler_and_Scalable_Core_Game_Plan.md).
 
 Keep the older document for design review and historical context, but treat this V2 plan as the working architecture and implementation handoff.
 
 It complements the other turn/runtime documents:
 
-- [State_Machine.md](State_Machine.md) remains the authoritative turn-state model.
-- [Turn_System.md](Turn_System.md) remains the work log and invariant list for the staged turn controller.
-- [Database_Scalability_May_2026.md](Database_Scalability_May_2026.md) captures why storage volume and retention are now first-order architectural concerns.
+- [archived/State_Machine.md](archived/State_Machine.md) remains the authoritative turn-state model.
+- [archived/Turn_System.md](archived/Turn_System.md) remains the work log and invariant list for the staged turn controller.
+- [archived/Database_Scalability_May_2026.md](archived/Database_Scalability_May_2026.md) captures why storage volume and retention are now first-order architectural concerns.
 
 ## Executive Summary
 
