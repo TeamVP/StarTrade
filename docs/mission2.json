@@ -1,0 +1,125 @@
+{
+  "schemaVersion": 2,
+  "slots": [
+    {
+      "slotKey": "aurora",
+      "occupant": {
+        "kind": "human"
+      },
+      "automation": {
+        "strategyLibraryKey": null,
+        "activationTrigger": null
+      },
+      "presentation": {
+        "factionLabelOverride": null,
+        "displayNameOverride": null
+      },
+      "resources": {
+        "treasuryDelta": 0,
+        "homeworldPopulationDelta": 0,
+        "homeworldStockFoodDelta": 0,
+        "homeworldStockWeaponsDelta": 0,
+        "homeworldStockResearchDelta": 0,
+        "homeworldLocalTreasuryDelta": 0
+      },
+      "sensors": {
+        "fightAttraction": null,
+        "intruderDetection": null
+      },
+      "startsHidden": false,
+      "revealTrigger": null
+    },
+    {
+      "slotKey": "iron",
+      "occupant": {
+        "kind": "npc",
+        "npcPlayerKey": "dax-helion"
+      },
+      "automation": {
+        "strategyLibraryKey": null,
+        "activationTrigger": {
+          "kind": "attacked"
+        }
+      },
+      "presentation": {
+        "factionLabelOverride": null,
+        "displayNameOverride": null
+      },
+      "resources": {
+        "treasuryDelta": 0,
+        "homeworldPopulationDelta": 0,
+        "homeworldStockFoodDelta": 1000,
+        "homeworldStockWeaponsDelta": 100,
+        "homeworldStockResearchDelta": 100,
+        "homeworldLocalTreasuryDelta": 0
+      },
+      "sensors": {
+        "fightAttraction": null,
+        "intruderDetection": null
+      },
+      "startsHidden": false,
+      "revealTrigger": null
+    },
+    {
+      "slotKey": "maia-rival",
+      "occupant": {
+        "kind": "npc",
+        "npcPlayerKey": "maia-solenne"
+      },
+      "automation": {
+        "strategyLibraryKey": null,
+        "activationTrigger": null
+      },
+      "presentation": {
+        "factionLabelOverride": null,
+        "displayNameOverride": null
+      },
+      "resources": {
+        "treasuryDelta": 0,
+        "homeworldPopulationDelta": 0,
+        "homeworldStockFoodDelta": 0,
+        "homeworldStockWeaponsDelta": 0,
+        "homeworldStockResearchDelta": 0,
+        "homeworldLocalTreasuryDelta": 0
+      },
+      "sensors": {
+        "fightAttraction": null,
+        "intruderDetection": null
+      },
+      "startsHidden": false,
+      "revealTrigger": null
+    },
+    {
+      "slotKey": "tomas-rival",
+      "occupant": {
+        "kind": "npc",
+        "npcPlayerKey": "tomas-varek"
+      },
+      "automation": {
+        "strategyLibraryKey": null,
+        "activationTrigger": {
+          "kind": "turn",
+          "turn": 4
+        }
+      },
+      "presentation": {
+        "factionLabelOverride": "Varek",
+        "displayNameOverride": null
+      },
+      "resources": {
+        "treasuryDelta": 0,
+        "homeworldPopulationDelta": 0,
+        "homeworldStockFoodDelta": 0,
+        "homeworldStockWeaponsDelta": 0,
+        "homeworldStockResearchDelta": 0,
+        "homeworldLocalTreasuryDelta": 0
+      },
+      "sensors": {
+        "fightAttraction": null,
+        "intruderDetection": null
+      },
+      "startsHidden": false,
+      "revealTrigger": null
+    }
+  ]
+}

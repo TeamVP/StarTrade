@@ -9,11 +9,13 @@ import { useActiveGame } from "@/features/galaxy/hooks/useActiveGame";
 import { getGamePath } from "@/features/games/gameRoutes";
 
 type MissionPreview = {
-  playerEmpireKey: string;
-  npcEmpireCount: number;
-  automatedEmpireCount: number;
+  playerSlotKey: string;
+  slotCount: number;
+  npcControlledCount: number;
   delayedAutomationCount: number;
   handicapCount: number;
+  fightAttractionCount: number;
+  intruderDetectionCount: number;
 };
 
 type PublisherMissionRow = {
@@ -262,7 +264,7 @@ function CreatePublisherMissionCard(props: {
   const [prerequisiteMissionKeys, setPrerequisiteMissionKeys] = useState("");
   const [sortOrder, setSortOrder] = useState("0");
   const [retentionClass, setRetentionClass] = useState<"discarded" | "official" | "archived_debug">("discarded");
-  const [scenarioJson, setScenarioJson] = useState(`{\n  "playerEmpireKey": "aurora",\n  "npcEmpireKeys": [],\n  "automatedEmpireKeys": [],\n  "empireConfigs": []\n}`);
+  const [scenarioJson, setScenarioJson] = useState(`{\n  "schemaVersion": 2,\n  "slots": [\n    {\n      "slotKey": "aurora",\n      "occupant": {\n        "kind": "human"\n      },\n      "automation": {\n        "strategyLibraryKey": null,\n        "activationTrigger": null\n      },\n      "presentation": {\n        "factionLabelOverride": null,\n        "displayNameOverride": null\n      },\n      "resources": {\n        "treasuryDelta": 0,\n        "homeworldPopulationDelta": 0,\n        "homeworldStockFoodDelta": 0,\n        "homeworldStockWeaponsDelta": 0,\n        "homeworldStockResearchDelta": 0,\n        "homeworldLocalTreasuryDelta": 0\n      },\n      "sensors": {\n        "fightAttraction": null,\n        "intruderDetection": null\n      },\n      "startsHidden": false,\n      "revealTrigger": null\n    }\n  ]\n}`);
   const [status, setStatus] = useState<"draft" | "published">("draft");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -556,9 +558,9 @@ function EditableMissionCard(props: {
       </div>
       <input value={prerequisiteMissionKeys} disabled={readOnly} onChange={(event) => setPrerequisiteMissionKeys(event.target.value)} className="w-full rounded border border-st-border bg-st-bg px-3 py-2 text-sm text-st-fg" />
       <div className="grid gap-3 md:grid-cols-5 text-xs text-st-muted">
-        <div className="rounded border border-st-border bg-st-bg px-3 py-2">Player empire {props.mission.preview.playerEmpireKey}</div>
-        <div className="rounded border border-st-border bg-st-bg px-3 py-2">NPCs {props.mission.preview.npcEmpireCount}</div>
-        <div className="rounded border border-st-border bg-st-bg px-3 py-2">Automated {props.mission.preview.automatedEmpireCount}</div>
+        <div className="rounded border border-st-border bg-st-bg px-3 py-2">Player slot {props.mission.preview.playerSlotKey}</div>
+        <div className="rounded border border-st-border bg-st-bg px-3 py-2">Slots {props.mission.preview.slotCount}</div>
+        <div className="rounded border border-st-border bg-st-bg px-3 py-2">NPC-controlled {props.mission.preview.npcControlledCount}</div>
         <div className="rounded border border-st-border bg-st-bg px-3 py-2">Delayed {props.mission.preview.delayedAutomationCount}</div>
         <div className="rounded border border-st-border bg-st-bg px-3 py-2">Handicaps {props.mission.preview.handicapCount}</div>
       </div>
@@ -694,7 +696,7 @@ export function PublisherPage() {
       mission.mapKey,
       mission.mode,
       mission.requiredTier,
-      mission.preview.playerEmpireKey,
+      mission.preview.playerSlotKey,
     ]
       .join(" ")
       .toLowerCase();
@@ -794,10 +796,10 @@ export function PublisherPage() {
                   {selected ? <span className="rounded border border-cyan-500/40 bg-cyan-950/30 px-2 py-1 text-xs text-cyan-200">Current run</span> : null}
                 </div>
               </div>
-              <p className="text-xs text-st-muted">By {mission.ownerLabel ?? "Unknown publisher"} · Map {mission.mapKey} · Player empire {mission.preview.playerEmpireKey}</p>
+              <p className="text-xs text-st-muted">By {mission.ownerLabel ?? "Unknown publisher"} · Map {mission.mapKey} · Player slot {mission.preview.playerSlotKey}</p>
               <div className="flex flex-wrap gap-2 text-xs text-st-muted">
-                <span className="rounded border border-st-border px-2 py-0.5">NPCs {mission.preview.npcEmpireCount}</span>
-                <span className="rounded border border-st-border px-2 py-0.5">Automated {mission.preview.automatedEmpireCount}</span>
+                <span className="rounded border border-st-border px-2 py-0.5">Slots {mission.preview.slotCount}</span>
+                <span className="rounded border border-st-border px-2 py-0.5">NPC-controlled {mission.preview.npcControlledCount}</span>
                 <span className="rounded border border-st-border px-2 py-0.5">Delayed {mission.preview.delayedAutomationCount}</span>
                 <span className="rounded border border-st-border px-2 py-0.5">Handicaps {mission.preview.handicapCount}</span>
               </div>

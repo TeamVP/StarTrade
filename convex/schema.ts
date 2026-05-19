@@ -124,6 +124,18 @@ export default defineSchema({
     .index("by_status_and_lastMeaningfulActivityAt", ["status", "lastMeaningfulActivityAt"])
     .index("by_ownerUserId_and_lobbyScenarioKey", ["ownerUserId", "lobbyScenarioKey"]),
 
+  sim_maps: defineTable({
+    key: v.string(),
+    name: v.string(),
+    description: v.string(),
+    tier: v.union(v.literal("small"), v.literal("medium"), v.literal("large")),
+    sortOrder: v.number(),
+    /** Opaque JSON definition for how this map is generated or laid out. */
+    definitionJson: v.optional(v.string()),
+  })
+    .index("by_key", ["key"])
+    .index("by_sortOrder", ["sortOrder"]),
+
   sim_missions: defineTable({
     key: v.string(),
     name: v.string(),
@@ -329,6 +341,7 @@ export default defineSchema({
     displayNameSnapshot: v.string(),
     factionLabelSnapshot: v.string(),
     colorHex: v.string(),
+    strategyLibraryKey: v.union(v.string(), v.null()),
     strategyJsonSnapshot: v.union(v.string(), v.null()),
     strategyFingerprint: v.union(v.string(), v.null()),
     status: v.union(
@@ -724,6 +737,8 @@ export default defineSchema({
     resignedAt: v.optional(v.number()),
     /** Editable automation brain for NPCs or humans that opt into scripted empire management. */
     strategyJson: v.optional(v.string()),
+    /** Optional source strategy library key for the current automation brain. */
+    strategyLibraryKey: v.optional(v.union(v.string(), v.null())),
     /** How an NPC empire's automation becomes active. Human automation ignores this and runs immediately. */
     strategyStartMode: v.optional(
       v.union(v.literal("turn"), v.literal("attacked")),
@@ -924,8 +939,6 @@ export default defineSchema({
      * Slider typically 5–100; economy interpolates toward this cap as colonies starve.
      */
     starvationFoodPriceCapMult: v.optional(v.number()),
-    /** Background trader ship-hire cost scaling (0.1–5.0, default 1.0). */
-    traderShipCostMult: v.number(),
     /** Attacker damage dealt per round scaling (0.25–4.0, default 1.0). */
     combatAttackMult: v.number(),
     /** Defender damage dealt per round scaling (0.25–4.0, default 1.0). */
@@ -937,23 +950,6 @@ export default defineSchema({
      * 1.8 = default specialization bonus; 3.0 = extreme specialization.
      */
     shipProdEmphasisPower: v.optional(v.number()),
-
-    // ─── Balance page settings ────────────────────────────────────────────────
-    /** Minimum background NPC traders active at once (0–8, default 0). */
-    traderMinActive: v.optional(v.number()),
-    /** Maximum background NPC traders active at once (0–32, default 3 when automated). */
-    traderMaxActive: v.optional(v.number()),
-    /** Ship hire cost per travel-turn in credits (default 250). */
-    traderShipHirePerTurn: v.optional(v.number()),
-    /** Chance from 0-100 that an NPC accepts a viable job and hires a ship (default 20). */
-    traderHireChancePct: v.optional(v.number()),
-    /** One-time docking fee on trader arrival in credits (default 100). */
-    traderDockingCost: v.optional(v.number()),
-    /**
-     * For owned destinations, credits per 100 cr of unpaid trader invoice that the
-     * system local treasury may add after the empire treasury runs short (default 50).
-     */
-    localTreasuryAddsPer100Cr: v.optional(v.number()),
     /**
      * Food stockpile threshold above which prices fall as a multiple of demand.
      * e.g. 20.0 = when stock > 20× one-turn demand the market is in oversupply (default 20.0).
@@ -984,11 +980,32 @@ export default defineSchema({
      * All per-system food prices scale proportionally (default 6 cr).
      */
     foodBasePrice: v.optional(v.number()),
-    /**
-     * When true (default), min/max NPC trader counts are adjusted by the sim every 10 turns from delivery economics.
-     * When false, Balance sliders control `traderMinActive` / `traderMaxActive` manually.
-     */
+
+    // Legacy mixed-purpose trader fields retained only while old rows converge.
+    traderShipCostMult: v.optional(v.number()),
+    traderMinActive: v.optional(v.number()),
+    traderMaxActive: v.optional(v.number()),
+    traderShipHirePerTurn: v.optional(v.number()),
+    traderHireChancePct: v.optional(v.number()),
+    traderDockingCost: v.optional(v.number()),
+    localTreasuryAddsPer100Cr: v.optional(v.number()),
     traderLimitsAutomated: v.optional(v.boolean()),
+  }).index("by_gameId", ["gameId"]),
+
+  /**
+   * Trader-only per-game balance/settings. Missing row = trader defaults.
+   * Non-trader modes should converge to no row in this table.
+   */
+  sim_game_trader_settings: defineTable({
+    gameId: v.id("sim_games"),
+    traderShipCostMult: v.number(),
+    traderMinActive: v.number(),
+    traderMaxActive: v.number(),
+    traderShipHirePerTurn: v.number(),
+    traderHireChancePct: v.number(),
+    traderDockingCost: v.number(),
+    localTreasuryAddsPer100Cr: v.number(),
+    traderLimitsAutomated: v.boolean(),
   }).index("by_gameId", ["gameId"]),
 
   /**

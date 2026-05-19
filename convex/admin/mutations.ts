@@ -11,6 +11,8 @@ import { createUniqueGameUrlCode, gameUrlCodeNeedsRefresh } from "../sim/urlCode
 import {
   DEFAULT_GAME_SETTINGS,
   loadGameSettings,
+  persistGameSettings,
+  withTraderSettingsReset,
 } from "../sim/economy/gameSettings";
 import { canonicalizeStrategyJson } from "../usr/automationStrategyLibrary";
 import {
@@ -21,8 +23,10 @@ import { NPC_EMPIRE_PLAYERS, normalizeNpcEmpireKeys } from "../seed/npcEmpirePla
 import {
   BUILT_IN_MISSION_SEED_ROWS,
   canonicalizeMissionScenarioJson,
+  listMissionSeededNpcPersonaKeys,
   parseMissionScenarioJson,
 } from "../usr/missionCatalog";
+import { BUILT_IN_MAP_CATALOG_ROWS } from "../sim/mapCatalog";
 import { gameUsesTraderEconomy, loadGameWithPersistedResolvedMode, loadGameWithResolvedMode } from "../sim/gameMode";
 import {
   assertMayTransitionContentStatus,
@@ -31,19 +35,6 @@ import {
   resolvePublisherContentStatus,
 } from "../usr/publisherAccess";
 import { runMetadataBackfillBatch } from "./metadataBackfill";
-
-function withTraderSettingsReset<T extends typeof DEFAULT_GAME_SETTINGS>(settings: T): T {
-  return {
-    ...settings,
-    traderShipCostMult: DEFAULT_GAME_SETTINGS.traderShipCostMult,
-    traderMinActive: DEFAULT_GAME_SETTINGS.traderMinActive,
-    traderMaxActive: DEFAULT_GAME_SETTINGS.traderMaxActive,
-    traderShipHirePerTurn: DEFAULT_GAME_SETTINGS.traderShipHirePerTurn,
-    traderHireChancePct: DEFAULT_GAME_SETTINGS.traderHireChancePct,
-    traderDockingCost: DEFAULT_GAME_SETTINGS.traderDockingCost,
-    traderLimitsAutomated: DEFAULT_GAME_SETTINGS.traderLimitsAutomated,
-  };
-}
 
 const LEGACY_GAME_CLEANUP_SCAN_MULTIPLIER = 4;
 const PASSWORD_PROVIDER_ID = "password";
@@ -143,6 +134,36 @@ function normalizeMissionSortOrder(sortOrder: number): number {
   return Math.max(0, Math.floor(sortOrder));
 }
 
+function normalizeMapKey(key: string): string {
+  const normalized = key.trim().toLowerCase();
+  if (normalized.length === 0) {
+    throw new Error("Map key is required.");
+  }
+  if (!/^[a-z0-9][a-z0-9-]*$/.test(normalized)) {
+    throw new Error("Map key must use lowercase letters, numbers, and hyphens.");
+  }
+  return normalized;
+}
+
+function normalizeMapName(name: string): string {
+  const normalized = name.trim();
+  if (normalized.length === 0) {
+    throw new Error("Map name is required.");
+  }
+  return normalized;
+}
+
+function normalizeMapDescription(description: string): string {
+  return description.trim();
+}
+
+function normalizeMapSortOrder(sortOrder: number): number {
+  if (!Number.isFinite(sortOrder)) {
+    throw new Error("Map sort order must be a number.");
+  }
+  return Math.max(0, Math.floor(sortOrder));
+}
+
 function normalizeMissionLevel(level: number): number {
   if (!Number.isFinite(level)) {
     throw new Error("Mission level must be a number.");
@@ -200,17 +221,22 @@ async function normalizeMissionScenarioJson(ctx: MutationCtx, scenarioJson: stri
   const normalized = canonicalizeMissionScenarioJson(scenarioJson);
   const scenario = parseMissionScenarioJson(normalized);
 
-  await normalizeNpcEmpireKeys(ctx, scenario.npcEmpireKeys);
-  for (const config of scenario.empireConfigs) {
-    if (config.targetNpcPlayerKey !== null) {
-      await normalizeNpcEmpireKeys(ctx, [config.targetNpcPlayerKey]);
+  await normalizeNpcEmpireKeys(ctx, listMissionSeededNpcPersonaKeys(scenario));
+  for (const slot of scenario.slots) {
+    if (slot.occupant.kind === "npc") {
+      await normalizeNpcEmpireKeys(ctx, [slot.occupant.npcPlayerKey]);
     }
-    if (config.strategyLibraryKey !== null) {
-      const strategy = await getAutomationStrategyByKey(ctx, config.strategyLibraryKey);
+    if (slot.automation.strategyLibraryKey !== null) {
+      const strategy = await getAutomationStrategyByKey(ctx, slot.automation.strategyLibraryKey);
       if (strategy === null) {
-        throw new Error(`Mission strategy ${config.strategyLibraryKey} was not found.`);
+        throw new Error(`Mission strategy ${slot.automation.strategyLibraryKey} was not found.`);
       }
     }
+  }
+
+  const humanSlots = scenario.slots.filter((slot) => slot.occupant.kind === "human");
+  if (humanSlots.length !== 1) {
+    throw new Error("Mission scenario must contain exactly one human occupant slot.");
   }
 
   return normalized;
@@ -253,6 +279,20 @@ async function assertAssignableContentOwner(
     throw new Error("Owner must have publisher or admin rights.");
   }
   return ownerUserId;
+}
+
+async function requireAdminUserId(ctx: MutationCtx): Promise<Id<"users">> {
+  const userId = await getAuthUserId(ctx);
+  if (userId === null) {
+    throw new Error("Authentication required.");
+  }
+
+  const user = await ctx.db.get("users", userId);
+  if (user === null || !(user.admin ?? false)) {
+    throw new Error("Admin access is required.");
+  }
+
+  return userId;
 }
 
 async function recordModerationEvent(
@@ -402,20 +442,8 @@ export const updateGameSettings = mutation({
       combatFoodDamageMult: clamp(s.combatFoodDamageMult, 0, 5),
       traderLimitsAutomated: s.traderLimitsAutomated,
     };
-    const safe = gameUsesTraderEconomy(game)
-      ? safeBase
-      : withTraderSettingsReset(safeBase);
-
-    const existing = await ctx.db
-      .query("sim_game_settings")
-      .withIndex("by_gameId", (q) => q.eq("gameId", args.gameId))
-      .unique();
-
-    if (existing === null) {
-      await ctx.db.insert("sim_game_settings", safe);
-    } else {
-      await ctx.db.patch("sim_game_settings", existing._id, safe);
-    }
+    const safe = gameUsesTraderEconomy(game) ? safeBase : withTraderSettingsReset(safeBase);
+    await persistGameSettings(ctx, game, safe);
   },
 });
 
@@ -427,16 +455,12 @@ export const resetGameSettings = mutation({
     if (userId === null) throw new Error("Authentication required.");
     await assertGameAdmin(ctx, args.gameId, userId);
 
-    const existing = await ctx.db
-      .query("sim_game_settings")
-      .withIndex("by_gameId", (q) => q.eq("gameId", args.gameId))
-      .unique();
-
-    if (existing !== null) {
-      await ctx.db.patch("sim_game_settings", existing._id, {
-        ...DEFAULT_GAME_SETTINGS,
-      });
+    const game = await loadGameWithPersistedResolvedMode(ctx, args.gameId);
+    if (game === null) {
+      throw new Error("Game not found.");
     }
+
+    await persistGameSettings(ctx, game, DEFAULT_GAME_SETTINGS);
   },
 });
 
@@ -1803,6 +1827,124 @@ export const seedMissingEmpireNpcPlayers = mutation({
     }
 
     return { inserted, skipped };
+  },
+});
+
+export const seedMissingMaps = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const userId = await getAuthUserId(ctx);
+    if (userId === null) {
+      throw new Error("Authentication required.");
+    }
+
+    let inserted = 0;
+    let skipped = 0;
+
+    for (const map of BUILT_IN_MAP_CATALOG_ROWS) {
+      const existing = await ctx.db
+        .query("sim_maps")
+        .withIndex("by_key", (q) => q.eq("key", map.key))
+        .unique();
+
+      if (existing !== null) {
+        skipped += 1;
+        if (existing.definitionJson === undefined && map.definitionJson !== undefined) {
+          await ctx.db.patch(existing._id, { definitionJson: map.definitionJson });
+        }
+        continue;
+      }
+
+      await ctx.db.insert("sim_maps", {
+        key: map.key,
+        name: map.name,
+        description: map.description,
+        tier: map.tier,
+        sortOrder: map.sortOrder,
+        definitionJson: map.definitionJson ?? undefined,
+      });
+      inserted += 1;
+    }
+
+    return { inserted, skipped };
+  },
+});
+
+export const createMap = mutation({
+  args: {
+    key: v.string(),
+    name: v.string(),
+    description: v.string(),
+    tier: v.union(v.literal("small"), v.literal("medium"), v.literal("large")),
+    sortOrder: v.number(),
+  },
+  handler: async (ctx, args): Promise<{ key: string }> => {
+    await requireAdminUserId(ctx);
+
+    const key = normalizeMapKey(args.key);
+    const existing = await ctx.db
+      .query("sim_maps")
+      .withIndex("by_key", (q) => q.eq("key", key))
+      .unique();
+    if (existing !== null) {
+      throw new Error("That map key already exists.");
+    }
+
+    await ctx.db.insert("sim_maps", {
+      key,
+      name: normalizeMapName(args.name),
+      description: normalizeMapDescription(args.description),
+      tier: args.tier,
+      sortOrder: normalizeMapSortOrder(args.sortOrder),
+      definitionJson: undefined,
+    });
+
+    return { key };
+  },
+});
+
+export const updateMap = mutation({
+  args: {
+    key: v.string(),
+    name: v.optional(v.string()),
+    description: v.optional(v.string()),
+    tier: v.optional(v.union(v.literal("small"), v.literal("medium"), v.literal("large"))),
+    sortOrder: v.optional(v.number()),
+  },
+  handler: async (ctx, args): Promise<{ key: string }> => {
+    await requireAdminUserId(ctx);
+
+    const key = normalizeMapKey(args.key);
+    const existing = await ctx.db
+      .query("sim_maps")
+      .withIndex("by_key", (q) => q.eq("key", key))
+      .unique();
+    if (existing === null) {
+      throw new Error("Map not found.");
+    }
+
+    const patch: {
+      name?: string;
+      description?: string;
+      tier?: "small" | "medium" | "large";
+      sortOrder?: number;
+    } = {};
+
+    if (args.name !== undefined) {
+      patch.name = normalizeMapName(args.name);
+    }
+    if (args.description !== undefined) {
+      patch.description = normalizeMapDescription(args.description);
+    }
+    if (args.tier !== undefined) {
+      patch.tier = args.tier;
+    }
+    if (args.sortOrder !== undefined) {
+      patch.sortOrder = normalizeMapSortOrder(args.sortOrder);
+    }
+
+    await ctx.db.patch(existing._id, patch);
+    return { key };
   },
 });
 

@@ -6,6 +6,7 @@ import { getAutomationStrategyByKey, toAutomationStrategyCatalogRow } from "../u
 import { listMissions as listMissionCatalogRows } from "../usr/missionCatalog";
 import { listNpcEmpirePlayers } from "../seed/npcEmpirePlayers";
 import { TRADER_EVENT_TYPES } from "../sim/eventTypePolicies";
+import { BUILT_IN_MAP_CATALOG_ROWS, type MapCatalogRow } from "../sim/mapCatalog";
 import {
   gameUsesTraderEconomy,
   loadGameWithResolvedMode,
@@ -603,6 +604,65 @@ export const listEmpireNpcPlayers = query({
           };
         }),
       ),
+    };
+  },
+});
+
+export const listMaps = query({
+  args: {},
+  handler: async (ctx) => {
+    const userId = await getAuthUserId(ctx);
+    if (userId === null) {
+      return { authorized: false as const, maps: [] as const };
+    }
+
+    const maps = await ctx.db.query("sim_maps").collect();
+    const catalogRows: MapCatalogRow[] =
+      maps.length > 0
+        ? maps
+            .map((map) => ({
+              key: map.key,
+              name: map.name,
+              description: map.description,
+              tier: map.tier,
+              sortOrder: map.sortOrder,
+              definitionJson: map.definitionJson ?? null,
+            }))
+            .sort((left, right) => left.sortOrder - right.sortOrder || left.name.localeCompare(right.name))
+        : BUILT_IN_MAP_CATALOG_ROWS;
+
+    return {
+      authorized: true as const,
+      maps: catalogRows,
+    };
+  },
+});
+
+export const listMapRecords = query({
+  args: {},
+  handler: async (ctx) => {
+    const userId = await getAuthUserId(ctx);
+    if (userId === null) {
+      return { authorized: false as const, maps: [] as const };
+    }
+
+    const user = await ctx.db.get("users", userId);
+    if (user === null || !(user.admin ?? false)) {
+      return { authorized: false as const, maps: [] as const };
+    }
+
+    const maps = await ctx.db.query("sim_maps").withIndex("by_sortOrder").take(256);
+
+    return {
+      authorized: true as const,
+      maps: maps.map((map) => ({
+        key: map.key,
+        name: map.name,
+        description: map.description,
+        tier: map.tier,
+        sortOrder: map.sortOrder,
+        definitionJson: map.definitionJson ?? null,
+      })),
     };
   },
 });

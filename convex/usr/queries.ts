@@ -3,7 +3,7 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { v } from "convex/values";
 import type { Doc, Id } from "../_generated/dataModel";
 import { resolveLoadedGameMode } from "../sim/gameMode";
-import { listMissions, mapTierFromMapKey } from "./missionCatalog";
+import { getMissionPlayerSlotKey, listMissions, mapTierFromMapKey } from "./missionCatalog";
 import { getAutomationStrategyByKey, toPublicAutomationStrategy } from "./automationStrategyCatalog";
 import { summarizeAutomationStrategy } from "./automationStrategyLibrary";
 import { resolvePublisherContentStatus } from "./publisherAccess";
@@ -505,7 +505,7 @@ export const getMyLobbyState = query({
         return false;
       }
       const mission = missionByKey.get(missionKey);
-      if (mission === undefined || row.empireKey !== mission.scenario.playerEmpireKey) {
+      if (mission === undefined || row.empireKey !== getMissionPlayerSlotKey(mission.scenario)) {
         return false;
       }
       missionWinsByKey.set(missionKey, (missionWinsByKey.get(missionKey) ?? 0) + 1);
@@ -563,7 +563,7 @@ export const getMyLobbyState = query({
 
           const missionKey = gameResult.missionKey ?? gameResult.lobbyScenarioKey;
           const mission = missionKey === null ? null : missionByKey.get(missionKey) ?? null;
-          const playerEmpireKey = mission?.scenario.playerEmpireKey ?? "aurora";
+          const playerEmpireKey = mission === null ? "aurora" : getMissionPlayerSlotKey(mission.scenario);
           const [winnerRows, auroraRows] = await Promise.all([
             ctx.db
               .query("emp_results")
@@ -654,7 +654,7 @@ export const getMyLobbyState = query({
           mapTier: scenario.mapTier,
           level: scenario.level,
           sortOrder: scenario.sortOrder,
-          npcCount: scenario.preview.npcEmpireCount,
+          npcCount: scenario.preview.npcControlledCount,
           requiredWins: scenario.requiredWins,
           winCount: missionWinsByKey.get(scenario.key) ?? 0,
           prerequisiteMissionKeys: scenario.prerequisiteMissionKeys,

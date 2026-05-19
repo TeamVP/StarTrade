@@ -9,7 +9,10 @@ import { canonicalizeStrategyJson } from "../usr/automationStrategyLibrary";
 import { getAutomationStrategyByKey } from "../usr/automationStrategyCatalog";
 import {
   canonicalizeMissionScenarioJson,
+  getMissionPlayerSlotKey,
   getMissionByKey,
+  listMissionAutomatedActorKeys,
+  listMissionSeededNpcPersonaKeys,
   missionIsAvailableForTier,
 } from "../usr/missionCatalog";
 import {
@@ -488,7 +491,7 @@ export const openPublishedCommunityMissionGame = mutation({
             await assignOwnerEmpireSeat(ctx, {
               gameId: current._id,
               userId,
-              empireKey: mission.scenario.playerEmpireKey,
+              empireKey: getMissionPlayerSlotKey(mission.scenario),
             });
           }
 
@@ -517,8 +520,8 @@ export const openPublishedCommunityMissionGame = mutation({
       mapKey: mission.mapKey,
       mode: mission.mode,
       seed: `${mission.key}:${userId}:${Date.now()}`,
-      npcEmpireKeys: mission.scenario.npcEmpireKeys,
-      automatedEmpireKeys: mission.scenario.automatedEmpireKeys,
+      npcEmpireKeys: listMissionSeededNpcPersonaKeys(mission.scenario),
+      automatedEmpireKeys: listMissionAutomatedActorKeys(mission.scenario),
       missionKey: mission.key,
       lobbyScenarioKey: mission.key,
       retentionClass: mission.retentionClass,

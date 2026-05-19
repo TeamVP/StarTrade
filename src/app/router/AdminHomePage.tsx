@@ -59,6 +59,11 @@ const adminLinks: readonly AdminLink[] = [
       "Manage mission records, progression sequencing, scenario JSON, and built-in player campaign content.",
   },
   {
+    to: "/admin/maps",
+    label: "Galaxy maps",
+    description: "Create and edit sim_maps catalog records, then preview each map entry.",
+  },
+  {
     to: "/admin/empire-npcs",
     label: "Empire NPCs",
     description:

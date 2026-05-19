@@ -65,6 +65,10 @@ const AdminDatabasePage = lazyNamedComponent(
   () => import("@/app/router/AdminDatabasePage"),
   "AdminDatabasePage",
 );
+const AdminMapsPage = lazyNamedComponent(
+  () => import("@/app/router/AdminMapsPage"),
+  "AdminMapsPage",
+);
 const AdminSettingsPage = lazyNamedComponent(
   () => import("@/app/router/AdminSettingsPage"),
   "AdminSettingsPage",
@@ -84,6 +88,14 @@ const AdminEmpireNpcsPage = lazyNamedComponent(
 const AdminMissionsPage = lazyNamedComponent(
   () => import("@/app/router/AdminMissionsPage"),
   "AdminMissionsPage",
+);
+const AdminMissionCreatePage = lazyNamedComponent(
+  () => import("@/app/router/AdminMissionCreatePage"),
+  "AdminMissionCreatePage",
+);
+const AdminMissionEditPage = lazyNamedComponent(
+  () => import("@/app/router/AdminMissionEditPage"),
+  "AdminMissionEditPage",
 );
 const AdminTraderNpcsPage = lazyNamedComponent(
   () => import("@/app/router/AdminTraderNpcsPage"),
@@ -175,10 +187,13 @@ const adminChildRoutes = [
   { path: "history", element: <HistoryPage /> },
   { path: "results", element: <ResultsPage /> },
   { path: "db", element: <AdminDatabasePage /> },
+  { path: "maps", element: <AdminMapsPage /> },
   { path: "settings", element: <AdminSettingsPage /> },
   { path: "moderation", element: <AdminModerationPage /> },
   { path: "strategies", element: <AdminStrategiesPage /> },
   { path: "mission", element: <AdminMissionsPage /> },
+  { path: "mission/create", element: <AdminMissionCreatePage /> },
+  { path: "mission/:missionKey", element: <AdminMissionEditPage /> },
   { path: "empire-npcs", element: <AdminEmpireNpcsPage /> },
   { path: "trader-npcs", element: <AdminTraderNpcsPage /> },
   { path: "balance", element: <BalancePage /> },

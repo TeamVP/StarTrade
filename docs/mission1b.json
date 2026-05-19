@@ -1,0 +1,97 @@
+{
+  "schemaVersion": 2,
+  "slots": [
+    {
+      "slotKey": "aurora",
+      "occupant": {
+        "kind": "human"
+      },
+      "automation": {
+        "strategyLibraryKey": null,
+        "activationTrigger": null
+      },
+      "presentation": {
+        "factionLabelOverride": null,
+        "displayNameOverride": null
+      },
+      "resources": {
+        "treasuryDelta": 0,
+        "homeworldPopulationDelta": 0,
+        "homeworldStockFoodDelta": 0,
+        "homeworldStockWeaponsDelta": 0,
+        "homeworldStockResearchDelta": 0,
+        "homeworldLocalTreasuryDelta": 0
+      },
+      "sensors": {
+        "fightAttraction": null,
+        "intruderDetection": null
+      },
+      "startsHidden": false,
+      "revealTrigger": null
+    },
+    {
+      "slotKey": "maia-rival",
+      "occupant": {
+        "kind": "npc",
+        "npcPlayerKey": "maia-solenne"
+      },
+      "automation": {
+        "strategyLibraryKey": "peace-never-lasts",
+        "activationTrigger": {
+          "kind": "turn",
+          "turn": 6
+        }
+      },
+      "presentation": {
+        "factionLabelOverride": null,
+        "displayNameOverride": null
+      },
+      "resources": {
+        "treasuryDelta": 0,
+        "homeworldPopulationDelta": 0,
+        "homeworldStockFoodDelta": 0,
+        "homeworldStockWeaponsDelta": 0,
+        "homeworldStockResearchDelta": 0,
+        "homeworldLocalTreasuryDelta": 0
+      },
+      "sensors": {
+        "fightAttraction": null,
+        "intruderDetection": null
+      },
+      "startsHidden": false,
+      "revealTrigger": null
+    },
+    {
+      "slotKey": "iron",
+      "occupant": {
+        "kind": "npc",
+        "npcPlayerKey": "nari-quell"
+      },
+      "automation": {
+        "strategyLibraryKey": "peace-never-lasts",
+        "activationTrigger": {
+          "kind": "turn",
+          "turn": 2
+        }
+      },
+      "presentation": {
+        "factionLabelOverride": null,
+        "displayNameOverride": null
+      },
+      "resources": {
+        "treasuryDelta": 0,
+        "homeworldPopulationDelta": 0,
+        "homeworldStockFoodDelta": 0,
+        "homeworldStockWeaponsDelta": 0,
+        "homeworldStockResearchDelta": 0,
+        "homeworldLocalTreasuryDelta": 0
+      },
+      "sensors": {
+        "fightAttraction": null,
+        "intruderDetection": null
+      },
+      "startsHidden": false,
+      "revealTrigger": null
+    }
+  ]
+}

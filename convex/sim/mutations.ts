@@ -14,7 +14,10 @@ import { applyNpcStrategy } from "./economy/applyNpcStrategy";
 import { findLinkBetweenSystems } from "../gal/linkUtils";
 import { getNpcEmpirePlayerByKey, normalizeNpcEmpireKeys } from "../seed/npcEmpirePlayers";
 import { getAutomationStrategyByKey } from "../usr/automationStrategyCatalog";
-import { getMissionByKey } from "../usr/missionCatalog";
+import {
+  getMissionPlayerSlotKey,
+  getMissionByKey,
+} from "../usr/missionCatalog";
 import {
   DEFAULT_TURN_DURATION_MS,
   resumedTurnStartedAt,
@@ -141,13 +144,14 @@ async function applyMissionScenarioIfNeeded(
   await assignOwnerEmpireSeat(ctx, {
     gameId: params.gameId,
     userId: params.userId,
-    empireKey: mission.scenario.playerEmpireKey,
+    empireKey: getMissionPlayerSlotKey(mission.scenario),
   });
-  for (const config of mission.scenario.empireConfigs) {
+  for (const slot of mission.scenario.slots) {
+    const occupantNpcKey = slot.occupant.kind === "npc" ? slot.occupant.npcPlayerKey : null;
     const empire =
-      (config.targetEmpireKey !== null ? empiresByKey.get(config.targetEmpireKey) : undefined) ??
-      (config.targetNpcPlayerKey !== null
-        ? empiresByNpcKey.get(config.targetNpcPlayerKey)
+      empiresByKey.get(slot.slotKey) ??
+      (occupantNpcKey !== null
+        ? empiresByNpcKey.get(occupantNpcKey)
         : undefined) ??
       null;
     if (empire === null) {
@@ -158,6 +162,7 @@ async function applyMissionScenarioIfNeeded(
       controller?: "human" | "npc";
       npcPlayerKey?: string;
       strategyJson?: string;
+      strategyLibraryKey?: string | null;
       strategyStartMode?: "turn" | "attacked";
       strategyStartTurn?: number;
       strategyActivatedAtTurn?: number | undefined;
@@ -167,21 +172,27 @@ async function applyMissionScenarioIfNeeded(
     } = {};
 
     const npcPlayer =
-      config.targetNpcPlayerKey === null
+      occupantNpcKey === null
         ? null
-        : await getNpcEmpirePlayerByKey(ctx, config.targetNpcPlayerKey);
+        : await getNpcEmpirePlayerByKey(ctx, occupantNpcKey);
 
-    if (config.controller !== null) {
-      empirePatch.controller = config.controller;
+    if (slot.occupant.kind === "human") {
+      empirePatch.controller = "human";
+      empirePatch.npcPlayerKey = undefined;
+    }
+    if (slot.occupant.kind === "npc") {
+      empirePatch.controller = "npc";
     }
     if (npcPlayer !== null) {
       empirePatch.npcPlayerKey = npcPlayer.key;
-      if (config.playerNameOverride === null) {
+      if (slot.presentation.displayNameOverride === null) {
         empirePatch.playerName = npcPlayer.playerName;
       }
     }
 
-    const strategyLibraryKey = config.strategyLibraryKey ?? npcPlayer?.strategyLibraryKey ?? null;
+    const strategyLibraryKey =
+      slot.automation.strategyLibraryKey ?? npcPlayer?.strategyLibraryKey ?? null;
+    empirePatch.strategyLibraryKey = strategyLibraryKey;
     if (strategyLibraryKey !== null) {
       const strategy = await getAutomationStrategyByKey(ctx, strategyLibraryKey);
       if (strategy === null) {
@@ -189,22 +200,23 @@ async function applyMissionScenarioIfNeeded(
       }
       empirePatch.strategyJson = strategy.strategyJson;
     }
-    if (config.strategyStartMode !== null) {
-      empirePatch.strategyStartMode = config.strategyStartMode;
+    if (slot.automation.activationTrigger?.kind === "attacked") {
+      empirePatch.strategyStartMode = "attacked";
       empirePatch.strategyActivatedAtTurn = undefined;
     }
-    if (config.strategyStartTurn !== null) {
-      empirePatch.strategyStartTurn = config.strategyStartTurn;
+    if (slot.automation.activationTrigger?.kind === "turn") {
+      empirePatch.strategyStartMode = "turn";
+      empirePatch.strategyStartTurn = slot.automation.activationTrigger.turn;
       empirePatch.strategyActivatedAtTurn = undefined;
     }
-    if (config.empireNameOverride !== null) {
-      empirePatch.name = config.empireNameOverride;
+    if (slot.presentation.factionLabelOverride !== null) {
+      empirePatch.name = slot.presentation.factionLabelOverride;
     }
-    if (config.playerNameOverride !== null) {
-      empirePatch.playerName = config.playerNameOverride;
+    if (slot.presentation.displayNameOverride !== null) {
+      empirePatch.playerName = slot.presentation.displayNameOverride;
     }
-    if (config.treasuryDelta !== 0) {
-      empirePatch.treasury = empire.treasury + config.treasuryDelta;
+    if (slot.resources.treasuryDelta !== 0) {
+      empirePatch.treasury = empire.treasury + slot.resources.treasuryDelta;
     }
 
     if (Object.keys(empirePatch).length > 0) {
@@ -222,28 +234,36 @@ async function applyMissionScenarioIfNeeded(
           localTreasury?: number;
         } = {};
 
-        if (config.homeworldPopulationDelta !== 0) {
+        if (slot.resources.homeworldPopulationDelta !== 0) {
           homePatch.population = Math.max(
             0,
-            (homeSystem.population ?? 0) + config.homeworldPopulationDelta,
+            (homeSystem.population ?? 0) + slot.resources.homeworldPopulationDelta,
           );
         }
-        if (config.homeworldStockFoodDelta !== 0) {
-          homePatch.stockFood = (homeSystem.stockFood ?? 0) + config.homeworldStockFoodDelta;
+        if (slot.resources.homeworldStockFoodDelta !== 0) {
+          homePatch.stockFood = Math.max(
+            0,
+            (homeSystem.stockFood ?? 0) + slot.resources.homeworldStockFoodDelta,
+          );
         }
-        if (config.homeworldStockWeaponsDelta !== 0) {
-          homePatch.stockWeapons =
-            (homeSystem.stockWeapons ?? 0) + config.homeworldStockWeaponsDelta;
+        if (slot.resources.homeworldStockWeaponsDelta !== 0) {
+          homePatch.stockWeapons = Math.max(
+            0,
+            (homeSystem.stockWeapons ?? 0) + slot.resources.homeworldStockWeaponsDelta,
+          );
         }
-        if (config.homeworldStockResearchDelta !== 0) {
-          homePatch.stockResearch =
-            (homeSystem.stockResearch ?? 0) + config.homeworldStockResearchDelta;
+        if (slot.resources.homeworldStockResearchDelta !== 0) {
+          homePatch.stockResearch = Math.max(
+            0,
+            (homeSystem.stockResearch ?? 0) + slot.resources.homeworldStockResearchDelta,
+          );
         }
-        if (config.homeworldLocalTreasuryDelta !== 0) {
-          homePatch.localTreasury =
-            (homeSystem.localTreasury ?? 0) + config.homeworldLocalTreasuryDelta;
+        if (slot.resources.homeworldLocalTreasuryDelta !== 0) {
+          homePatch.localTreasury = Math.max(
+            0,
+            (homeSystem.localTreasury ?? 0) + slot.resources.homeworldLocalTreasuryDelta,
+          );
         }
-
         if (Object.keys(homePatch).length > 0) {
           await ctx.db.patch("gal_systems", homeSystem._id, homePatch);
         }
@@ -358,6 +378,7 @@ async function ensureGameActorsForRuntimeVersion(
       displayNameSnapshot: empire.playerName?.trim() || empire.name,
       factionLabelSnapshot: empire.name,
       colorHex: empire.colorHex,
+      strategyLibraryKey: empire.strategyLibraryKey ?? null,
       strategyJsonSnapshot,
       strategyFingerprint:
         strategyJsonSnapshot === null ? null : strategyFingerprint(strategyJsonSnapshot),
@@ -561,6 +582,7 @@ export const createGame = mutation({
           await ctx.db.patch("emp_states", empire._id, {
             controller: "npc",
             strategyJson: empire.strategyJson ?? "{}",
+            strategyLibraryKey: null,
             playerName: empire.playerName ?? `${empire.name} AI`,
           });
         }
