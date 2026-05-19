@@ -6,7 +6,7 @@ import {
   BG_TRADER_AUTOMATION_INCREASE_EARNINGS_TO_COST_RATIO,
   BG_TRADER_AUTOMATION_MIN_NPC_DELIVERIES_IN_WINDOW,
 } from "./constants";
-import { DEFAULT_GAME_SETTINGS, loadGameSettings } from "./gameSettings";
+import { loadGameSettings, persistGameSettings } from "./gameSettings";
 
 /**
  * After each full block of 10 resolved turns, when `traderLimitsAutomated` is on,
@@ -25,7 +25,7 @@ export async function maybeAdjustAutomatedNpcTraderLimits(
     return;
   }
 
-  await loadTraderEconomyGame(ctx, gameId, "maybeAdjustAutomatedNpcTraderLimits");
+  const game = await loadTraderEconomyGame(ctx, gameId, "maybeAdjustAutomatedNpcTraderLimits");
 
   const settings = await loadGameSettings(ctx, gameId);
   if (!settings.traderLimitsAutomated) {
@@ -97,44 +97,8 @@ export async function maybeAdjustAutomatedNpcTraderLimits(
     return;
   }
 
-  const existing = await ctx.db
-    .query("sim_game_settings")
-    .withIndex("by_gameId", (q) => q.eq("gameId", gameId))
-    .unique();
-
-  if (existing !== null) {
-    await ctx.db.patch("sim_game_settings", existing._id, {
-      traderMaxActive: nextMax,
-    });
-    return;
-  }
-
-  const baseSettings = DEFAULT_GAME_SETTINGS;
-  await ctx.db.insert("sim_game_settings", {
-    gameId,
-    foodProdMult: baseSettings.foodProdMult,
-    shipProdMult: baseSettings.shipProdMult,
-    popGrowthMult: baseSettings.popGrowthMult,
-    taxMult: baseSettings.taxMult,
-    foodPriceElasticityMult: baseSettings.foodPriceElasticityMult,
-    starvationMult: baseSettings.starvationMult,
-    starvationFoodPriceCapMult: baseSettings.starvationFoodPriceCapMult,
-    traderShipCostMult: baseSettings.traderShipCostMult,
-    combatAttackMult: baseSettings.combatAttackMult,
-    combatDefendMult: baseSettings.combatDefendMult,
-    collateralDamageMult: baseSettings.collateralDamageMult,
-    shipProdEmphasisPower: baseSettings.shipProdEmphasisPower,
-    traderMinActive: baseSettings.traderMinActive,
+  await persistGameSettings(ctx, game, {
+    ...settings,
     traderMaxActive: nextMax,
-    traderShipHirePerTurn: baseSettings.traderShipHirePerTurn,
-    traderHireChancePct: baseSettings.traderHireChancePct,
-    traderDockingCost: baseSettings.traderDockingCost,
-    foodStockpileMaxPerPop: baseSettings.foodStockpileMaxPerPop,
-    foodStockpileMinPerPop: baseSettings.foodStockpileMinPerPop,
-    foodStressFactor: baseSettings.foodStressFactor,
-    combatDefenderAdvantage: baseSettings.combatDefenderAdvantage,
-    foodBasePrice: baseSettings.foodBasePrice,
-    combatFoodDamageMult: baseSettings.combatFoodDamageMult,
-    traderLimitsAutomated: baseSettings.traderLimitsAutomated,
   });
 }

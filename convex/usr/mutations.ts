@@ -8,7 +8,13 @@ import { gameAllowsPlayerActions, touchGameMeaningfulActivity } from "../sim/hel
 import { evaluateGameFinalization } from "../sim/finalization";
 import { invalidateOpenTurnPreparation } from "../sim/turnPreparationInvalidation";
 import { persistLoadedGameMode } from "../sim/gameMode";
-import { getMissionByKey, listMissions, missionIsAvailableForTier } from "./missionCatalog";
+import {
+  getMissionByKey,
+  listMissionAutomatedActorKeys,
+  listMissionSeededNpcPersonaKeys,
+  listMissions,
+  missionIsAvailableForTier,
+} from "./missionCatalog";
 import {
   buildStrategyFromBaseAndOverrides,
   canonicalizeStrategyJson,
@@ -637,6 +643,7 @@ export const applyAutomationProfileToMyEmpire = mutation({
     const now = Date.now();
     await ctx.db.patch("emp_states", empireId, {
       strategyJson: profile.strategyJson,
+      strategyLibraryKey: profile.sourceLibraryKey ?? null,
     });
     await ctx.db.patch("usr_automation_profiles", profile._id, {
       lastUsedAt: now,
@@ -663,6 +670,7 @@ export const clearMyEmpireAutomationStrategy = mutation({
 
     await ctx.db.patch("emp_states", empireId, {
       strategyJson: undefined,
+      strategyLibraryKey: null,
     });
     await touchGameMeaningfulActivity(ctx, args.gameId, { humanAction: true });
     return empireId;
@@ -770,6 +778,7 @@ export const resignFromGame = mutation({
           controller: "npc",
           resignedAt,
           strategyJson: empire.strategyJson ?? "{}",
+          strategyLibraryKey: empire.strategyLibraryKey ?? null,
           playerName: empire.playerName ?? `${empire.name} AI`,
         });
       }
@@ -870,8 +879,8 @@ export const ensureMyStarterGames = mutation({
         mapKey: scenario.mapKey,
         mode: scenario.mode,
         seed: `${scenario.key}:${userId}:${Date.now()}`,
-        npcEmpireKeys: scenario.scenario.npcEmpireKeys,
-        automatedEmpireKeys: scenario.scenario.automatedEmpireKeys,
+        npcEmpireKeys: listMissionSeededNpcPersonaKeys(scenario.scenario),
+        automatedEmpireKeys: listMissionAutomatedActorKeys(scenario.scenario),
         missionKey: scenario.key,
         lobbyScenarioKey: scenario.key,
         retentionClass: scenario.retentionClass,
@@ -932,8 +941,8 @@ export const resetMyStarterGame = mutation({
       mapKey: scenario.mapKey,
       mode: scenario.mode,
       seed: `${scenario.key}:${userId}:${Date.now()}`,
-      npcEmpireKeys: scenario.scenario.npcEmpireKeys,
-      automatedEmpireKeys: scenario.scenario.automatedEmpireKeys,
+      npcEmpireKeys: listMissionSeededNpcPersonaKeys(scenario.scenario),
+      automatedEmpireKeys: listMissionAutomatedActorKeys(scenario.scenario),
       missionKey: scenario.key,
       lobbyScenarioKey: scenario.key,
       retentionClass: scenario.retentionClass,

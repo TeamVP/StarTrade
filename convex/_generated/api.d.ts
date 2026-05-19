@@ -83,6 +83,7 @@ import type * as sim_gameMode from "../sim/gameMode.js";
 import type * as sim_garrisonRoutes from "../sim/garrisonRoutes.js";
 import type * as sim_helpers from "../sim/helpers.js";
 import type * as sim_internal from "../sim/internal.js";
+import type * as sim_mapCatalog from "../sim/mapCatalog.js";
 import type * as sim_mutations from "../sim/mutations.js";
 import type * as sim_preparationOps from "../sim/preparationOps.js";
 import type * as sim_queries from "../sim/queries.js";
@@ -186,6 +187,7 @@ declare const fullApi: ApiFromModules<{
   "sim/garrisonRoutes": typeof sim_garrisonRoutes;
   "sim/helpers": typeof sim_helpers;
   "sim/internal": typeof sim_internal;
+  "sim/mapCatalog": typeof sim_mapCatalog;
   "sim/mutations": typeof sim_mutations;
   "sim/preparationOps": typeof sim_preparationOps;
   "sim/queries": typeof sim_queries;

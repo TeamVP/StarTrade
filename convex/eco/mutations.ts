@@ -11,7 +11,10 @@ import {
   NPC_TRADER_STARTING_TREASURY,
 } from "../sim/economy/constants";
 import { computeSystemFoodPrice } from "../sim/economy/foodPricing";
-import { DEFAULT_GAME_SETTINGS, loadGameSettings } from "../sim/economy/gameSettings";
+import {
+  loadGameSettings,
+  persistGameSettings,
+} from "../sim/economy/gameSettings";
 import { populationToSimUnits } from "../sim/economy/population";
 import {
   evaluateTraderProfitability,
@@ -285,20 +288,11 @@ export const updateNpcTraderHireChancePct = mutation({
       Math.min(100, Math.round(args.traderHireChancePct)),
     );
 
-    const existing = await ctx.db
-      .query("sim_game_settings")
-      .withIndex("by_gameId", (q) => q.eq("gameId", args.gameId))
-      .unique();
-
-    if (existing === null) {
-      await ctx.db.insert("sim_game_settings", {
-        ...DEFAULT_GAME_SETTINGS,
-        gameId: args.gameId,
-        traderHireChancePct,
-      });
-    } else {
-      await ctx.db.patch("sim_game_settings", existing._id, { traderHireChancePct });
-    }
+    const currentSettings = await loadGameSettings(ctx, args.gameId);
+    await persistGameSettings(ctx, game, {
+      ...currentSettings,
+      traderHireChancePct,
+    });
 
     return { traderHireChancePct };
   },
