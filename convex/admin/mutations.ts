@@ -1839,7 +1839,7 @@ export const seedMissingMaps = mutation({
     }
 
     let inserted = 0;
-    let skipped = 0;
+    let updated = 0;
 
     for (const map of BUILT_IN_MAP_CATALOG_ROWS) {
       const existing = await ctx.db
@@ -1848,10 +1848,11 @@ export const seedMissingMaps = mutation({
         .unique();
 
       if (existing !== null) {
-        skipped += 1;
-        if (existing.definitionJson === undefined && map.definitionJson !== undefined) {
-          await ctx.db.patch(existing._id, { definitionJson: map.definitionJson });
-        }
+        await ctx.db.patch(existing._id, {
+          definition: map.definition ?? undefined,
+          definitionJson: map.definitionJson ?? undefined,
+        });
+        updated += 1;
         continue;
       }
 
@@ -1861,12 +1862,13 @@ export const seedMissingMaps = mutation({
         description: map.description,
         tier: map.tier,
         sortOrder: map.sortOrder,
+        definition: map.definition ?? undefined,
         definitionJson: map.definitionJson ?? undefined,
       });
       inserted += 1;
     }
 
-    return { inserted, skipped };
+    return { inserted, updated };
   },
 });
 
@@ -1896,6 +1898,7 @@ export const createMap = mutation({
       description: normalizeMapDescription(args.description),
       tier: args.tier,
       sortOrder: normalizeMapSortOrder(args.sortOrder),
+      definition: undefined,
       definitionJson: undefined,
     });
 

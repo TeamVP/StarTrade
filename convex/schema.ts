@@ -130,7 +130,38 @@ export default defineSchema({
     description: v.string(),
     tier: v.union(v.literal("small"), v.literal("medium"), v.literal("large")),
     sortOrder: v.number(),
-    /** Opaque JSON definition for how this map is generated or laid out. */
+    /** Structured map topology used by the admin preview and seeding sync. */
+    definition: v.optional(
+      v.object({
+        kind: v.literal("seeded_layout"),
+        width: v.number(),
+        height: v.number(),
+        systems: v.array(
+          v.object({
+            key: v.string(),
+            name: v.string(),
+            x: v.number(),
+            y: v.number(),
+            resourceRichness: v.number(),
+            isHomeworld: v.boolean(),
+            startingOwner: v.union(
+              v.literal("neutral"),
+              v.literal("aurora"),
+              v.literal("iron"),
+            ),
+          }),
+        ),
+        routes: v.array(
+          v.object({
+            fromKey: v.string(),
+            toKey: v.string(),
+            distance: v.number(),
+            travelCost: v.number(),
+          }),
+        ),
+      }),
+    ),
+    /** Legacy JSON serialization kept during migration and for easy inspection. */
     definitionJson: v.optional(v.string()),
   })
     .index("by_key", ["key"])

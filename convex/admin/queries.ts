@@ -626,6 +626,7 @@ export const listMaps = query({
               description: map.description,
               tier: map.tier,
               sortOrder: map.sortOrder,
+              definition: map.definition ?? null,
               definitionJson: map.definitionJson ?? null,
             }))
             .sort((left, right) => left.sortOrder - right.sortOrder || left.name.localeCompare(right.name))
@@ -661,6 +662,7 @@ export const listMapRecords = query({
         description: map.description,
         tier: map.tier,
         sortOrder: map.sortOrder,
+        definition: map.definition ?? null,
         definitionJson: map.definitionJson ?? null,
       })),
     };

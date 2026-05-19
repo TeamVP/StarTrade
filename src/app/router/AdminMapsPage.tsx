@@ -4,6 +4,7 @@ import { Link, useSearchParams } from "react-router-dom";
 import { api } from "../../../convex/_generated/api";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { StaticGalaxyMapPreview } from "@/features/galaxy/components/StaticGalaxyMapPreview";
 import type { MapCatalogRow } from "../../../convex/sim/mapCatalog";
 import { mutationErrorMessage } from "./adminMissionsShared";
 
@@ -117,7 +118,7 @@ export function AdminMapsPage() {
     setError(null);
     try {
       const result = await seedMissingMaps({});
-      setStatus(`Seeded ${result.inserted} built-in maps. Skipped ${result.skipped}.`);
+      setStatus(`Synced ${result.inserted} inserted and ${result.updated} updated built-in maps.`);
     } catch (seedError) {
       setError(mutationErrorMessage(seedError));
     } finally {
@@ -175,11 +176,9 @@ export function AdminMapsPage() {
               >
                 New map
               </Button>
-              {maps.length === 0 ? (
-                <Button type="button" variant="secondary" onClick={() => void handleSeedBuiltIns()} disabled={seedBusy}>
-                  {seedBusy ? "Seeding..." : "Seed built-ins"}
-                </Button>
-              ) : null}
+              <Button type="button" variant="secondary" onClick={() => void handleSeedBuiltIns()} disabled={seedBusy}>
+                {seedBusy ? "Syncing..." : "Sync built-ins"}
+              </Button>
             </div>
           </div>
 
@@ -251,34 +250,37 @@ export function AdminMapsPage() {
           </div>
 
           {selectedMap !== null ? (
-            <div className="grid gap-3 rounded-xl border border-st-border bg-st-bg/50 p-4 md:grid-cols-2">
-              <div>
-                <p className="text-xs uppercase tracking-[0.18em] text-st-muted">Key</p>
-                <p className="mt-1 font-mono text-sm text-st-fg">{selectedMap.key}</p>
-              </div>
-              <div>
-                <p className="text-xs uppercase tracking-[0.18em] text-st-muted">Tier</p>
-                <p className={`mt-1 inline-flex rounded border px-2 py-0.5 text-[11px] uppercase tracking-[0.18em] ${tierTone(selectedMap.tier)}`}>
-                  {selectedMap.tier}
-                </p>
-              </div>
-              <div>
-                <p className="text-xs uppercase tracking-[0.18em] text-st-muted">Sort order</p>
-                <p className="mt-1 text-sm text-st-fg">{selectedMap.sortOrder}</p>
-              </div>
-              <div className="md:col-span-2">
-                <p className="text-xs uppercase tracking-[0.18em] text-st-muted">Description</p>
-                <p className="mt-1 text-sm text-st-muted">{selectedMap.description}</p>
-              </div>
-              <div className="md:col-span-2">
-                <p className="text-xs uppercase tracking-[0.18em] text-st-muted">Definition JSON</p>
-                <textarea
-                  readOnly
-                  value={selectedMap.definitionJson ?? ""}
-                  rows={8}
-                  className="mt-1 w-full rounded border border-st-border bg-st-panel px-3 py-2 font-mono text-xs text-st-fg outline-none"
-                  placeholder="No definition JSON stored for this map yet."
-                />
+            <div className="space-y-4 rounded-xl border border-st-border bg-st-bg/50 p-4">
+              <StaticGalaxyMapPreview map={selectedMap} />
+              <div className="grid gap-3 md:grid-cols-2">
+                <div>
+                  <p className="text-xs uppercase tracking-[0.18em] text-st-muted">Key</p>
+                  <p className="mt-1 font-mono text-sm text-st-fg">{selectedMap.key}</p>
+                </div>
+                <div>
+                  <p className="text-xs uppercase tracking-[0.18em] text-st-muted">Tier</p>
+                  <p className={`mt-1 inline-flex rounded border px-2 py-0.5 text-[11px] uppercase tracking-[0.18em] ${tierTone(selectedMap.tier)}`}>
+                    {selectedMap.tier}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-xs uppercase tracking-[0.18em] text-st-muted">Sort order</p>
+                  <p className="mt-1 text-sm text-st-fg">{selectedMap.sortOrder}</p>
+                </div>
+                <div className="md:col-span-2">
+                  <p className="text-xs uppercase tracking-[0.18em] text-st-muted">Description</p>
+                  <p className="mt-1 text-sm text-st-muted">{selectedMap.description}</p>
+                </div>
+                <div className="md:col-span-2">
+                  <p className="text-xs uppercase tracking-[0.18em] text-st-muted">Definition JSON</p>
+                  <textarea
+                    readOnly
+                    value={selectedMap.definitionJson ?? (selectedMap.definition === null || selectedMap.definition === undefined ? "" : JSON.stringify(selectedMap.definition, null, 2))}
+                    rows={8}
+                    className="mt-1 w-full rounded border border-st-border bg-st-panel px-3 py-2 font-mono text-xs text-st-fg outline-none"
+                    placeholder="No definition JSON stored for this map yet."
+                  />
+                </div>
               </div>
             </div>
           ) : null}
