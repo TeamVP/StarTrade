@@ -32,6 +32,15 @@ export function normalizeCameraRotation(rotation: number): number {
   return turns < 0 ? turns + FULL_TURN_RAD : turns;
 }
 
+export function camerasEqual(a: GalaxyMapCamera, b: GalaxyMapCamera): boolean {
+  return (
+    Math.abs(a.focusX - b.focusX) < 1e-6 &&
+    Math.abs(a.focusY - b.focusY) < 1e-6 &&
+    Math.abs(a.scale - b.scale) < 1e-6 &&
+    Math.abs(a.rotation - b.rotation) < 1e-6
+  );
+}
+
 export function nextQuarterTurnClockwise(rotation: number): number {
   const normalized = normalizeCameraRotation(rotation);
   const stepsCompleted = Math.floor(normalized / QUARTER_TURN_RAD);

@@ -491,10 +491,13 @@ function GalaxyStageInner({
     pointerId: number;
     startClientX: number;
     startClientY: number;
+    latestClientX: number;
+    latestClientY: number;
     startFocusX: number;
     startFocusY: number;
     dragThresholdPx: number;
     dragging: boolean;
+    rafId: number | null;
   };
   const panSessionRef = useRef<PanSession | null>(null);
   const panCleanupRef = useRef<(() => void) | null>(null);
@@ -893,6 +896,8 @@ function GalaxyStageInner({
         pointerId: event.pointerId,
         startClientX: event.clientX,
         startClientY: event.clientY,
+        latestClientX: event.clientX,
+        latestClientY: event.clientY,
         startFocusX: cameraRef.current.focusX,
         startFocusY: cameraRef.current.focusY,
         dragThresholdPx:
@@ -900,26 +905,33 @@ function GalaxyStageInner({
             ? MAP_TOUCH_PAN_DRAG_THRESHOLD_PX
             : MAP_PAN_DRAG_THRESHOLD_PX,
         dragging: false,
+        rafId: null,
       };
       panSessionRef.current = panSession;
 
       const scratch = panDeltaScratchRef.current;
 
-      const onMove = (ev: PointerEvent) => {
-        if (ev.pointerId !== panSession.pointerId || !isInitialised) return;
-        if (pinchSessionRef.current !== null) return;
-        events.mapPositionToPoint(scratch.cur, ev.clientX, ev.clientY);
+      const cleanupPanSession = () => {
+        if (panSession.rafId !== null) {
+          cancelAnimationFrame(panSession.rafId);
+          panSession.rafId = null;
+        }
+        window.removeEventListener("pointermove", onMove);
+        window.removeEventListener("pointerup", onUp);
+        window.removeEventListener("pointercancel", onUp);
+        panSessionRef.current = null;
+        panCleanupRef.current = null;
+      };
+
+      const flushPanMove = () => {
+        panSession.rafId = null;
+        if (!panSession.dragging || panSessionRef.current !== panSession || pinchSessionRef.current !== null) {
+          return;
+        }
+        events.mapPositionToPoint(scratch.cur, panSession.latestClientX, panSession.latestClientY);
         events.mapPositionToPoint(scratch.origin, panSession.startClientX, panSession.startClientY);
         const dSx = scratch.cur.x - scratch.origin.x;
         const dSy = scratch.cur.y - scratch.origin.y;
-        const dragDist = Math.hypot(
-          ev.clientX - panSession.startClientX,
-          ev.clientY - panSession.startClientY,
-        );
-        if (!panSession.dragging && dragDist >= panSession.dragThresholdPx) {
-          panSession.dragging = true;
-        }
-        if (!panSession.dragging) return;
         onCameraChangeRef.current(
           translateCameraByScreenDelta(
             {
@@ -932,6 +944,28 @@ function GalaxyStageInner({
             dSy,
           ),
         );
+      };
+
+      const onMove = (ev: PointerEvent) => {
+        if (ev.pointerId !== panSession.pointerId || !isInitialised) return;
+        if (ev.pointerType === "mouse" && (ev.buttons & 1) === 0) {
+          cleanupPanSession();
+          return;
+        }
+        if (pinchSessionRef.current !== null) return;
+        panSession.latestClientX = ev.clientX;
+        panSession.latestClientY = ev.clientY;
+        const dragDist = Math.hypot(
+          ev.clientX - panSession.startClientX,
+          ev.clientY - panSession.startClientY,
+        );
+        if (!panSession.dragging && dragDist >= panSession.dragThresholdPx) {
+          panSession.dragging = true;
+        }
+        if (!panSession.dragging) return;
+        if (panSession.rafId === null) {
+          panSession.rafId = requestAnimationFrame(flushPanMove);
+        }
       };
 
       const onUp = (ev: PointerEvent) => {
@@ -947,18 +981,11 @@ function GalaxyStageInner({
         ) {
           onStageBackgroundTapRef.current?.();
         }
-        window.removeEventListener("pointermove", onMove);
-        window.removeEventListener("pointerup", onUp);
-        window.removeEventListener("pointercancel", onUp);
-        panSessionRef.current = null;
-        panCleanupRef.current = null;
+        cleanupPanSession();
       };
 
       panCleanupRef.current = () => {
-        window.removeEventListener("pointermove", onMove);
-        window.removeEventListener("pointerup", onUp);
-        window.removeEventListener("pointercancel", onUp);
-        panSessionRef.current = null;
+        cleanupPanSession();
       };
 
       window.addEventListener("pointermove", onMove);

@@ -43,6 +43,7 @@ import {
   STAR_CLICK_ZOOM_FRACTION,
 } from "../constants";
 import {
+  camerasEqual,
   clampMapScale,
   computeFitAllSystemsCamera,
   computeFitGalaxyHorizontal,
@@ -563,11 +564,12 @@ export function GalaxyViewport(props: GalaxyViewportProps = {}) {
   const handleCameraChange = useCallback(
     (next: GalaxyMapCamera) => {
       cancelCameraTween();
-      setCamera({
+      const normalized = {
         ...next,
         scale: clampMapScale(next.scale),
         rotation: normalizeCameraRotation(next.rotation),
-      });
+      };
+      setCamera((prev) => (camerasEqual(prev, normalized) ? prev : normalized));
     },
     [cancelCameraTween],
   );

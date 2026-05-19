@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
 import {
+  camerasEqual,
   computeFitGalaxyHorizontal,
   nextQuarterTurnClockwise,
   normalizeCameraRotation,
@@ -61,6 +62,30 @@ describe("mapCamera", () => {
 
   test("normalizes negative rotations into the canonical full-turn range", () => {
     expect(normalizeCameraRotation(-Math.PI / 2)).toBeCloseTo((Math.PI * 3) / 2, 6);
+  });
+
+  test("treats near-identical camera snapshots as equal", () => {
+    const camera: GalaxyMapCamera = {
+      focusX: 120,
+      focusY: -45,
+      scale: 1.75,
+      rotation: Math.PI / 2,
+    };
+
+    expect(
+      camerasEqual(camera, {
+        focusX: 120 + 1e-7,
+        focusY: -45 - 1e-7,
+        scale: 1.75 + 1e-7,
+        rotation: Math.PI / 2 - 1e-7,
+      }),
+    ).toBe(true);
+    expect(
+      camerasEqual(camera, {
+        ...camera,
+        scale: 1.751,
+      }),
+    ).toBe(false);
   });
 
   test("advances an arbitrary angle to the next clockwise quarter turn", () => {
