@@ -898,6 +898,11 @@ function SlotModal(props: {
           {/* Visibility */}
           <div className="space-y-2">
             <p className="text-xs font-medium uppercase tracking-wide text-st-muted">Visibility</p>
+            <p className="text-xs text-st-muted">
+              Hidden NPC slots stay dormant until their reveal trigger fires. Turn reveal is time-based,
+              attacked reveal fires when one of their systems is threatened, and intruder detection reveal
+              fires when hostile fleets are spotted within the configured route depth.
+            </p>
             <div className="grid gap-3 md:grid-cols-2">
               <label className="grid gap-1 text-xs text-st-muted">
                 <span>Starts hidden</span>
@@ -942,6 +947,10 @@ function SlotModal(props: {
           {/* Sensors */}
           <div className="space-y-2">
             <p className="text-xs font-medium uppercase tracking-wide text-st-muted">Sensors</p>
+            <p className="text-xs text-st-muted">
+              Intruder detection expands defensive awareness beyond owned systems. Fight attraction makes
+              the slot commit more ships and accept lower attack-advantage margins near contested fronts.
+            </p>
             <div className="grid gap-3 md:grid-cols-2">
               <label className="grid gap-1 text-xs text-st-muted">
                 <span>Fight attraction</span>

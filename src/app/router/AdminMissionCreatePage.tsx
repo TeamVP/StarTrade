@@ -180,7 +180,7 @@ export function AdminMissionCreatePage() {
             to="/admin/mission"
             className="shrink-0 self-start rounded border border-st-border px-3 py-1.5 text-xs text-st-muted hover:border-st-accent/40 hover:text-st-fg"
           >
-            ← Back to missions
+            Back to missions
           </Link>
         </div>
 
@@ -492,11 +492,11 @@ export function AdminMissionCreatePage() {
                 profile; human occupants derive those values from the bound player profile and preferences.
               </p>
               <p>
-                New slot concepts are now first-class in the editor:{" "}
-                <span className="font-mono text-st-fg">sensors.fightAttraction</span>,{" "}
-                <span className="font-mono text-st-fg">sensors.intruderDetection</span>, and{" "}
-                <span className="font-mono text-st-fg">revealTrigger</span> can be authored even before gameplay support
-                lands.
+                Hidden NPC slots now have live runtime behavior: <span className="font-mono text-st-fg">revealTrigger</span>{" "}
+                controls when they reveal, <span className="font-mono text-st-fg">sensors.intruderDetection</span>{" "}
+                lets them react to hostile fleets within the configured route depth, and{" "}
+                <span className="font-mono text-st-fg">sensors.fightAttraction</span> makes them reinforce and attack more
+                aggressively around detected threats.
               </p>
             </div>
           </div>

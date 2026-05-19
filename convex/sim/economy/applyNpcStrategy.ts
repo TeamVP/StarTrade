@@ -14,6 +14,7 @@ import {
   hasManualOrderOriginLock,
   loadManualOrderOriginLocks,
 } from "../fleetOrders";
+import { insertSimEvent } from "../eventLog";
 import { FOOD_PER_POP } from "./constants";
 import { populationToSimUnits } from "./population";
 import {
@@ -254,6 +255,8 @@ function npcStrategyShouldActivateNow(params: {
   empire: Doc<"emp_states">;
   turnNumber: number;
   ownedSystems: Doc<"gal_systems">[];
+  adjacency: Map<string, Id<"gal_systems">[]>;
+  systemsById: Map<Id<"gal_systems">, Doc<"gal_systems">>;
   strengthBySystem: Map<string, Map<string, number>>;
 }): boolean {
   if (params.empire.strategyActivatedAtTurn !== undefined) {
@@ -263,6 +266,18 @@ function npcStrategyShouldActivateNow(params: {
   const startMode = params.empire.strategyStartMode ?? "turn";
   if (startMode === "turn") {
     return params.turnNumber >= (params.empire.strategyStartTurn ?? 1);
+  }
+
+  if (startMode === "intruder_detection") {
+    return findIntruderDetection({
+      empireId: params.empire._id,
+      ownedSystems: params.ownedSystems,
+      systemsById: params.systemsById,
+      adjacency: params.adjacency,
+      strengthBySystem: params.strengthBySystem,
+      routeSteps: params.empire.strategyStartRouteSteps ?? 1,
+      requireNewEmpire: params.empire.strategyStartRequireNewEmpire ?? true,
+    }).detected;
   }
 
   return params.ownedSystems.some((system) => {
@@ -576,6 +591,215 @@ function totalForeignStrengthAtSystem(
     }
   }
   return total;
+}
+
+function ownedSystemIdsForEmpire(ownedSystems: Doc<"gal_systems">[]): Set<string> {
+  return new Set(ownedSystems.map((system) => system._id as string));
+}
+
+function foreignNeighborEmpireIds(params: {
+  ownedSystems: Doc<"gal_systems">[];
+  adjacency: Map<string, Id<"gal_systems">[]>;
+  systemsById: Map<Id<"gal_systems">, Doc<"gal_systems">>;
+  empireId: Id<"emp_states">;
+}): Set<string> {
+  const foreignEmpireIds = new Set<string>();
+  for (const system of params.ownedSystems) {
+    const neighbors = params.adjacency.get(system._id) ?? [];
+    for (const neighborId of neighbors) {
+      const neighbor = params.systemsById.get(neighborId);
+      if (
+        neighbor !== undefined &&
+        neighbor.ownerEmpireId !== null &&
+        neighbor.ownerEmpireId !== params.empireId
+      ) {
+        foreignEmpireIds.add(neighbor.ownerEmpireId);
+      }
+    }
+  }
+  return foreignEmpireIds;
+}
+
+export function findIntruderDetection(params: {
+  empireId: Id<"emp_states">;
+  ownedSystems: Doc<"gal_systems">[];
+  systemsById: Map<Id<"gal_systems">, Doc<"gal_systems">>;
+  adjacency: Map<string, Id<"gal_systems">[]>;
+  strengthBySystem: Map<string, Map<string, number>>;
+  routeSteps: number;
+  requireNewEmpire: boolean;
+}): { detected: boolean; systemId: Id<"gal_systems"> | null; intruderEmpireIds: string[] } {
+  if (params.routeSteps < 1 || params.ownedSystems.length === 0) {
+    return { detected: false, systemId: null, intruderEmpireIds: [] };
+  }
+
+  const adjacentForeignEmpireIds = params.requireNewEmpire
+    ? foreignNeighborEmpireIds({
+        ownedSystems: params.ownedSystems,
+        adjacency: params.adjacency,
+        systemsById: params.systemsById,
+        empireId: params.empireId,
+      })
+    : new Set<string>();
+  const ownedIds = ownedSystemIdsForEmpire(params.ownedSystems);
+  let bestSystemId: Id<"gal_systems"> | null = null;
+  let bestDistance = Number.POSITIVE_INFINITY;
+  let bestIntruders: string[] = [];
+
+  for (const origin of params.ownedSystems) {
+    const queue: Array<{ systemId: Id<"gal_systems">; distance: number }> = [
+      { systemId: origin._id, distance: 0 },
+    ];
+    const visited = new Set<string>([origin._id]);
+
+    while (queue.length > 0) {
+      const current = queue.shift();
+      if (current === undefined) break;
+      if (current.distance > params.routeSteps) continue;
+
+      const intruderIds = Array.from(
+        params.strengthBySystem.get(current.systemId)?.keys() ?? [],
+      ).filter((otherEmpireId) => {
+        if (otherEmpireId === params.empireId) return false;
+        if (params.requireNewEmpire && adjacentForeignEmpireIds.has(otherEmpireId)) {
+          return false;
+        }
+        return (params.strengthBySystem.get(current.systemId)?.get(otherEmpireId) ?? 0) > 0;
+      });
+
+      if (
+        intruderIds.length > 0 &&
+        !ownedIds.has(current.systemId) &&
+        (current.distance < bestDistance ||
+          (current.distance === bestDistance &&
+            (bestSystemId === null || current.systemId.localeCompare(bestSystemId) < 0)))
+      ) {
+        bestSystemId = current.systemId;
+        bestDistance = current.distance;
+        bestIntruders = intruderIds.sort();
+      }
+
+      if (current.distance === params.routeSteps) continue;
+      const neighbors = params.adjacency.get(current.systemId) ?? [];
+      for (const neighborId of neighbors) {
+        if (visited.has(neighborId)) continue;
+        visited.add(neighborId);
+        queue.push({ systemId: neighborId, distance: current.distance + 1 });
+      }
+    }
+  }
+
+  return {
+    detected: bestSystemId !== null,
+    systemId: bestSystemId,
+    intruderEmpireIds: bestIntruders,
+  };
+}
+
+export function missionEmpireIsHidden(empire: Doc<"emp_states">): boolean {
+  return empire.missionStartsHidden === true && empire.missionRevealedAtTurn === undefined;
+}
+
+export function missionRevealShouldTrigger(params: {
+  empire: Doc<"emp_states">;
+  turnNumber: number;
+  ownedSystems: Doc<"gal_systems">[];
+  adjacency: Map<string, Id<"gal_systems">[]>;
+  systemsById: Map<Id<"gal_systems">, Doc<"gal_systems">>;
+  strengthBySystem: Map<string, Map<string, number>>;
+}): { revealed: boolean; systemId: Id<"gal_systems"> | null; intruderEmpireIds: string[] } {
+  if (!missionEmpireIsHidden(params.empire)) {
+    return { revealed: false, systemId: null, intruderEmpireIds: [] };
+  }
+
+  const mode = params.empire.missionRevealTriggerMode ?? "turn";
+  if (mode === "turn") {
+    return {
+      revealed: params.turnNumber >= (params.empire.missionRevealTurn ?? 1),
+      systemId: null,
+      intruderEmpireIds: [],
+    };
+  }
+
+  if (mode === "attacked") {
+    const attackedSystem = params.ownedSystems.find((system) => {
+      if (system.underAttack === true) return true;
+      return totalForeignStrengthAtSystem(params.strengthBySystem, system._id, params.empire._id) > 0;
+    });
+    return {
+      revealed: attackedSystem !== undefined,
+      systemId: attackedSystem?._id ?? null,
+      intruderEmpireIds: [],
+    };
+  }
+
+  const detection = findIntruderDetection({
+    empireId: params.empire._id,
+    ownedSystems: params.ownedSystems,
+    systemsById: params.systemsById,
+    adjacency: params.adjacency,
+    strengthBySystem: params.strengthBySystem,
+    routeSteps: params.empire.missionRevealRouteSteps ?? 1,
+    requireNewEmpire: params.empire.missionRevealRequireNewEmpire ?? true,
+  });
+  return {
+    revealed: detection.detected,
+    systemId: detection.systemId,
+    intruderEmpireIds: detection.intruderEmpireIds,
+  };
+}
+
+function findNearestOwnedSystemsToTarget(params: {
+  targetSystemId: Id<"gal_systems">;
+  ownedSystemIds: Set<string>;
+  adjacency: Map<string, Id<"gal_systems">[]>;
+}): Set<string> {
+  const queue: Array<{ systemId: Id<"gal_systems">; distance: number }> = [
+    { systemId: params.targetSystemId, distance: 0 },
+  ];
+  const visited = new Set<string>([params.targetSystemId]);
+  const nearestOwned = new Set<string>();
+  let bestDistance = Number.POSITIVE_INFINITY;
+
+  while (queue.length > 0) {
+    const current = queue.shift();
+    if (current === undefined) break;
+    if (current.distance > bestDistance) continue;
+
+    if (
+      current.distance > 0 &&
+      params.ownedSystemIds.has(current.systemId)
+    ) {
+      nearestOwned.add(current.systemId);
+      bestDistance = current.distance;
+      continue;
+    }
+
+    const neighbors = params.adjacency.get(current.systemId) ?? [];
+    for (const neighborId of neighbors) {
+      if (visited.has(neighborId)) continue;
+      visited.add(neighborId);
+      queue.push({ systemId: neighborId, distance: current.distance + 1 });
+    }
+  }
+
+  return nearestOwned;
+}
+
+export function applyFightAttractionDispatchBoost(
+  baseDispatchPct: number,
+  fightAttraction: number | null | undefined,
+): number {
+  const attraction = Math.max(0, Math.floor(fightAttraction ?? 0));
+  return Math.max(0, Math.min(100, Math.round(baseDispatchPct + attraction * 8)));
+}
+
+export function applyFightAttractionAttackAdvantage(
+  baseAttackAdvantage: number,
+  fightAttraction: number | null | undefined,
+): number {
+  const attraction = Math.max(0, Math.floor(fightAttraction ?? 0));
+  return Math.max(1.05, baseAttackAdvantage - attraction * 0.08);
 }
 
 function firstHopTowardNearestBorder(params: {
@@ -1047,6 +1271,20 @@ async function maintainStrategyRoutesForEmpire(
   );
   const borderSystemIds = new Set(borderSystems.map((system) => system._id as string));
   const desired = new Map<string, DesiredRoute>();
+  const fightAttraction = params.empire.missionFightAttraction ?? 0;
+  const intruderDetection =
+    params.empire.missionIntruderDetectionRange !== undefined &&
+    params.empire.missionIntruderDetectionRange > 0
+      ? findIntruderDetection({
+          empireId: params.empire._id,
+          ownedSystems,
+          systemsById,
+          adjacency: params.adjacency,
+          strengthBySystem: params.strengthBySystem,
+          routeSteps: params.empire.missionIntruderDetectionRange,
+          requireNewEmpire: params.empire.missionIntruderDetectionRequireNewEmpire ?? false,
+        })
+      : { detected: false, systemId: null as Id<"gal_systems"> | null, intruderEmpireIds: [] };
 
   if (params.automation.reinforceAttackedSystems) {
     const threatenedSystemIds = new Set(
@@ -1054,6 +1292,15 @@ async function maintainStrategyRoutesForEmpire(
         .filter((system) => system.underAttack === true)
         .map((system) => system._id as string),
     );
+    if (intruderDetection.systemId !== null) {
+      for (const systemId of findNearestOwnedSystemsToTarget({
+        targetSystemId: intruderDetection.systemId,
+        ownedSystemIds,
+        adjacency: params.adjacency,
+      })) {
+        threatenedSystemIds.add(systemId);
+      }
+    }
     if (threatenedSystemIds.size > 0) {
       for (const origin of ownedSystems) {
         if (threatenedSystemIds.has(origin._id)) continue;
@@ -1067,7 +1314,10 @@ async function maintainStrategyRoutesForEmpire(
         putDesiredRoute(desired, {
           originSystemId: origin._id,
           destinationSystemId: firstHop,
-          dispatchPct: Math.round(100 - params.runtime.emergencyReserveShipsPct),
+          dispatchPct: applyFightAttractionDispatchBoost(
+            Math.round(100 - params.runtime.emergencyReserveShipsPct),
+            fightAttraction,
+          ),
           purpose: "emergencyReinforce",
         });
       }
@@ -1254,7 +1504,22 @@ async function maintainStrategyRoutesForEmpire(
             system.ownerEmpireId !== null &&
             system.ownerEmpireId !== params.empire._id,
         )
-        .sort((a, b) => a._id.localeCompare(b._id));
+        .sort((a, b) => {
+          const strengthDelta =
+            totalForeignStrengthAtSystem(params.strengthBySystem, b._id, params.empire._id) -
+            totalForeignStrengthAtSystem(params.strengthBySystem, a._id, params.empire._id);
+          if (strengthDelta !== 0) return strengthDelta;
+          return a._id.localeCompare(b._id);
+        });
+
+      const attackAdvantageRequired = applyFightAttractionAttackAdvantage(
+        params.runtime.attackAdvantageRequired,
+        fightAttraction,
+      );
+      const attackDispatchPct = applyFightAttractionDispatchBoost(
+        Math.round(100 - params.runtime.enemyAttackBorderReservePct),
+        fightAttraction,
+      );
 
       for (const target of enemyNeighbors) {
         const availableAttack = strengthAtSystemForEmpire(
@@ -1266,14 +1531,11 @@ async function maintainStrategyRoutesForEmpire(
           1,
           totalForeignStrengthAtSystem(params.strengthBySystem, target._id, params.empire._id),
         );
-        if (
-          availableAttack >=
-          enemyStrength * params.runtime.attackAdvantageRequired
-        ) {
+        if (availableAttack >= enemyStrength * attackAdvantageRequired) {
           putDesiredRoute(desired, {
             originSystemId: origin._id,
             destinationSystemId: target._id,
-            dispatchPct: Math.round(100 - params.runtime.enemyAttackBorderReservePct),
+            dispatchPct: attackDispatchPct,
             purpose: "enemyAttack",
           });
           break;
@@ -1398,10 +1660,47 @@ export async function applyNpcStrategy(
 
     const ownedSystems = systemsByEmpire.get(empire._id) ?? [];
     if (empire.controller === "npc") {
+      const reveal = missionRevealShouldTrigger({
+        empire,
+        turnNumber: params.turnNumber,
+        ownedSystems,
+        adjacency,
+        systemsById,
+        strengthBySystem,
+      });
+      const isHiddenBeforeReveal = missionEmpireIsHidden(empire);
+      if (reveal.revealed) {
+        await ctx.db.patch("emp_states", empire._id, {
+          missionRevealedAtTurn: params.turnNumber,
+          standingOrdersRefreshRequestedAt: Date.now(),
+        });
+        await insertSimEvent(ctx, {
+          gameId: params.gameId,
+          turnNumber: params.turnNumber,
+          eventType: "mission_empire_revealed",
+          actorType: "empire",
+          actorId: empire._id,
+          targetType: reveal.systemId !== null ? "system" : null,
+          targetId: reveal.systemId,
+          summary: `${empire.name} revealed itself`,
+          payload: {
+            empireId: empire._id,
+            revealTriggerMode: empire.missionRevealTriggerMode ?? "turn",
+            revealSystemId: reveal.systemId,
+            intruderEmpireIds: reveal.intruderEmpireIds,
+          },
+        });
+      }
+      if (isHiddenBeforeReveal && !reveal.revealed) {
+        continue;
+      }
+
       const strategyActive = npcStrategyShouldActivateNow({
         empire,
         turnNumber: params.turnNumber,
         ownedSystems,
+        adjacency,
+        systemsById,
         strengthBySystem,
       });
       if (!strategyActive) {

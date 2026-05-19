@@ -660,7 +660,9 @@ function EmpireEditor({ empire }: { empire: EmpireEditorRow }) {
   const [colorHex, setColorHex] = useState(empire.colorHex);
   const [playerName, setPlayerName] = useState(empire.playerName ?? "");
   const [strategyText, setStrategyText] = useState(formatStrategyText(empire.strategyJson));
-  const [strategyStartMode, setStrategyStartMode] = useState<"turn" | "attacked">(
+  const [strategyStartMode, setStrategyStartMode] = useState<
+    "turn" | "attacked" | "intruder_detection"
+  >(
     empire.strategyStartMode ?? "turn",
   );
   const [strategyStartTurn, setStrategyStartTurn] = useState(
@@ -814,33 +816,47 @@ function EmpireEditor({ empire }: { empire: EmpireEditorRow }) {
               standing routes for expansion, border reinforcement, and attacks.
             </p>
             {empire.controller === "npc" ? (
-              <div className="grid gap-3 md:grid-cols-[180px_160px]">
-                <label className="space-y-1 text-xs text-st-muted">
-                  <span>NPC strategy begins</span>
-                  <select
-                    value={strategyStartMode}
-                    onChange={(event) =>
-                      setStrategyStartMode(event.target.value as "turn" | "attacked")
-                    }
-                    className="w-full rounded border border-st-border bg-st-panel px-3 py-2 text-sm text-st-fg outline-none focus:border-st-accent"
-                  >
-                    <option value="turn">On turn</option>
-                    <option value="attacked">When first attacked</option>
-                  </select>
-                </label>
-                <label className="space-y-1 text-xs text-st-muted">
-                  <span>Start turn</span>
-                  <input
-                    type="number"
-                    min={1}
-                    step={1}
-                    value={strategyStartTurn}
-                    disabled={strategyStartMode !== "turn"}
-                    onChange={(event) => setStrategyStartTurn(event.target.value)}
-                    className="w-full rounded border border-st-border bg-st-panel px-3 py-2 text-sm text-st-fg outline-none focus:border-st-accent disabled:opacity-50"
-                  />
-                </label>
-              </div>
+              <>
+                <div className="grid gap-3 md:grid-cols-[180px_160px]">
+                  <label className="space-y-1 text-xs text-st-muted">
+                    <span>NPC strategy begins</span>
+                    <select
+                      value={strategyStartMode}
+                      onChange={(event) =>
+                        setStrategyStartMode(
+                          event.target.value as
+                            | "turn"
+                            | "attacked"
+                            | "intruder_detection",
+                        )
+                      }
+                      className="w-full rounded border border-st-border bg-st-panel px-3 py-2 text-sm text-st-fg outline-none focus:border-st-accent"
+                    >
+                      <option value="turn">On turn</option>
+                      <option value="attacked">When first attacked</option>
+                      <option value="intruder_detection">On intruder detection</option>
+                    </select>
+                  </label>
+                  <label className="space-y-1 text-xs text-st-muted">
+                    <span>Start turn</span>
+                    <input
+                      type="number"
+                      min={1}
+                      step={1}
+                      value={strategyStartTurn}
+                      disabled={strategyStartMode !== "turn"}
+                      onChange={(event) => setStrategyStartTurn(event.target.value)}
+                      className="w-full rounded border border-st-border bg-st-panel px-3 py-2 text-sm text-st-fg outline-none focus:border-st-accent disabled:opacity-50"
+                    />
+                  </label>
+                </div>
+                {strategyStartMode === "intruder_detection" ? (
+                  <p className="text-xs text-st-muted">
+                    Intruder detection here uses the default runtime behavior: reveal or activate
+                    when a new hostile empire is detected within 1 route step.
+                  </p>
+                ) : null}
+              </>
             ) : null}
             <textarea
               value={strategyText}

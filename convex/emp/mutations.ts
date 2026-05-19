@@ -110,7 +110,13 @@ export const updateEmpireMeta = mutation({
     colorHex: v.optional(v.string()),
     playerName: v.optional(v.string()),
     strategyJson: v.optional(v.union(v.string(), v.null())),
-    strategyStartMode: v.optional(v.union(v.literal("turn"), v.literal("attacked"))),
+    strategyStartMode: v.optional(
+      v.union(
+        v.literal("turn"),
+        v.literal("attacked"),
+        v.literal("intruder_detection"),
+      ),
+    ),
     strategyStartTurn: v.optional(v.union(v.number(), v.null())),
   },
   handler: async (ctx, args) => {
@@ -130,7 +136,8 @@ export const updateEmpireMeta = mutation({
       colorHex?: string;
       playerName?: string;
       strategyJson?: string | undefined;
-      strategyStartMode?: "turn" | "attacked";
+      strategyLibraryKey?: string | null;
+      strategyStartMode?: "turn" | "attacked" | "intruder_detection";
       strategyStartTurn?: number | undefined;
       strategyActivatedAtTurn?: number | undefined;
     } = {};
@@ -184,6 +191,7 @@ export const updateEmpireMeta = mutation({
     if (args.strategyJson !== undefined) {
       patch.strategyJson =
         args.strategyJson === null ? undefined : canonicalizeStrategyJson(args.strategyJson);
+      patch.strategyLibraryKey = null;
     }
 
     if (args.strategyStartMode !== undefined) {

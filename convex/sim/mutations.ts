@@ -163,9 +163,21 @@ async function applyMissionScenarioIfNeeded(
       npcPlayerKey?: string;
       strategyJson?: string;
       strategyLibraryKey?: string | null;
-      strategyStartMode?: "turn" | "attacked";
-      strategyStartTurn?: number;
+      strategyStartMode?: "turn" | "attacked" | "intruder_detection";
+      strategyStartTurn?: number | undefined;
+      strategyStartRouteSteps?: number | undefined;
+      strategyStartRequireNewEmpire?: boolean | undefined;
       strategyActivatedAtTurn?: number | undefined;
+      missionStartsHidden?: boolean;
+      missionRevealedAtTurn?: number | undefined;
+      missionRevealTriggerMode?: "turn" | "attacked" | "intruder_detection" | undefined;
+      missionRevealTurn?: number | undefined;
+      missionRevealRouteSteps?: number | undefined;
+      missionRevealRequireNewEmpire?: boolean | undefined;
+      missionFightAttraction?: number | undefined;
+      missionIntruderDetectionRange?: number | undefined;
+      missionIntruderDetectionRequireNewEmpire?: boolean | undefined;
+      standingOrdersRefreshRequestedAt?: number;
       name?: string;
       playerName?: string;
       treasury?: number;
@@ -182,7 +194,13 @@ async function applyMissionScenarioIfNeeded(
     }
     if (slot.occupant.kind === "npc") {
       empirePatch.controller = "npc";
+      empirePatch.strategyStartMode = "turn";
+      empirePatch.strategyStartTurn = 1;
+      empirePatch.strategyStartRouteSteps = undefined;
+      empirePatch.strategyStartRequireNewEmpire = undefined;
+      empirePatch.strategyActivatedAtTurn = undefined;
     }
+
     if (npcPlayer !== null) {
       empirePatch.npcPlayerKey = npcPlayer.key;
       if (slot.presentation.displayNameOverride === null) {
@@ -202,13 +220,52 @@ async function applyMissionScenarioIfNeeded(
     }
     if (slot.automation.activationTrigger?.kind === "attacked") {
       empirePatch.strategyStartMode = "attacked";
+      empirePatch.strategyStartTurn = undefined;
+      empirePatch.strategyStartRouteSteps = undefined;
+      empirePatch.strategyStartRequireNewEmpire = undefined;
       empirePatch.strategyActivatedAtTurn = undefined;
     }
     if (slot.automation.activationTrigger?.kind === "turn") {
       empirePatch.strategyStartMode = "turn";
       empirePatch.strategyStartTurn = slot.automation.activationTrigger.turn;
+      empirePatch.strategyStartRouteSteps = undefined;
+      empirePatch.strategyStartRequireNewEmpire = undefined;
       empirePatch.strategyActivatedAtTurn = undefined;
     }
+    if (slot.automation.activationTrigger?.kind === "intruder_detection") {
+      empirePatch.strategyStartMode = "intruder_detection";
+      empirePatch.strategyStartTurn = undefined;
+      empirePatch.strategyStartRouteSteps = slot.automation.activationTrigger.routeSteps;
+      empirePatch.strategyStartRequireNewEmpire =
+        slot.automation.activationTrigger.requireNewEmpire;
+      empirePatch.strategyActivatedAtTurn = undefined;
+    }
+
+    empirePatch.missionStartsHidden = slot.startsHidden;
+    empirePatch.missionRevealedAtTurn = slot.startsHidden ? undefined : 0;
+    empirePatch.missionRevealTriggerMode = undefined;
+    empirePatch.missionRevealTurn = undefined;
+    empirePatch.missionRevealRouteSteps = undefined;
+    empirePatch.missionRevealRequireNewEmpire = undefined;
+    if (slot.revealTrigger?.kind === "turn") {
+      empirePatch.missionRevealTriggerMode = "turn";
+      empirePatch.missionRevealTurn = slot.revealTrigger.turn;
+    }
+    if (slot.revealTrigger?.kind === "attacked") {
+      empirePatch.missionRevealTriggerMode = "attacked";
+    }
+    if (slot.revealTrigger?.kind === "intruder_detection") {
+      empirePatch.missionRevealTriggerMode = "intruder_detection";
+      empirePatch.missionRevealRouteSteps = slot.revealTrigger.routeSteps;
+      empirePatch.missionRevealRequireNewEmpire = slot.revealTrigger.requireNewEmpire;
+    }
+    empirePatch.missionFightAttraction = slot.sensors.fightAttraction ?? undefined;
+    empirePatch.missionIntruderDetectionRange =
+      slot.sensors.intruderDetection?.routeSteps ?? undefined;
+    empirePatch.missionIntruderDetectionRequireNewEmpire =
+      slot.sensors.intruderDetection?.requireNewEmpire ?? undefined;
+    empirePatch.standingOrdersRefreshRequestedAt = Date.now();
+
     if (slot.presentation.factionLabelOverride !== null) {
       empirePatch.name = slot.presentation.factionLabelOverride;
     }

@@ -105,6 +105,12 @@ export async function applyGarrisonRoutes(
 
   for (const route of sortedRoutes) {
     const empire = empireById.get(route.empireId);
+    if (
+      empire?.missionStartsHidden === true &&
+      empire.missionRevealedAtTurn === undefined
+    ) {
+      continue;
+    }
     const origin = await ctx.db.get("gal_systems", route.originSystemId);
     const destination = await ctx.db.get("gal_systems", route.destinationSystemId);
     const originOwned =

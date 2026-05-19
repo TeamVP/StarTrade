@@ -741,12 +741,44 @@ export default defineSchema({
     strategyLibraryKey: v.optional(v.union(v.string(), v.null())),
     /** How an NPC empire's automation becomes active. Human automation ignores this and runs immediately. */
     strategyStartMode: v.optional(
-      v.union(v.literal("turn"), v.literal("attacked")),
+      v.union(
+        v.literal("turn"),
+        v.literal("attacked"),
+        v.literal("intruder_detection"),
+      ),
     ),
     /** First turn when a turn-gated NPC strategy may begin. */
     strategyStartTurn: v.optional(v.number()),
+    /** Route depth for intruder-detection activation triggers. */
+    strategyStartRouteSteps: v.optional(v.number()),
+    /** Whether intruder-detection activation ignores already-adjacent empires. */
+    strategyStartRequireNewEmpire: v.optional(v.boolean()),
     /** Latched turn when an NPC strategy first became active. */
     strategyActivatedAtTurn: v.optional(v.number()),
+    /** Mission-authored dormant state until a reveal trigger fires. */
+    missionStartsHidden: v.optional(v.boolean()),
+    /** Latched turn when a hidden mission empire was first revealed. */
+    missionRevealedAtTurn: v.optional(v.number()),
+    /** Reveal trigger kind for mission-authored hidden empires. */
+    missionRevealTriggerMode: v.optional(
+      v.union(
+        v.literal("turn"),
+        v.literal("attacked"),
+        v.literal("intruder_detection"),
+      ),
+    ),
+    /** Turn threshold for turn-gated reveal triggers. */
+    missionRevealTurn: v.optional(v.number()),
+    /** Route depth for intruder-detection reveal triggers. */
+    missionRevealRouteSteps: v.optional(v.number()),
+    /** Whether reveal on intruder detection ignores already-adjacent empires. */
+    missionRevealRequireNewEmpire: v.optional(v.boolean()),
+    /** Additional bias toward threatened fronts and nearby battles for mission-authored empires. */
+    missionFightAttraction: v.optional(v.number()),
+    /** Route depth for mission intruder awareness and defensive response. */
+    missionIntruderDetectionRange: v.optional(v.number()),
+    /** Whether mission intruder awareness ignores already-adjacent empires. */
+    missionIntruderDetectionRequireNewEmpire: v.optional(v.boolean()),
     /** Timestamp when this empire asked for its standing orders to be cleared and replanned. */
     standingOrdersRefreshRequestedAt: v.optional(v.number()),
     /**
