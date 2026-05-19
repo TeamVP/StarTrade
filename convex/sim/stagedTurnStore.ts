@@ -32,6 +32,7 @@ const STAGED_INSERT_ONLY_TABLES = new Set<StagedSimTableName>([
 
 const STAGED_INSERT_APPLY_ORDER: readonly StagedSimTableName[] = [
   "sim_game_settings",
+  "sim_game_trader_settings",
   "sim_trader_identities",
   "flt_fleets",
   "col_colony_ships",
@@ -287,6 +288,13 @@ async function loadTableRows(
     case "sim_game_settings": {
       const row = await ctx.db
         .query("sim_game_settings")
+        .withIndex("by_gameId", (q) => q.eq("gameId", gameId))
+        .unique();
+      return row === null ? [] : [row as AnyStageDoc];
+    }
+    case "sim_game_trader_settings": {
+      const row = await ctx.db
+        .query("sim_game_trader_settings")
         .withIndex("by_gameId", (q) => q.eq("gameId", gameId))
         .unique();
       return row === null ? [] : [row as AnyStageDoc];

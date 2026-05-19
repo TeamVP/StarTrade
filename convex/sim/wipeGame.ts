@@ -125,6 +125,16 @@ export async function wipeGamePhaseBatch(
       }
       return "done";
     }
+    case "sim_game_trader_settings": {
+      const row = await ctx.db
+        .query("sim_game_trader_settings")
+        .withIndex("by_gameId", (q) => q.eq("gameId", gameId))
+        .unique();
+      if (row !== null) {
+        await ctx.db.delete("sim_game_trader_settings", row._id);
+      }
+      return "done";
+    }
     case "sim_game_actors": {
       const batch = await ctx.db
         .query("sim_game_actors")
@@ -155,6 +165,17 @@ export async function wipeGamePhaseBatch(
       if (batch.length === 0) return "done";
       for (const doc of batch) {
         await ctx.db.delete("col_colony_ships", doc._id);
+      }
+      return batch.length === n ? "more" : "done";
+    }
+    case "emp_priority_stars": {
+      const batch = await ctx.db
+        .query("emp_priority_stars")
+        .withIndex("by_gameId", (q) => q.eq("gameId", gameId))
+        .take(n);
+      if (batch.length === 0) return "done";
+      for (const doc of batch) {
+        await ctx.db.delete("emp_priority_stars", doc._id);
       }
       return batch.length === n ? "more" : "done";
     }

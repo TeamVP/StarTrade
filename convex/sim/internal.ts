@@ -77,6 +77,7 @@ const ECONOMY_TRANSCRIPT_PRUNE_BATCH_SIZE = 256;
 const LEGACY_TRADER_ROW_PRUNE_BATCH_SIZE = 256;
 const TRADER_VOYAGE_PRUNE_BATCH_SIZE = 256;
 const LEGACY_TRADER_EVENT_PRUNE_BATCH_SIZE = 128;
+const LEGACY_TRADER_BOYCOTT_PRUNE_BATCH_SIZE = 128;
 
 async function loadGameWithMissionModeHydrated(
   ctx: MutationCtx,
@@ -2062,6 +2063,65 @@ async function pruneLegacyTraderEventsForNonTraderGame(
   return hitBatchLimit;
 }
 
+async function clearTraderSettingsRowForNonTraderGame(
+  ctx: MutationCtx,
+  gameId: Id<"sim_games">,
+): Promise<boolean> {
+  const row = await ctx.db
+    .query("sim_game_trader_settings")
+    .withIndex("by_gameId", (q) => q.eq("gameId", gameId))
+    .unique();
+  if (row === null) {
+    return false;
+  }
+  await ctx.db.delete("sim_game_trader_settings", row._id);
+  return false;
+}
+
+async function clearLegacyEmpireTraderBoycottsForNonTraderGame(
+  ctx: MutationCtx,
+  gameId: Id<"sim_games">,
+): Promise<boolean> {
+  let cleared = 0;
+  for await (const empire of ctx.db
+    .query("emp_states")
+    .withIndex("by_gameId", (q) => q.eq("gameId", gameId))) {
+    if (empire.traderBoycottUntilTurn === undefined) {
+      continue;
+    }
+    await ctx.db.patch("emp_states", empire._id, {
+      traderBoycottUntilTurn: undefined,
+    });
+    cleared += 1;
+    if (cleared >= LEGACY_TRADER_BOYCOTT_PRUNE_BATCH_SIZE) {
+      return true;
+    }
+  }
+  return false;
+}
+
+async function clearLegacySystemTraderBoycottsForNonTraderGame(
+  ctx: MutationCtx,
+  gameId: Id<"sim_games">,
+): Promise<boolean> {
+  let cleared = 0;
+  for await (const system of ctx.db
+    .query("gal_systems")
+    .withIndex("by_gameId", (q) => q.eq("gameId", gameId))) {
+    if (system.traderBoycottUntilTurn === undefined) {
+      continue;
+    }
+    await ctx.db.patch("gal_systems", system._id, {
+      traderBoycottUntilTurn: undefined,
+    });
+    cleared += 1;
+    if (cleared >= LEGACY_TRADER_BOYCOTT_PRUNE_BATCH_SIZE) {
+      return true;
+    }
+  }
+  return false;
+}
+
 async function upsertTurnPreparationRow(
   ctx: MutationCtx,
   params: {
@@ -2373,6 +2433,18 @@ export const postCommitMaintenance = internalMutation({
       game !== null && !gameUsesTraderEconomy(game)
         ? await pruneLegacyTraderEventsForNonTraderGame(ctx, args.gameId)
         : false;
+    const hasMoreTraderSettingsRows =
+      game !== null && !gameUsesTraderEconomy(game)
+        ? await clearTraderSettingsRowForNonTraderGame(ctx, args.gameId)
+        : false;
+    const hasMoreLegacyEmpireTraderBoycotts =
+      game !== null && !gameUsesTraderEconomy(game)
+        ? await clearLegacyEmpireTraderBoycottsForNonTraderGame(ctx, args.gameId)
+        : false;
+    const hasMoreLegacySystemTraderBoycotts =
+      game !== null && !gameUsesTraderEconomy(game)
+        ? await clearLegacySystemTraderBoycottsForNonTraderGame(ctx, args.gameId)
+        : false;
     if (
       hasMoreHistoricalPreparationData ||
       hasMoreHistoricalEvents ||
@@ -2383,7 +2455,10 @@ export const postCommitMaintenance = internalMutation({
       hasMoreLegacyTraderCharters ||
       hasMoreLegacyTraderIdentities ||
       hasMoreLegacyTraderVoyages ||
-      hasMoreLegacyTraderEvents
+      hasMoreLegacyTraderEvents ||
+      hasMoreTraderSettingsRows ||
+      hasMoreLegacyEmpireTraderBoycotts ||
+      hasMoreLegacySystemTraderBoycotts
     ) {
       await ctx.scheduler.runAfter(0, internal.sim.internal.postCommitMaintenance, {
         gameId: args.gameId,

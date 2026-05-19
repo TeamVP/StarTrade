@@ -120,6 +120,7 @@ export async function seedSelectedNpcEmpires(
       npcPlayerKey: player.key,
       playerName: player.playerName,
       strategyJson: strategy?.strategyJson,
+      strategyLibraryKey: player.strategyLibraryKey,
     });
 
     await ctx.db.patch("gal_systems", homeSystemId, {

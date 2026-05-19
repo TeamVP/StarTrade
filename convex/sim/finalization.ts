@@ -201,7 +201,7 @@ async function loadEmpireStandings(
       strategyFingerprint:
         actor?.strategyFingerprint ??
         (normalizedStrategy === null ? null : strategyFingerprint(normalizedStrategy)),
-      strategyLibraryKey: null,
+      strategyLibraryKey: actor?.strategyLibraryKey ?? empire.strategyLibraryKey ?? null,
       strategySourceKind:
         normalizedStrategy === null
           ? null

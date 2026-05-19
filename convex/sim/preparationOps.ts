@@ -13,6 +13,7 @@ export const STAGED_SIM_TABLES = [
   "gal_systems",
   "sim_events",
   "sim_game_settings",
+  "sim_game_trader_settings",
   "sim_trader_identities",
 ] as const;
 

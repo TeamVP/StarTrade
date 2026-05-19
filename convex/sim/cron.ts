@@ -69,12 +69,32 @@ export const tickRunningGames = internalMutation({
       const preparedButMissedBoundary =
         (turnRow.state === "prepared" || preparationRow?.state === "prepared") &&
         boundaryOverdue;
+      const preparingButStalled =
+        (turnRow.state === "preparing" ||
+          turnRow.state === "resolving" ||
+          preparationRow?.state === "preparing") &&
+        boundaryOverdue;
 
-      if (!wakeMissing && !preparationOverdue && !boundaryOverdue && !preparedButMissedBoundary) {
+      if (
+        !wakeMissing &&
+        !preparationOverdue &&
+        !boundaryOverdue &&
+        !preparedButMissedBoundary &&
+        !preparingButStalled
+      ) {
         continue;
       }
 
       try {
+        if (preparingButStalled) {
+          await ctx.scheduler.runAfter(0, internal.sim.actions.resolveTurnJob, {
+            gameId: game._id,
+            turnNumber: game.currentTurn,
+          });
+          recovered += 1;
+          continue;
+        }
+
         const commit = await ctx.runMutation(internal.sim.internal.commitPreparedTurn, {
           gameId: game._id,
           turnNumber: game.currentTurn,
